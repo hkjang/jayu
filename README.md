@@ -14,6 +14,10 @@
    - 자율 진화 GA 파이프라인, Fitness Score 수식, Kelly 및 분할 베팅 비중 공식 명세.
 3. **[STRATEGY.md (docs/STRATEGY.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY.md)**
    - 래리 코너스 하이브리드 규칙, 본전 손절(Break-Even) 및 VIX 22.0 가드 등 매매 전략 가이드.
+   - **세부 전략별 공식 명세서**:
+     - [래리 윌리엄스 변동성 돌파 전략 명세 (docs/STRATEGY_WILLIAMS_BREAKOUT.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY_WILLIAMS_BREAKOUT.md)
+     - [래리 코너스 RSI(2) 하이브리드 전략 명세 (docs/STRATEGY_CONNORS_RSI2.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY_CONNORS_RSI2.md)
+     - [ADX 기반 추세/횡보 동적 스위칭 전략 명세 (docs/STRATEGY_ADX_SWITCHING.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY_ADX_SWITCHING.md)
 4. **[DEVELOPER_GUIDE.md (docs/DEVELOPER_GUIDE.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/DEVELOPER_GUIDE.md)**
    - 파이썬 7대 소스코드 모듈의 기능별/역할별 책임 한계, 의존 관계도 및 장애 대처법 수록.
 5. **[포트폴리오_전략.md (docs/포트폴리오_전략.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/포트폴리오_전략.md)**
@@ -46,7 +50,7 @@ pip install -r requirements.txt
 ```
 
 ### 3. 유닛 테스트 및 정합성 검증
-모든 연산 및 가드 모듈(15개 테스트)이 무결하게 작동하는지 검증합니다.
+모든 연산 및 가드 모듈(20개 테스트)이 무결하게 작동하는지 검증합니다.
 ```bash
 py -3.12 -m unittest test_simulation.py
 ```
