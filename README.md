@@ -8,21 +8,23 @@
 
 프로젝트 루트의 파일 정리 및 구조화 정책에 따라, 모든 상세 매뉴얼과 기술 명세서는 **`docs/`** 디렉토리 하위에서 중앙 집중식으로 관리됩니다.
 
-1. **[SYSTEM_README.md (docs/SYSTEM_README.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/SYSTEM_README.md)**
+1. **[QUICK_SUMMARY_GUIDE.md (docs/QUICK_SUMMARY_GUIDE.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/QUICK_SUMMARY_GUIDE.md)**
+   - **(초천천 추천)** 수식 없이 3분 만에 마스터하는 3대 전략 쉬운 비유 및 리스크 제어 입문 가이드.
+2. **[SYSTEM_README.md (docs/SYSTEM_README.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/SYSTEM_README.md)**
    - 시스템 전체 파일 맵, config.json 격리 정보, 윈도우 스케줄러 등록 정보 수록.
-2. **[SIMULATION.md (docs/SIMULATION.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/SIMULATION.md)**
+3. **[SIMULATION.md (docs/SIMULATION.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/SIMULATION.md)**
    - 자율 진화 GA 파이프라인, Fitness Score 수식, Kelly 및 분할 베팅 비중 공식 명세.
-3. **[STRATEGY.md (docs/STRATEGY.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY.md)**
+4. **[STRATEGY.md (docs/STRATEGY.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY.md)**
    - 래리 코너스 하이브리드 규칙, 본전 손절(Break-Even) 및 VIX 22.0 가드 등 매매 전략 가이드.
    - **세부 전략별 공식 명세서**:
      - [래리 윌리엄스 변동성 돌파 전략 명세 (docs/STRATEGY_WILLIAMS_BREAKOUT.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY_WILLIAMS_BREAKOUT.md)
      - [래리 코너스 RSI(2) 하이브리드 전략 명세 (docs/STRATEGY_CONNORS_RSI2.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY_CONNORS_RSI2.md)
      - [ADX 기반 추세/횡보 동적 스위칭 전략 명세 (docs/STRATEGY_ADX_SWITCHING.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY_ADX_SWITCHING.md)
-4. **[DEVELOPER_GUIDE.md (docs/DEVELOPER_GUIDE.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/DEVELOPER_GUIDE.md)**
+5. **[DEVELOPER_GUIDE.md (docs/DEVELOPER_GUIDE.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/DEVELOPER_GUIDE.md)**
    - 파이썬 7대 소스코드 모듈의 기능별/역할별 책임 한계, 의존 관계도 및 장애 대처법 수록.
-5. **[포트폴리오_전략.md (docs/포트폴리오_전략.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/포트폴리오_전략.md)**
+6. **[포트폴리오_전략.md (docs/포트폴리오_전략.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/포트폴리오_전략.md)**
    - 장기 10x 포트폴리오(삼성전자, PLTR, RKLB, IONQ) 집중 투자 원칙서.
-6. **[DEEP_TRADING_STRATEGY.md (docs/DEEP_TRADING_STRATEGY.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/DEEP_TRADING_STRATEGY.md)**
+7. **[DEEP_TRADING_STRATEGY.md (docs/DEEP_TRADING_STRATEGY.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/DEEP_TRADING_STRATEGY.md)**
    - 기하평균 성장률 공식, 3x 레버리지 변동성 잠식(Volatility Drag) 제어 공식 및 래리 코너스 RSI(2)의 통계적 기대값 미시 분석 명세.
 
 ---
