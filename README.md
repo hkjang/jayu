@@ -16,8 +16,10 @@
    - 래리 코너스 하이브리드 규칙, 본전 손절(Break-Even) 및 VIX 22.0 가드 등 매매 전략 가이드.
 4. **[DEVELOPER_GUIDE.md (docs/DEVELOPER_GUIDE.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/DEVELOPER_GUIDE.md)**
    - 파이썬 7대 소스코드 모듈의 기능별/역할별 책임 한계, 의존 관계도 및 장애 대처법 수록.
-5. **[포트폴리오_전략.md (docs/포트폴리오_전략.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/docs/포트폴리오_전략.md)**
+5. **[포트폴리오_전략.md (docs/포트폴리오_전략.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/포트폴리오_전략.md)**
    - 장기 10x 포트폴리오(삼성전자, PLTR, RKLB, IONQ) 집중 투자 원칙서.
+6. **[DEEP_TRADING_STRATEGY.md (docs/DEEP_TRADING_STRATEGY.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/DEEP_TRADING_STRATEGY.md)**
+   - 기하평균 성장률 공식, 3x 레버리지 변동성 잠식(Volatility Drag) 제어 공식 및 래리 코너스 RSI(2)의 통계적 기대값 미시 분석 명세.
 
 ---
 
