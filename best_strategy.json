@@ -23,6 +23,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.2
       },
       "metrics": {
@@ -62,6 +65,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.2
       },
       "metrics": {
@@ -101,6 +107,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.2
       },
       "metrics": {
@@ -142,6 +151,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.25
       },
       "metrics": {
@@ -183,6 +195,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.25
       },
       "metrics": {
@@ -224,6 +239,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.25
       },
       "metrics": {
@@ -267,6 +285,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.15
       },
       "metrics": {
@@ -308,6 +329,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.15
       },
       "metrics": {
@@ -349,6 +373,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.15
       },
       "metrics": {
@@ -392,6 +419,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.25
       },
       "metrics": {
@@ -431,6 +461,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.25
       },
       "metrics": {
@@ -470,6 +503,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.25
       },
       "metrics": {
@@ -511,6 +547,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.3
       },
       "metrics": {
@@ -550,6 +589,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.3
       },
       "metrics": {
@@ -589,6 +631,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.3
       },
       "metrics": {
@@ -630,6 +675,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.15
       },
       "metrics": {
@@ -671,6 +719,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.15
       },
       "metrics": {
@@ -712,6 +763,9 @@
         "adx_threshold": 25,
         "use_connors_rsi2": false,
         "connors_rsi2_limit": 10,
+        "use_breakeven_stop": false,
+        "breakeven_trigger_pct": 0.5,
+        "kelly_fraction": 0.5,
         "pos_size": 0.15
       },
       "metrics": {
