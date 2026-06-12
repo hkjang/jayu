@@ -42,7 +42,7 @@ class TestDantaSimulation(unittest.TestCase):
             'High': [p * 1.02 for p in prices],
             'Low': [p * 0.98 for p in prices],
             'Close': prices,
-            'Volume': [int(100000 + np.random.normal(0, 10000)) for _ in range(500)]
+            'Volume': [int(10000000 + np.random.normal(0, 500000)) for _ in range(500)]
         }, index=dates)
 
     def test_indicators(self):
@@ -58,6 +58,9 @@ class TestDantaSimulation(unittest.TestCase):
         self.assertIn('bb_pct', df_ind.columns)
         self.assertIn('stoch_rsi', df_ind.columns)
         self.assertIn('regime', df_ind.columns)
+        self.assertIn('noise_ratio', df_ind.columns)
+        self.assertIn('k_dynamic', df_ind.columns)
+        self.assertIn('prev_range', df_ind.columns)
         
         # 수치 유효성 검사 (RSI는 0 ~ 100 사이)
         self.assertTrue(df_ind['rsi'].min() >= 0)
@@ -424,6 +427,210 @@ class TestDantaSimulation(unittest.TestCase):
         
         # MDD가 높은 전략은 피트니스가 엄청나게 낮아져야 함
         self.assertTrue(metrics_no_dd['fitness'] > metrics_high_dd['fitness'] * 2)
+
+    def test_williams_breakout_backtest(self):
+        """16. 래리 윌리엄스 변동성 돌파 진입 시나리오 검증"""
+        params = {
+            "use_williams_breakout": True,
+            "williams_k_multiplier": 1.0,
+            "rsi_lo": 10, "rsi_hi": 90, "ema_span": 10, "vol_mult": 0.1,
+            "gap_min": -0.5, "stop_pct": 0.05, "target_pct": 0.10, "hold_days": 5,
+            "use_atr_stop": False, "atr_mult_stop": 2.0, "trail_stop": False, "trail_pct": 0.03,
+            "require_macd": False, "require_bb": False, "regime_filter": False, "ensemble_min": 1,
+            "pos_size": 0.20, "kelly_fraction": 0.5
+        }
+        df_ind = add_indicators(self.df)
+        
+        # 동적 인덱스 지정
+        entry_idx = len(df_ind) - 10
+        
+        # 래리 윌리엄스 돌파 조건 조작
+        # k_dynamic = 0.3 + noise_ratio * 0.3 이므로, k_dynamic은 약 0.3~0.6 사이.
+        # k_dynamic을 0.5로 고정 가정 시, prev_range = 10.0 이라면 breakout_target = Open + 5.0.
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('Open')] = 100.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('prev_range')] = 10.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('k_dynamic')] = 0.5
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('Close')] = 106.0     # Close > Open + (10 * 0.5) -> 돌파!
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('sma200')] = 90.0     # Close > sma200 -> 상승장!
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('vol_ratio')] = 2.0   # volume ok
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('gap')] = 0.01       # gap ok
+        
+        # 다음 날 (entry_idx + 1) 시가 진입
+        df_ind.iloc[entry_idx + 1, df_ind.columns.get_loc('Open')] = 107.0
+        
+        # 다다음 날 (entry_idx + 2) 고가 조작해서 익절 터치
+        df_ind.iloc[entry_idx + 2, df_ind.columns.get_loc('High')] = 120.0
+        df_ind.iloc[entry_idx + 2, df_ind.columns.get_loc('Low')] = 105.0   # 손절 안 닿게
+        
+        trades, final_cap, cap_hist = backtest(df_ind, params)
+        
+        # 돌파에 의한 진입 및 거래 성공 검증
+        self.assertTrue(len(trades) > 0)
+        target_exits = [t for t in trades if t['reason'] == 'target']
+        self.assertTrue(len(target_exits) > 0, f"Expected target exit, but got: {[t['reason'] for t in trades]}")
+
+    def test_dollar_volume_guard(self):
+        """17. 거래대금 유동성 가드에 의한 진입 차단 테스트"""
+        params = {
+            "rsi_lo": 10, "rsi_hi": 90, "ema_span": 10, "vol_mult": 0.1,
+            "gap_min": -0.5, "stop_pct": 0.05, "target_pct": 0.10, "hold_days": 2,
+            "use_atr_stop": False, "atr_mult_stop": 2.0, "trail_stop": False, "trail_pct": 0.03,
+            "require_macd": False, "require_bb": False, "regime_filter": False, "ensemble_min": 1,
+            "min_dollar_volume": 50_000_000, # 50M
+            "pos_size": 0.20
+        }
+        df_ind = add_indicators(self.df)
+        
+        # 전체 데이터의 dollar_volume_ma20을 극단적으로 낮춤 (10M 수준)
+        df_ind['dollar_volume_ma20'] = 10_000_000.0
+        
+        # 백테스트 수행
+        trades, final_cap, _ = backtest(df_ind, params)
+        
+        # 거래대금 가드가 50M인데 10M이므로 진입이 한 번도 유발되지 않아야 함
+        self.assertEqual(len(trades), 0)
+
+    def test_atr_target(self):
+        """18. ATR 기반 동적 익절 가격 산출 및 체결 테스트"""
+        params = {
+            "use_atr_target": True,
+            "atr_mult_target": 2.0, # ATR 2배
+            "rsi_lo": 10, "rsi_hi": 90, "ema_span": 10, "vol_mult": 0.1,
+            "gap_min": -0.5, "stop_pct": 0.05, "target_pct": 0.50, # 고정 익절은 50%로 매우 높게 설정
+            "hold_days": 5,
+            "use_atr_stop": False, "atr_mult_stop": 2.0, "trail_stop": False, "trail_pct": 0.03,
+            "require_macd": False, "require_bb": False, "regime_filter": False, "ensemble_min": 1,
+            "pos_size": 0.20
+        }
+        df_ind = add_indicators(self.df)
+        entry_idx = len(df_ind) - 10
+        
+        # 인위적인 진입 상황 조성
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('rsi')] = 50.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('Close')] = 100.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('ema10')] = 90.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('vol_ratio')] = 2.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('gap')] = 0.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('atr')] = 3.0 # ATR=3
+        
+        # 다음 날 (진입일) Open=100.0
+        df_ind.iloc[entry_idx + 1, df_ind.columns.get_loc('Open')] = 100.0
+        df_ind.iloc[entry_idx + 1, df_ind.columns.get_loc('atr')] = 3.0
+        
+        # 다다음 날 High=107.0
+        # 만약 고정 익절 50%라면 150.0이어야 도달하지만,
+        # ATR 익절(2.0배 = 6.0달러)이면 타겟가가 106.0+알파(슬리피지 포함)가 되어 107.0에서 target 청산이 되어야 함
+        df_ind.iloc[entry_idx + 2, df_ind.columns.get_loc('High')] = 110.0
+        df_ind.iloc[entry_idx + 2, df_ind.columns.get_loc('Low')] = 98.0
+        df_ind.iloc[entry_idx + 2, df_ind.columns.get_loc('Close')] = 105.0
+        
+        trades, _, _ = backtest(df_ind, params)
+        
+        self.assertTrue(len(trades) > 0)
+        # 익절(target) 청산이 유발되었는지 검증
+        self.assertEqual(trades[0]['reason'], 'target')
+
+    def test_volatility_sizing(self):
+        """19. 변동성 조절식 포지션 비중 조절 검증 테스트"""
+        # 1. 고변동성 상황에서의 백테스트 (변동성 비중 조절 ON vs OFF)
+        params_off = {
+            "use_volatility_sizing": False,
+            "rsi_lo": 10, "rsi_hi": 90, "ema_span": 10, "vol_mult": 0.1,
+            "gap_min": -0.5, "stop_pct": 0.05, "target_pct": 0.10, "hold_days": 2,
+            "use_atr_stop": True, "atr_mult_stop": 2.0, "trail_stop": False, "trail_pct": 0.03,
+            "require_macd": False, "require_bb": False, "regime_filter": False, "ensemble_min": 1,
+            "pos_size": 0.20, "kelly_fraction": 1.0
+        }
+        params_on = {
+            "use_volatility_sizing": True,
+            "max_risk_per_trade_pct": 0.01, # 최대 1% 계좌 위험
+            "rsi_lo": 10, "rsi_hi": 90, "ema_span": 10, "vol_mult": 0.1,
+            "gap_min": -0.5, "stop_pct": 0.05, "target_pct": 0.10, "hold_days": 2,
+            "use_atr_stop": True, "atr_mult_stop": 2.0, "trail_stop": False, "trail_pct": 0.03,
+            "require_macd": False, "require_bb": False, "regime_filter": False, "ensemble_min": 1,
+            "pos_size": 0.20, "kelly_fraction": 1.0
+        }
+        
+        df_ind = add_indicators(self.df)
+        entry_idx = len(df_ind) - 10
+        
+        # 진입 유도
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('rsi')] = 50.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('Close')] = 100.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('ema10')] = 90.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('vol_ratio')] = 2.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('gap')] = 0.0
+        # 변동성을 10%로 극단적으로 키움 (Close 100, ATR 10 -> atr_pct = 0.10)
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('atr')] = 10.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('atr_pct')] = 0.10
+        
+        df_ind.iloc[entry_idx + 1, df_ind.columns.get_loc('Open')] = 100.0
+        df_ind.iloc[entry_idx + 1, df_ind.columns.get_loc('atr')] = 10.0
+        df_ind.iloc[entry_idx + 1, df_ind.columns.get_loc('atr_pct')] = 0.10
+        
+        # 다다음 날 강제 청산
+        df_ind.iloc[entry_idx + 2, df_ind.columns.get_loc('Close')] = 105.0
+        df_ind.iloc[entry_idx + 2, df_ind.columns.get_loc('High')] = 106.0
+        df_ind.iloc[entry_idx + 2, df_ind.columns.get_loc('Low')] = 99.0
+        
+        # 백테스트 수행하여 수익금 비교
+        # 변동성 비중조절이 ON일 때는 비중이 줄었기 때문에 pnl이 더 작아야 함
+        trades_off, _, _ = backtest(df_ind, params_off)
+        trades_on, _, _ = backtest(df_ind, params_on)
+        
+        self.assertTrue(len(trades_off) > 0 and len(trades_on) > 0)
+        pnl_off = abs(trades_off[0]['pnl'])
+        pnl_on = abs(trades_on[0]['pnl'])
+        
+        # ON일 때 변동성 비례 축소로 인해 수익(또는 손실) 금액이 더 작아야 함
+        self.assertTrue(pnl_on < pnl_off)
+
+    def test_market_impact_slippage(self):
+        """20. 자본금 규모 및 포지션 비중에 따른 시장 충격 슬리피지 증가 테스트"""
+        params = {
+            "rsi_lo": 10, "rsi_hi": 90, "ema_span": 10, "vol_mult": 0.1,
+            "gap_min": -0.5, "stop_pct": 0.05, "target_pct": 0.10, "hold_days": 2,
+            "use_atr_stop": False, "atr_mult_stop": 2.0, "trail_stop": False, "trail_pct": 0.03,
+            "require_macd": False, "require_bb": False, "regime_filter": False, "ensemble_min": 1,
+            "pos_size": 0.30 # 최대 비중 30%
+        }
+        df_ind = add_indicators(self.df)
+        entry_idx = len(df_ind) - 10
+        
+        # 유동성 가드 통과를 위한 거래대금 50M로 설정
+        df_ind['dollar_volume_ma20'] = 50_000_000.0
+        
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('rsi')] = 50.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('Close')] = 100.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('ema10')] = 90.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('vol_ratio')] = 2.0
+        df_ind.iloc[entry_idx, df_ind.columns.get_loc('gap')] = 0.0
+        
+        df_ind.iloc[entry_idx + 1, df_ind.columns.get_loc('Open')] = 100.0
+        
+        # 1) 일반 자본금 (1천만 원 = 10,000,000)
+        # 2) 초대형 자본금 (100억 원 = 10,000,000,000) -> 30% 비중이면 30억 원 투자. 거래대금 50M(약 700억 원) 대비 시장 충격 증가
+        from danta_simulation import INITIAL_CAPITAL
+        
+        # backtest의 capital 변수가 local 변수이므로 전역변수 INITIAL_CAPITAL에 의존함.
+        # 이를 가로채기 위해 global 상수를 테스트 중 잠깐 변조
+        import danta_simulation
+        danta_simulation.INITIAL_CAPITAL = 10_000_000
+        trades_small, _, _ = backtest(df_ind, params)
+        
+        danta_simulation.INITIAL_CAPITAL = 10_000_000_000
+        trades_large, _, _ = backtest(df_ind, params)
+        
+        # 원상 복구
+        danta_simulation.INITIAL_CAPITAL = 10_000_000
+        
+        self.assertTrue(len(trades_small) > 0 and len(trades_large) > 0)
+        
+        # 자본금이 클 때 시장 충격 슬리피지가 발생하여 체결가가 올라가고, 이로 인해 수익률이 깎여야 함
+        ret_small = trades_small[0]['ret']
+        ret_large = trades_large[0]['ret']
+        
+        self.assertTrue(ret_large < ret_small)
 
 if __name__ == '__main__':
     unittest.main()

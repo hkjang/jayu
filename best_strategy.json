@@ -26,6 +26,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.2
       },
       "metrics": {
@@ -68,6 +75,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.2
       },
       "metrics": {
@@ -110,6 +124,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.2
       },
       "metrics": {
@@ -154,6 +175,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.25
       },
       "metrics": {
@@ -198,6 +226,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.25
       },
       "metrics": {
@@ -242,6 +277,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.25
       },
       "metrics": {
@@ -288,6 +330,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.15
       },
       "metrics": {
@@ -332,6 +381,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.15
       },
       "metrics": {
@@ -376,6 +432,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.15
       },
       "metrics": {
@@ -422,6 +485,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.25
       },
       "metrics": {
@@ -464,6 +534,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.25
       },
       "metrics": {
@@ -506,6 +583,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.25
       },
       "metrics": {
@@ -550,6 +634,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.3
       },
       "metrics": {
@@ -592,6 +683,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.3
       },
       "metrics": {
@@ -634,6 +732,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.3
       },
       "metrics": {
@@ -678,6 +783,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.15
       },
       "metrics": {
@@ -722,6 +834,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.15
       },
       "metrics": {
@@ -766,6 +885,13 @@
         "use_breakeven_stop": false,
         "breakeven_trigger_pct": 0.5,
         "kelly_fraction": 0.5,
+        "use_williams_breakout": false,
+        "williams_k_multiplier": 1.0,
+        "use_atr_target": false,
+        "atr_mult_target": 2.0,
+        "min_dollar_volume": 10000000,
+        "use_volatility_sizing": false,
+        "max_risk_per_trade_pct": 0.015,
         "pos_size": 0.15
       },
       "metrics": {

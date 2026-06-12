@@ -9,6 +9,7 @@
       "BB": "❌ (0.68)",
       "Regime": "bull (필터:OFF)",
       "Market": "✅ (^SOX 상방)",
+      "Dollar_Volume": "✅ ($13170.5M vs $10M)",
       "ADX": "26.9 (필터:OFF, 임계치:25)"
     },
     "price": 234.68,
@@ -24,6 +25,7 @@
       "BB": "❌ (0.44)",
       "Regime": "bull (필터:OFF)",
       "Market": "❌ (^IXIC 상방)",
+      "Dollar_Volume": "✅ ($6095.9M vs $10M)",
       "ADX": "32.5 (필터:OFF, 임계치:25)"
     },
     "price": 77.52,
@@ -39,6 +41,7 @@
       "BB": "✅ (0.36)",
       "Regime": "bull (필터:OFF)",
       "Market": "❌ (^IXIC 상방)",
+      "Dollar_Volume": "✅ ($19612.5M vs $10M)",
       "ADX": "18.1 (필터:OFF, 임계치:25)"
     },
     "price": 406.43,
@@ -54,6 +57,7 @@
       "BB": "✅ (0.39)",
       "Regime": "bull (필터:OFF)",
       "Market": "❌ (^IXIC 상방)",
+      "Dollar_Volume": "✅ ($1925.2M vs $10M)",
       "ADX": "29.1 (필터:OFF, 임계치:25)"
     },
     "price": 57.85,
@@ -69,6 +73,7 @@
       "BB": "✅ (0.17)",
       "Regime": "bull (필터:OFF)",
       "Market": "❌ (^IXIC 상방)",
+      "Dollar_Volume": "✅ ($1002.7M vs $10M)",
       "ADX": "17.4 (필터:OFF, 임계치:25)"
     },
     "price": 95.49,
@@ -84,6 +89,7 @@
       "BB": "✅ (0.38)",
       "Regime": "bull (필터:OFF)",
       "Market": "❌ (^IXIC 상방)",
+      "Dollar_Volume": "✅ ($1172.3M vs $10M)",
       "ADX": "25.9 (필터:OFF, 임계치:25)"
     },
     "price": 23.37,

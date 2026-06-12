@@ -94,6 +94,11 @@ if p.get('use_breakeven_stop', False) and not breakeven_activated:
    - RSI의 상대적 위치를 측정해 0.8 이하의 과열되지 않은 자리에서만 진입하도록 제한.
 5. **OBV 이평선 추세 (`obv_trend`)**:
    - 온밸런스 볼륨의 10일 이평선이 30일 이평선을 상향 중일 때 수급 유입으로 판정.
+6. **동적 변동성 돌파 지표 (`noise_ratio`, `k_dynamic`, `prev_range`)**:
+   - **Noise Ratio**: 일별 캔들의 몸통 대비 꼬리 비중을 누적해 시장의 휩소(Noise) 강도 측정.
+     $$\text{Noise Ratio} = \text{rolling\_mean}\left(1.0 - \frac{|\text{Close} - \text{Open}|}{\text{High} - \text{Low}}, 20\right)$$
+   - **k_dynamic**: 노이즈가 클수록 0.6에 가깝게 상승해 진입 기준을 높이고, 노이즈가 작을(추세가 강할)수록 0.3에 가깝게 낮춰 빠르게 진입하는 동적 K-Factor.
+     $$K_{\text{dynamic}} = 0.3 + \text{Noise Ratio} \times 0.3$$
 
 ---
 

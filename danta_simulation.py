@@ -88,6 +88,13 @@ PARAM_SPACE = {
     'use_breakeven_stop': [True, False],    # 본전 손절 사용 여부
     'breakeven_trigger_pct': [0.3, 0.4, 0.5], # 본전 손절 발동 수익률 임계치
     'kelly_fraction': [0.25, 0.50, 1.00],   # Kelly 비중 조절 비율
+    'use_williams_breakout': [True, False],  # 래리 윌리엄스 변동성 돌파 전략 사용 여부
+    'williams_k_multiplier': [0.8, 1.0, 1.2], # 돌파 K-계수 보정 멀티플라이어
+    'use_atr_target'       : [True, False],        # 익절에 ATR 기반 변동성 적용 여부
+    'atr_mult_target'      : [1.5, 2.0, 2.5, 3.0, 4.0], # 익절 ATR 배수
+    'min_dollar_volume'    : [5_000_000, 10_000_000, 20_000_000], # 최소 20일 평균 거래대금 기준 (미달러)
+    'use_volatility_sizing': [True, False],        # ATR 변동성 비례 포지션 비중 조절
+    'max_risk_per_trade_pct': [0.01, 0.015, 0.02],  # 거래당 계좌 대비 최대 허용 손실 비율
 }
 
 
@@ -165,6 +172,9 @@ def add_indicators(df):
     df['vol_ratio'] = df['Volume'] / df['Volume'].rolling(20).mean()
     df['gap']       = df['Open'] / df['Close'].shift(1) - 1
     df['atr']       = (df['High'] - df['Low']).rolling(14).mean()
+    df['atr_pct']   = df['atr'] / df['Close']
+    df['dollar_volume'] = df['Close'] * df['Volume']
+    df['dollar_volume_ma20'] = df['dollar_volume'].rolling(20).mean().fillna(100_000_000)
     # 신규
     ml, ms, mh      = compute_macd(df['Close'])
     df['macd_line'] = ml
@@ -176,6 +186,11 @@ def add_indicators(df):
     df['obv']       = compute_obv(df['Close'], df['Volume'])
     df['obv_trend'] = df['obv'].ewm(span=10).mean() > df['obv'].ewm(span=30).mean()
     df['adx']       = compute_adx(df)
+    # 래리 윌리엄스 변동성 돌파용 지표
+    df['noise_ratio_day'] = 1.0 - (df['Close'] - df['Open']).abs() / (df['High'] - df['Low']).replace(0, np.nan)
+    df['noise_ratio'] = df['noise_ratio_day'].rolling(20).mean().fillna(0.5)
+    df['k_dynamic'] = 0.3 + df['noise_ratio'] * 0.3
+    df['prev_range'] = df['High'].shift(1) - df['Low'].shift(1)
     # 시장 국면: 200일 EMA 기준
     df['regime']    = np.where(df['Close'] > df['ema200'] * 1.02, 'bull',
                       np.where(df['Close'] < df['ema200'] * 0.98, 'bear', 'sideways'))
@@ -212,7 +227,7 @@ def kelly_size(win_rate_pct, avg_win_pct, avg_loss_pct, max_size=MAX_POS):
     return round(constrained_k, 2)
 
 # ── 백테스트 v3 ──────────────────────────────────────────────────
-def backtest(df, p, market_trend_dict=None):
+def backtest(df, p, market_trend_dict=None, target_regime=None):
     ema_col = f"ema{p['ema_span']}"
     capital = float(INITIAL_CAPITAL)
     trades, capitals = [], [capital]
@@ -223,6 +238,11 @@ def backtest(df, p, market_trend_dict=None):
         close = float(row['Close'])
         ema   = float(row[ema_col])
         atr   = float(row['atr']) if row['atr'] > 0 else close * 0.02
+
+        # ── 유동성 가드 검사 ──────────────────────────────────────
+        min_vol = p.get('min_dollar_volume', 10_000_000)
+        if 'dollar_volume_ma20' in row and float(row['dollar_volume_ma20']) < min_vol:
+            i += 1; continue
 
         # 시장 지수 모멘텀 필터 적용
         market_ok = True
@@ -246,9 +266,17 @@ def backtest(df, p, market_trend_dict=None):
         }
 
         use_connors = p.get('use_connors_rsi2', False)
+        use_williams = p.get('use_williams_breakout', False)
         mandatory = conds['volume'] and conds['gap'] and market_ok
         
-        if use_connors:
+        if use_williams:
+            williams_target = float(row['Open']) + float(row['prev_range']) * float(row['k_dynamic']) * p.get('williams_k_multiplier', 1.0)
+            williams_ok = (close > williams_target) and (close > float(row['sma200']))
+            if not (mandatory and williams_ok):
+                i += 1; continue
+            optionals = []
+            optional_met = 0
+        elif use_connors:
             connors_ok = (close > float(row['sma200'])) and (float(row['rsi2']) < p.get('connors_rsi2_limit', 10))
             if not (mandatory and connors_ok):
                 i += 1; continue
@@ -285,21 +313,42 @@ def backtest(df, p, market_trend_dict=None):
         entry_raw = float(df.iloc[i+1]['Open'])
         if entry_raw <= 0: i += 1; continue
         
-        # 변동성 비례 슬리피지 적용
-        dynamic_slippage = max(SLIPPAGE, (atr / close) * 0.1)
-        dynamic_slippage = min(dynamic_slippage, 0.005) # 상한 0.5%
+        # ── 포지션 비중 결정 (Kelly + Volatility Sizing) ──────────
+        confidence_score = optional_met / len(optionals) if optionals else 1.0
+        confidence_score = max(0.2, min(confidence_score, 1.0))
+        base_pos_size = p['pos_size'] * confidence_score * p.get('kelly_fraction', 0.50)
+
+        if p.get('use_volatility_sizing', False):
+            atr_pct = float(row['atr_pct']) if 'atr_pct' in row and row['atr_pct'] > 0 else (atr / close)
+            atr_mult_stop = p.get('atr_mult_stop', 2.0) if p['use_atr_stop'] else (p['stop_pct'] / (atr / close))
+            max_risk = p.get('max_risk_per_trade_pct', 0.015)
+            risk_adjusted_size = max_risk / (atr_mult_stop * atr_pct)
+            actual_pos_size = min(base_pos_size, risk_adjusted_size)
+        else:
+            actual_pos_size = base_pos_size
+
+        actual_pos_size = max(min(actual_pos_size, MAX_POS), 0.05)
+
+        # ── 변동성 및 시장 충격 슬리피지 적용 ─────────────────────
+        dollar_vol_20 = float(row['dollar_volume_ma20']) if 'dollar_volume_ma20' in row else 100_000_000
+        market_impact = 0.15 * (capital * actual_pos_size / dollar_vol_20)
+        dynamic_slippage = max(SLIPPAGE, (atr / close) * 0.1) + market_impact
+        dynamic_slippage = min(dynamic_slippage, 0.01) # 상한 1.0%
         
         entry = entry_raw * (1.0 + dynamic_slippage)
 
         # ── 손절/목표 결정 ────────────────────────────────────────
         stop_dist   = (atr * p['atr_mult_stop']) if p['use_atr_stop'] else (entry * p['stop_pct'])
         stop_price  = entry - stop_dist
-        target_dist = entry * p['target_pct']
+        
+        use_atr_tgt = p.get('use_atr_target', False)
+        target_dist = (atr * p.get('atr_mult_target', 2.0)) if use_atr_tgt else (entry * p['target_pct'])
         target_price= entry + target_dist
         trail_floor = stop_price  # 트레일링 시작점
 
         exit_price, exit_reason = None, 'time'
         peak = entry
+        worst_lo = entry
         breakeven_activated = False
 
         for j in range(1, p['hold_days'] + 2):
@@ -308,6 +357,8 @@ def backtest(df, p, market_trend_dict=None):
             fut = df.iloc[idx]
             hi  = float(fut['High'])
             lo  = float(fut['Low'])
+            
+            worst_lo = min(worst_lo, lo)
 
             # 본전 손절(Break-Even Stop) 작동 여부 감시
             if p.get('use_breakeven_stop', False) and not breakeven_activated:
@@ -357,16 +408,14 @@ def backtest(df, p, market_trend_dict=None):
         exit_settled = exit_price * (1.0 - dynamic_slippage)
         ret = ((exit_settled - entry) / entry) - (TRANSACTION_FEE * 2)
         
-        # 신뢰도 반영 Kelly 비중 스케일링
-        confidence_score = optional_met / len(optionals) if optionals else 1.0
-        confidence_score = max(0.2, min(confidence_score, 1.0))
-        actual_pos_size = p['pos_size'] * confidence_score * p.get('kelly_fraction', 0.50)
-        
         pnl = capital * actual_pos_size * ret
         capital += pnl
         capitals.append(capital)
+        
+        trade_mae_pct = ((worst_lo - entry) / entry) * 100
         trades.append({'ret': round(ret*100, 3), 'pnl': round(pnl, 0),
-                       'reason': exit_reason, 'date': str(df.index[i].date())})
+                       'reason': exit_reason, 'date': str(df.index[i].date()),
+                       'mae': round(trade_mae_pct, 3)})
         i += p['hold_days'] + 1
 
     return trades, capital, capitals
@@ -381,6 +430,12 @@ def calc_metrics(trades, final_cap, cap_hist, min_trades=MIN_TRADES):
     win_rate = len(wins) / len(rets) * 100 if len(rets) > 0 else 0.0
     avg_win  = float(np.mean(wins)) if len(wins) > 0 else 0.0
     avg_loss = float(np.mean(loses)) if len(loses) > 0 else 0.0
+    
+    # MAE (Maximum Adverse Excursion) 계산
+    maes = np.array([float(t['mae']) for t in trades if 'mae' in t])
+    avg_mae = float(np.mean(maes)) if len(maes) > 0 else 0.0
+    worst_mae = float(np.min(maes)) if len(maes) > 0 else 0.0
+
     # 수치형 극단값/NaN 방어 함수
     def clean_metric(val, max_val):
         if val is None or pd.isna(val) or np.isnan(val) or np.isinf(val):
@@ -415,9 +470,14 @@ def calc_metrics(trades, final_cap, cap_hist, min_trades=MIN_TRADES):
     f_sortino = max(sortino, 0.0)
     f_calmar = max(calmar, 0.0)
     base_fitness = f_sharpe * 0.5 + f_sortino * 0.3 + f_calmar * 0.2
+    
     # MDD 페널티 반영 (MDD가 0일 때는 패널티 1.0, 10% 이상일 때는 최소 0.1로 감소)
     mdd_penalty = max(0.1, 1.0 - (max_dd / 10.0))
-    fitness = round(base_fitness * mdd_penalty, 3)
+    
+    # MAE 페널티 반영 (Worst MAE가 -8% 미만으로 깊어지면 추가 페널티 부여하여 생존 지향)
+    mae_penalty = max(0.1, 1.0 - (abs(worst_mae) - 8.0) / 10.0) if worst_mae < -8.0 else 1.0
+    
+    fitness = round(base_fitness * mdd_penalty * mae_penalty, 3)
 
     return {
         'trades'       : int(len(rets)),
@@ -433,6 +493,8 @@ def calc_metrics(trades, final_cap, cap_hist, min_trades=MIN_TRADES):
         'max_drawdown' : round(max_dd, 1),
         'total_return' : round(total_ret, 1),
         'final_capital': round(final_cap, 0),
+        'avg_mae'      : round(avg_mae, 2),
+        'worst_mae'    : round(worst_mae, 2),
     }
 
 # ── 멀티 윈도우 Walk-Forward 검증 ────────────────────────────────
@@ -529,6 +591,13 @@ def sample_params(meta=None, use_meta=True):
         'use_breakeven_stop': s('use_breakeven_stop'),
         'breakeven_trigger_pct': s('breakeven_trigger_pct'),
         'kelly_fraction': s('kelly_fraction'),
+        'use_williams_breakout': s('use_williams_breakout'),
+        'williams_k_multiplier': s('williams_k_multiplier'),
+        'use_atr_target'       : s('use_atr_target'),
+        'atr_mult_target'      : s('atr_mult_target'),
+        'min_dollar_volume'    : s('min_dollar_volume'),
+        'use_volatility_sizing': s('use_volatility_sizing'),
+        'max_risk_per_trade_pct': s('max_risk_per_trade_pct'),
         'pos_size'     : 0.20,  # Kelly로 나중에 덮어씀
     }
 
@@ -547,6 +616,9 @@ def mutate(params, rate=0.25):
         child['rsi_hi'] = child['rsi_lo'] + 15
     if child.get('target_pct', 0.1) < child.get('stop_pct', 0.03) * 1.5:
         child['target_pct'] = child['stop_pct'] * 2
+    if child.get('use_atr_target') and child.get('use_atr_stop'):
+        if child.get('atr_mult_target', 2.0) < child.get('atr_mult_stop', 2.0) * 1.2:
+            child['atr_mult_target'] = child['atr_mult_stop'] * 1.5
     return child
 
 def crossover(p1, p2):
@@ -559,6 +631,9 @@ def crossover(p1, p2):
         child['rsi_hi'] = child['rsi_lo'] + 15
     if child.get('target_pct', 0.1) < child.get('stop_pct', 0.03) * 1.5:
         child['target_pct'] = child['stop_pct'] * 2
+    if child.get('use_atr_target') and child.get('use_atr_stop'):
+        if child.get('atr_mult_target', 2.0) < child.get('atr_mult_stop', 2.0) * 1.2:
+            child['atr_mult_target'] = child['atr_mult_stop'] * 1.5
     return child
 
 # ── 메타 학습 업데이트 ────────────────────────────────────────────
@@ -604,6 +679,13 @@ DEFAULT_PARAMS = {
     'use_breakeven_stop': False,
     'breakeven_trigger_pct': 0.5,
     'kelly_fraction': 0.5,
+    'use_williams_breakout': False,
+    'williams_k_multiplier': 1.0,
+    'use_atr_target'       : False,
+    'atr_mult_target'      : 2.0,
+    'min_dollar_volume'    : 10_000_000,
+    'use_volatility_sizing': False,
+    'max_risk_per_trade_pct': 0.015,
     'pos_size'     : 0.20
 }
 
@@ -708,7 +790,7 @@ def migrate_history(data):
 
 # ── 오늘의 진입 신호 ─────────────────────────────────────────────
 def check_today_signals(df, best_all, vix_val=0.0, market_trends=None):
-    """현재 데이터 기준 진입 조건 충족 여부 (VIX 및 시장 지수 필터 포함)"""
+    """현재 데이터 기준 진입 조건 충족 여부 (VIX, 시장 지수, 거래대금 필터 포함)"""
     best_all = migrate_json_structure(best_all)
     today_sigs = {}
     for ticker in TICKERS:
@@ -744,6 +826,12 @@ def check_today_signals(df, best_all, vix_val=0.0, market_trends=None):
             last_date = df[ticker].index[-1]
             market_ok = market_trends[idx_name].get(last_date, True)
 
+        # ── 거래대금 유동성 가드 검사 ──────────────────────────
+        min_vol = p.get('min_dollar_volume', 10_000_000)
+        dollar_vol_ok = True
+        if 'dollar_volume_ma20' in row:
+            dollar_vol_ok = float(row['dollar_volume_ma20']) >= min_vol
+
         ema = float(row[f"ema{p['ema_span']}"])
         
         # 앙상블 조건 판정
@@ -760,11 +848,16 @@ def check_today_signals(df, best_all, vix_val=0.0, market_trends=None):
         }
         
         use_connors = p.get('use_connors_rsi2', False)
+        use_williams = p.get('use_williams_breakout', False)
         mandatory = conds['volume'] and conds['gap'] and market_ok
         
-        if use_connors:
+        if use_williams:
+            williams_target = float(row['Open']) + float(row['prev_range']) * float(row['k_dynamic']) * p.get('williams_k_multiplier', 1.0)
+            williams_ok = (float(row['Close']) > williams_target) and (float(row['Close']) > float(row['sma200']))
+            all_ok = mandatory and williams_ok and dollar_vol_ok
+        elif use_connors:
             connors_ok = (float(row['Close']) > float(row['sma200'])) and (float(row['rsi2']) < p.get('connors_rsi2_limit', 10))
-            all_ok = mandatory and connors_ok
+            all_ok = mandatory and connors_ok and dollar_vol_ok
         else:
             # ADX 필터 및 스위칭 로직
             use_adx = p.get('use_adx_filter', False)
@@ -787,7 +880,7 @@ def check_today_signals(df, best_all, vix_val=0.0, market_trends=None):
                 optionals = [conds['macd'], conds['bb'], conds['regime'], conds['obv'], conds['stoch']]
                 
             optional_met = sum([bool(cond) for cond in optionals])
-            all_ok = mandatory and (optional_met >= p['ensemble_min'])
+            all_ok = mandatory and (optional_met >= p['ensemble_min']) and dollar_vol_ok
         
         # 상세 조건 현황 문자열화
         conds_str = {
@@ -798,8 +891,14 @@ def check_today_signals(df, best_all, vix_val=0.0, market_trends=None):
             'BB'     : f"{'✅' if float(row['bb_pct']) < 0.4 else '❌'} ({float(row['bb_pct']):.2f})",
             'Regime' : f"{today_regime} (필터:{'ON' if p['regime_filter'] else 'OFF'})",
             'Market' : f"{'✅' if market_ok else '❌'} ({idx_name} 상방)",
+            'Dollar_Volume': f"{'✅' if dollar_vol_ok else '❌'} (${float(row['dollar_volume_ma20'])/1_000_000:.1f}M vs ${min_vol/1_000_000:.0f}M)",
         }
-        if use_connors:
+        if use_williams:
+            williams_target = float(row['Open']) + float(row['prev_range']) * float(row['k_dynamic']) * p.get('williams_k_multiplier', 1.0)
+            conds_str['Williams_Breakout'] = f"{'✅' if float(row['Close']) > williams_target else '❌'} (종가 {float(row['Close']):.2f} vs 타겟 {williams_target:.2f})"
+            conds_str['SMA200'] = f"{'✅' if float(row['Close']) > float(row['sma200']) else '❌'} (종가 {float(row['Close']):.2f} vs SMA200 {float(row['sma200']):.2f})"
+            conds_str['Williams_Mode'] = 'ACTIVE'
+        elif use_connors:
             conds_str['RSI2'] = f"{float(row['rsi2']):.1f} ({'✅' if float(row['rsi2']) < p.get('connors_rsi2_limit', 10) else '❌'}, limit:{p.get('connors_rsi2_limit', 10)})"
             conds_str['SMA200'] = f"{'✅' if float(row['Close']) > float(row['sma200']) else '❌'} (종가 {float(row['Close']):.2f} vs SMA200 {float(row['sma200']):.2f})"
             conds_str['Connors_Mode'] = 'ACTIVE'
@@ -810,6 +909,8 @@ def check_today_signals(df, best_all, vix_val=0.0, market_trends=None):
             signal_desc = f"🔴 대기 (VIX 위험: {vix_val:.1f})"
         elif not market_ok:
             signal_desc = f"🔴 대기 ({idx_name} 하락세)"
+        elif not dollar_vol_ok:
+            signal_desc = f"🔴 대기 (거래대금 부족: ${float(row['dollar_volume_ma20'])/1_000_000:.1f}M)"
         else:
             signal_desc = '🟢 진입 검토' if all_ok else '🔴 대기'
             
