@@ -1,5 +1,8 @@
 import yfinance as yf
 import csv
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 TICKER_MAP = {
     # ── 미국 ETF/종목 (영문 티커) ──
@@ -121,7 +124,7 @@ TICKER_MAP = {
 }
 
 rows = []
-with open(r'C:\Users\gagag\Claude\Projects\주식 자동화\toss_portfolio.csv', encoding='utf-8-sig') as f:
+with open(os.path.join(BASE_DIR, 'toss_portfolio.csv'), encoding='utf-8-sig') as f:
     reader = csv.DictReader(f)
     for r in reader:
         rows.append(dict(r))
@@ -181,7 +184,7 @@ for r in rows:
         r['평가금'] = ''
     r['통화'] = 'KRW' if ticker in KRW_SET else 'USD'
 
-out = r'C:\Users\gagag\Claude\Projects\주식 자동화\toss_portfolio.csv'
+out = os.path.join(BASE_DIR, 'toss_portfolio.csv')
 fieldnames = ['종목명','티커','보유 수량','현재가','평가금','통화']
 with open(out, 'w', encoding='utf-8-sig', newline='') as f:
     writer = csv.DictWriter(f, fieldnames=fieldnames)

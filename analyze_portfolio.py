@@ -1,15 +1,22 @@
-import csv, json
+import csv, json, os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 rows = []
-with open(r'C:\Users\gagag\Claude\Projects\주식 자동화\toss_portfolio.csv', encoding='utf-8-sig') as f:
+with open(os.path.join(BASE_DIR, 'toss_portfolio.csv'), encoding='utf-8-sig') as f:
     reader = csv.DictReader(f)
     for r in reader:
         rows.append(dict(r))
 
 # USD/KRW 환율 (yfinance로 조회)
 import yfinance as yf
-fx = yf.download('USDKRW=X', period='1d', auto_adjust=True, progress=False)
-usd_krw = float(fx['Close'].dropna().iloc[-1]) if not fx.empty else 1380
+try:
+    fx = yf.download('USDKRW=X', period='1d', auto_adjust=True, progress=False)
+    close_data = fx['Close'].dropna() if not fx.empty else pd.Series(dtype=float)
+    usd_krw = float(close_data.iloc[-1]) if len(close_data) > 0 else 1380
+except Exception as e:
+    print(f"⚠ 환율 조회 실패: {e}, 기본값 1380 사용")
+    usd_krw = 1380
 print(f"USD/KRW: {usd_krw:.2f}")
 
 # 평가금을 KRW로 통일
@@ -85,7 +92,7 @@ if unassigned:
 
 print("\n=== 섹터별 비중 ===")
 for sector, amount in sorted(sector_totals.items(), key=lambda x: -x[1]):
-    pct = amount / total_krw * 100
+    pct = amount / total_krw * 100 if total_krw > 0 else 0
     print(f"{sector:<20} {amount:>15,.0f} KRW  ({pct:.1f}%)")
 
 # 10x 후보 (소형주 & 성장 테마)

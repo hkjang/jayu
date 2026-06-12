@@ -66,7 +66,6 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 
 ```json
 {
-  "BASE_DIR": "C:\\Users\\gagag\\Claude\\Projects\\주식 자동화",
   "TICKERS": ["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"],
   "INITIAL_CAPITAL": 10000000,
   "SIM_RUNS": 500,
@@ -76,6 +75,8 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
   "KAKAO_ACCESS_TOKEN": "YOUR_KAKAO_TALK_DEVELOPER_ACCESS_TOKEN"
 }
 ```
+
+> **참고**: `BASE_DIR`은 스크립트가 자신의 위치를 기준으로 자동 결정합니다. 특별한 경우가 아니면 지정 불필요합니다.
 
 ### 🔒 Git 보안 정책 (`.gitignore`)
 깃허브 등 오픈 퍼블릭 레포지토리에 개인 자산 및 API 비밀키가 누출되는 것을 원천 봉쇄하기 위해 프로젝트 루트에 `.gitignore` 파일이 구성되어 있습니다.

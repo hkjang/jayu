@@ -1,7 +1,9 @@
-import csv
+import csv, os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 rows = []
-with open(r'C:\Users\gagag\Claude\Projects\주식 자동화\toss_portfolio.csv', encoding='utf-8-sig') as f:
+with open(os.path.join(BASE_DIR, 'toss_portfolio.csv'), encoding='utf-8-sig') as f:
     reader = csv.DictReader(f)
     for r in reader:
         rows.append(r)

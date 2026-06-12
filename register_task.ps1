@@ -2,9 +2,12 @@
 # Stock auto-trading simulation task scheduler registration
 
 $TaskName = "Stock_Danta_Simulation"
-$PythonPath = "C:\Users\gagag\AppData\Local\Programs\Python\Python312\python.exe"
-$ScriptPath = "C:\Users\gagag\Claude\Projects\주식 자동화\danta_simulation.py"
-$WorkDir = "C:\Users\gagag\Claude\Projects\주식 자동화"
+$PythonPath = (Get-Command python -ErrorAction SilentlyContinue).Source
+if (-not $PythonPath) {
+    $PythonPath = "python"  # PATH에서 찾기 실패 시 기본값
+}
+$ScriptPath = Join-Path $PSScriptRoot "danta_simulation.py"
+$WorkDir = $PSScriptRoot
 
 # Remove existing task
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {

@@ -1,4 +1,7 @@
-import yfinance as yf, csv
+import yfinance as yf, csv, os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, 'toss_portfolio.csv')
 
 # 대안 티커 시도
 alt_map = {
@@ -37,7 +40,7 @@ for old_ticker, candidates in alt_map.items():
 
 # CSV 업데이트
 rows = []
-with open(r'C:\Users\gagag\Claude\Projects\주식 자동화\toss_portfolio.csv', encoding='utf-8-sig') as f:
+with open(CSV_PATH, encoding='utf-8-sig') as f:
     reader = csv.DictReader(f)
     for r in reader:
         rows.append(dict(r))
@@ -56,7 +59,7 @@ for r in rows:
         r['통화'] = 'KRW' if new_t.endswith(KRW_SUFFIXES) else 'USD'
         print(f"Updated: {r['종목명']} -> {new_t} / {price}")
 
-with open(r'C:\Users\gagag\Claude\Projects\주식 자동화\toss_portfolio.csv', 'w', encoding='utf-8-sig', newline='') as f:
+with open(CSV_PATH, 'w', encoding='utf-8-sig', newline='') as f:
     writer = csv.DictWriter(f, fieldnames=['종목명','티커','보유 수량','현재가','평가금','통화'])
     writer.writeheader()
     writer.writerows(rows)

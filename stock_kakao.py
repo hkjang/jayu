@@ -28,11 +28,13 @@ if os.path.exists(CONFIG_FILE):
 
 
 def get_index(symbol):
-    """yfinance로 지수 조회"""
+    """지수 조회 (yfinance)"""
     try:
         fi = yf.Ticker(symbol).fast_info
         close = fi.last_price
         prev  = fi.previous_close
+        if not prev or prev == 0:
+            return {"value": close, "pct": 0.0}
         pct   = (close - prev) / prev * 100
         return {"value": close, "pct": pct}
     except Exception as e:
@@ -54,7 +56,8 @@ def get_massive_indices():
                 s = item.get("session", {})
                 result[label] = {"value": item.get("value"), "pct": s.get("change_percent")}
         return result
-    except:
+    except Exception as e:
+        print(f"Massive API 조회 실패: {e}")
         return {}
 
 
@@ -123,7 +126,10 @@ def send_kakao(message: str):
     payload = {
         "template_object": json.dumps(template_obj, ensure_ascii=False)
     }
-    return requests.post(url, headers=headers, data=payload).json()
+    resp = requests.post(url, headers=headers, data=payload, timeout=10)
+    if resp.status_code != 200:
+        return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:200]}
+    return resp.json()
 
 
 if __name__ == "__main__":

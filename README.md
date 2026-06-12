@@ -8,23 +8,24 @@
 
 프로젝트 루트의 파일 정리 및 구조화 정책에 따라, 모든 상세 매뉴얼과 기술 명세서는 **`docs/`** 디렉토리 하위에서 중앙 집중식으로 관리됩니다.
 
-1. **[QUICK_SUMMARY_GUIDE.md (docs/QUICK_SUMMARY_GUIDE.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/QUICK_SUMMARY_GUIDE.md)**
+1. **[QUICK_SUMMARY_GUIDE.md](docs/QUICK_SUMMARY_GUIDE.md)**
    - **(초천천 추천)** 수식 없이 3분 만에 마스터하는 3대 전략 쉬운 비유 및 리스크 제어 입문 가이드.
-2. **[SYSTEM_README.md (docs/SYSTEM_README.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/SYSTEM_README.md)**
+2. **[SYSTEM_README.md](docs/SYSTEM_README.md)**
    - 시스템 전체 파일 맵, config.json 격리 정보, 윈도우 스케줄러 등록 정보 수록.
-3. **[SIMULATION.md (docs/SIMULATION.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/SIMULATION.md)**
+3. **[SIMULATION.md](docs/SIMULATION.md)**
    - 자율 진화 GA 파이프라인, Fitness Score 수식, Kelly 및 분할 베팅 비중 공식 명세.
-4. **[STRATEGY.md (docs/STRATEGY.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY.md)**
+4. **[STRATEGY.md](docs/STRATEGY.md)**
    - 래리 코너스 하이브리드 규칙, 본전 손절(Break-Even) 및 VIX 22.0 가드 등 매매 전략 가이드.
    - **세부 전략별 공식 명세서**:
-     - [래리 윌리엄스 변동성 돌파 전략 명세 (docs/STRATEGY_WILLIAMS_BREAKOUT.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY_WILLIAMS_BREAKOUT.md)
-     - [래리 코너스 RSI(2) 하이브리드 전략 명세 (docs/STRATEGY_CONNORS_RSI2.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY_CONNORS_RSI2.md)
-     - [ADX 기반 추세/횡보 동적 스위칭 전략 명세 (docs/STRATEGY_ADX_SWITCHING.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/STRATEGY_ADX_SWITCHING.md)
-5. **[DEVELOPER_GUIDE.md (docs/DEVELOPER_GUIDE.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/DEVELOPER_GUIDE.md)**
+     - [래리 윌리엄스 변동성 돌파 전략 명세](docs/STRATEGY_WILLIAMS_BREAKOUT.md)
+     - [래리 코너스 RSI(2) 하이브리드 전략 명세](docs/STRATEGY_CONNORS_RSI2.md)
+     - [ADX 기반 추세/횡보 동적 스위칭 전략 명세](docs/STRATEGY_ADX_SWITCHING.md)
+     - [거래량 스파이크 돌파 전략 명세](docs/STRATEGY_VOLUME_BREAKOUT.md)
+5. **[DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)**
    - 파이썬 7대 소스코드 모듈의 기능별/역할별 책임 한계, 의존 관계도 및 장애 대처법 수록.
-6. **[포트폴리오_전략.md (docs/포트폴리오_전략.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/포트폴리오_전략.md)**
+6. **[포트폴리오_전략.md](docs/포트폴리오_전략.md)**
    - 장기 10x 포트폴리오(삼성전자, PLTR, RKLB, IONQ) 집중 투자 원칙서.
-7. **[DEEP_TRADING_STRATEGY.md (docs/DEEP_TRADING_STRATEGY.md)](file:///c:/Users/gagag/Claude/Projects/주식 자동화/docs/DEEP_TRADING_STRATEGY.md)**
+7. **[DEEP_TRADING_STRATEGY.md](docs/DEEP_TRADING_STRATEGY.md)**
    - 기하평균 성장률 공식, 3x 레버리지 변동성 잠식(Volatility Drag) 제어 공식 및 래리 코너스 RSI(2)의 통계적 기대값 미시 분석 명세.
 
 ---
@@ -40,7 +41,6 @@ pip install -r requirements.txt
 프로젝트 루트 경로에 `config.json` 파일을 생성하고 아래 양식에 맞추어 API 키와 시드를 주입합니다.
 ```json
 {
-  "BASE_DIR": "C:\\Users\\gagag\\Claude\\Projects\\주식 자동화",
   "TICKERS": ["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"],
   "INITIAL_CAPITAL": 10000000,
   "SIM_RUNS": 500,
@@ -51,10 +51,12 @@ pip install -r requirements.txt
 }
 ```
 
+> **참고**: `BASE_DIR`은 더 이상 config에 지정할 필요가 없습니다. 스크립트가 자동으로 자신의 위치를 기준으로 경로를 결정합니다.
+
 ### 3. 유닛 테스트 및 정합성 검증
-모든 연산 및 가드 모듈(20개 테스트)이 무결하게 작동하는지 검증합니다.
+모든 연산 및 가드 모듈(21개 테스트)이 무결하게 작동하는지 검증합니다.
 ```bash
-py -3.12 -m unittest test_simulation.py
+python -m unittest test_simulation.py
 ```
 
 ### 4. Windows 자동 기동 스케줄러 등록
@@ -69,6 +71,12 @@ py -3.12 -m unittest test_simulation.py
 
 *   `danta_simulation.py`: 최적 단타 매개변수 유전 탐색 엔진.
 *   `stock_kakao.py`: 매일 아침/저녁 거시 시황 및 시그널 알림 전송기.
-*   `test_simulation.py`: 수치/예외 15대 테스트 케이스 모음.
-*   `toss_portfolio.csv` / `build_portfolio.py`: 보유 종목 실시간 평가액 집계 모듈.
+*   `test_simulation.py`: 수치/예외 21대 테스트 케이스 모음.
+*   `build_portfolio.py` / `analyze_portfolio.py`: 보유 종목 실시간 평가액 집계 및 섹터별 분석 모듈.
 *   `best_strategy.json` / `today_signals.json`: 시뮬레이션 진화 상태 및 실시간 당일 매수 추천 신호.
+
+## 🔒 보안 안내
+
+- `config.json`은 `.gitignore`에 포함되어 Git에 커밋되지 않습니다.
+- `toss_portfolio.csv` 역시 `.gitignore`에 포함되어 금융 포지션이 노출되지 않습니다.
+- 모든 API 키와 토큰은 `config.json`에서만 관리됩니다. 소스코드에는 하드코딩된 키가 없습니다.

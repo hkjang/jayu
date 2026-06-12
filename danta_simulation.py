@@ -22,13 +22,13 @@ sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import json, os, random, copy
+import json, os, random, copy, time
 from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
 # ── 설정 ──────────────────────────────────────────────────────
-BASE_DIR        = r'C:\Users\gagag\Claude\Projects\주식 자동화'
+BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
 TICKERS         = ['SOXL', 'TQQQ', 'TSLA', 'IONQ', 'NVDL', 'QBTS']
 INITIAL_CAPITAL = 10_000_000
 SIM_RUNS        = 500
@@ -95,6 +95,9 @@ PARAM_SPACE = {
     'min_dollar_volume'    : [5_000_000, 10_000_000, 20_000_000], # 최소 20일 평균 거래대금 기준 (미달러)
     'use_volatility_sizing': [True, False],        # ATR 변동성 비례 포지션 비중 조절
     'max_risk_per_trade_pct': [0.01, 0.015, 0.02],  # 거래당 계좌 대비 최대 허용 손실 비율
+    'use_volume_breakout'  : [True, False],        # 거래량 스파이크 돌파 전략 사용 여부
+    'volume_spike_mult'    : [1.8, 2.0, 2.5, 3.0], # 거래량 급증 기준 배수 (평균 대비)
+    'volume_breakout_period': [5, 10, 15, 20],      # 가격 채널 돌파 기준일수 (Donchian)
 }
 
 
@@ -175,6 +178,9 @@ def add_indicators(df):
     df['atr_pct']   = df['atr'] / df['Close']
     df['dollar_volume'] = df['Close'] * df['Volume']
     df['dollar_volume_ma20'] = df['dollar_volume'].rolling(20).mean().fillna(100_000_000)
+    df['volume_ma20'] = df['Volume'].rolling(20).mean().fillna(10_000_000)
+    for n in [5, 10, 15, 20]:
+        df[f'high_max_{n}'] = df['High'].shift(1).rolling(n).max()
     # 신규
     ml, ms, mh      = compute_macd(df['Close'])
     df['macd_line'] = ml
@@ -267,12 +273,25 @@ def backtest(df, p, market_trend_dict=None, target_regime=None):
 
         use_connors = p.get('use_connors_rsi2', False)
         use_williams = p.get('use_williams_breakout', False)
+        use_volume = p.get('use_volume_breakout', False)
         mandatory = conds['volume'] and conds['gap'] and market_ok
         
         if use_williams:
             williams_target = float(row['Open']) + float(row['prev_range']) * float(row['k_dynamic']) * p.get('williams_k_multiplier', 1.0)
             williams_ok = (close > williams_target) and (close > float(row['sma200']))
             if not (mandatory and williams_ok):
+                i += 1; continue
+            optionals = []
+            optional_met = 0
+        elif use_volume:
+            vol_mult = p.get('volume_spike_mult', 2.0)
+            vol_period = p.get('volume_breakout_period', 10)
+            high_col = f'high_max_{vol_period}'
+            volume_spike = float(row['Volume']) > float(row['volume_ma20']) * vol_mult
+            price_break = close > float(row[high_col]) if high_col in row else False
+            trend_ok = close > float(row['sma200'])
+            volume_ok = volume_spike and price_break and trend_ok
+            if not (mandatory and volume_ok):
                 i += 1; continue
             optionals = []
             optional_met = 0
@@ -314,7 +333,7 @@ def backtest(df, p, market_trend_dict=None, target_regime=None):
         if entry_raw <= 0: i += 1; continue
         
         # ── 포지션 비중 결정 (Kelly + Volatility Sizing) ──────────
-        confidence_score = optional_met / len(optionals) if optionals else 1.0
+        confidence_score = optional_met / len(optionals) if optionals else 0.6
         confidence_score = max(0.2, min(confidence_score, 1.0))
         base_pos_size = p['pos_size'] * confidence_score * p.get('kelly_fraction', 0.50)
 
@@ -598,6 +617,9 @@ def sample_params(meta=None, use_meta=True):
         'min_dollar_volume'    : s('min_dollar_volume'),
         'use_volatility_sizing': s('use_volatility_sizing'),
         'max_risk_per_trade_pct': s('max_risk_per_trade_pct'),
+        'use_volume_breakout'  : s('use_volume_breakout'),
+        'volume_spike_mult'    : s('volume_spike_mult'),
+        'volume_breakout_period': s('volume_breakout_period'),
         'pos_size'     : 0.20,  # Kelly로 나중에 덮어씀
     }
 
@@ -612,6 +634,7 @@ def mutate(params, rate=0.25):
     for key, choices in PARAM_SPACE.items():
         if key in child and random.random() < rate:
             child[key] = random.choice(choices)
+    child['pos_size'] = 0.20  # Kelly로 나중에 재계산
     if child.get('rsi_lo', 50) >= child.get('rsi_hi', 70):
         child['rsi_hi'] = child['rsi_lo'] + 15
     if child.get('target_pct', 0.1) < child.get('stop_pct', 0.03) * 1.5:
@@ -686,6 +709,9 @@ DEFAULT_PARAMS = {
     'min_dollar_volume'    : 10_000_000,
     'use_volatility_sizing': False,
     'max_risk_per_trade_pct': 0.015,
+    'use_volume_breakout'  : False,
+    'volume_spike_mult'    : 2.0,
+    'volume_breakout_period': 10,
     'pos_size'     : 0.20
 }
 
@@ -849,12 +875,22 @@ def check_today_signals(df, best_all, vix_val=0.0, market_trends=None):
         
         use_connors = p.get('use_connors_rsi2', False)
         use_williams = p.get('use_williams_breakout', False)
+        use_volume = p.get('use_volume_breakout', False)
         mandatory = conds['volume'] and conds['gap'] and market_ok
         
         if use_williams:
             williams_target = float(row['Open']) + float(row['prev_range']) * float(row['k_dynamic']) * p.get('williams_k_multiplier', 1.0)
             williams_ok = (float(row['Close']) > williams_target) and (float(row['Close']) > float(row['sma200']))
             all_ok = mandatory and williams_ok and dollar_vol_ok
+        elif use_volume:
+            vol_mult = p.get('volume_spike_mult', 2.0)
+            vol_period = p.get('volume_breakout_period', 10)
+            high_col = f'high_max_{vol_period}'
+            volume_spike = float(row['Volume']) > float(row['volume_ma20']) * vol_mult
+            price_break = float(row['Close']) > float(row[high_col]) if high_col in row else False
+            trend_ok = float(row['Close']) > float(row['sma200'])
+            volume_ok = volume_spike and price_break and trend_ok
+            all_ok = mandatory and volume_ok and dollar_vol_ok
         elif use_connors:
             connors_ok = (float(row['Close']) > float(row['sma200'])) and (float(row['rsi2']) < p.get('connors_rsi2_limit', 10))
             all_ok = mandatory and connors_ok and dollar_vol_ok
@@ -898,6 +934,16 @@ def check_today_signals(df, best_all, vix_val=0.0, market_trends=None):
             conds_str['Williams_Breakout'] = f"{'✅' if float(row['Close']) > williams_target else '❌'} (종가 {float(row['Close']):.2f} vs 타겟 {williams_target:.2f})"
             conds_str['SMA200'] = f"{'✅' if float(row['Close']) > float(row['sma200']) else '❌'} (종가 {float(row['Close']):.2f} vs SMA200 {float(row['sma200']):.2f})"
             conds_str['Williams_Mode'] = 'ACTIVE'
+        elif use_volume:
+            vol_mult = p.get('volume_spike_mult', 2.0)
+            vol_period = p.get('volume_breakout_period', 10)
+            high_col = f'high_max_{vol_period}'
+            volume_spike = float(row['Volume']) > float(row['volume_ma20']) * vol_mult
+            price_break = float(row['Close']) > float(row[high_col]) if high_col in row else False
+            conds_str['Volume_Spike'] = f"{'✅' if volume_spike else '❌'} ({float(row['Volume'])/1_000_000:.1f}M vs {float(row['volume_ma20'])/1_000_000*vol_mult:.1f}M)"
+            conds_str['Price_Break'] = f"{'✅' if price_break else '❌'} (종가 {float(row['Close']):.2f} vs {vol_period}일고가 {float(row[high_col]) if high_col in row else 0.0:.2f})"
+            conds_str['SMA200'] = f"{'✅' if float(row['Close']) > float(row['sma200']) else '❌'} (종가 {float(row['Close']):.2f} vs SMA200 {float(row['sma200']):.2f})"
+            conds_str['Volume_Mode'] = 'ACTIVE'
         elif use_connors:
             conds_str['RSI2'] = f"{float(row['rsi2']):.1f} ({'✅' if float(row['rsi2']) < p.get('connors_rsi2_limit', 10) else '❌'}, limit:{p.get('connors_rsi2_limit', 10)})"
             conds_str['SMA200'] = f"{'✅' if float(row['Close']) > float(row['sma200']) else '❌'} (종가 {float(row['Close']):.2f} vs SMA200 {float(row['sma200']):.2f})"
@@ -925,9 +971,9 @@ def check_today_signals(df, best_all, vix_val=0.0, market_trends=None):
 def numpy_to_python(obj):
     if isinstance(obj, dict): return {k: numpy_to_python(v) for k, v in obj.items()}
     if isinstance(obj, list): return [numpy_to_python(v) for v in obj]
+    if isinstance(obj, (bool, np.bool_)): return bool(obj)
     if isinstance(obj, (np.integer,)): return int(obj)
     if isinstance(obj, (np.floating,)): return float(obj)
-    if isinstance(obj, bool): return bool(obj)
     return obj
 
 def save_json(obj, path):
@@ -947,8 +993,19 @@ def save_json(obj, path):
 
 def load_json(path, default=None):
     if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"  ⚠ JSON 파싱 오류 ({path}): {e}")
+            # 손상된 파일 백업 후 기본값 반환
+            backup = path + '.corrupt'
+            try:
+                import shutil
+                shutil.copy2(path, backup)
+                print(f"    → 손상 파일 백업: {backup}")
+            except Exception:
+                pass
     return default if default is not None else {}
 
 # ── 메인 실행 ────────────────────────────────────────────────────
@@ -1011,7 +1068,6 @@ def run():
                         break
                 except Exception as ex:
                     print(f"    ({attempt+1}차 시도 실패): {ex}")
-                import time
                 time.sleep(1)
 
             if raw.empty or len(raw) < 250: print(f"  ⚠ 데이터 부족"); continue
@@ -1111,8 +1167,11 @@ def run():
                         }
                     else:
                         no_improve += 1
-                except Exception:
-                    no_improve += 1; continue
+                except Exception as sim_err:
+                    no_improve += 1
+                    if run_i < 3:  # 처음 3회만 에러 로깅 (반복 에러 방지)
+                        print(f"\n    ⚠ 시뮬레이션 {run_i+1}회 오류: {type(sim_err).__name__}: {sim_err}")
+                    continue
 
             print(f" 완료 (유효 {valid_n}회)")
 

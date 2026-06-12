@@ -1,4 +1,7 @@
-import yfinance as yf, csv
+import yfinance as yf, csv, os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, 'toss_portfolio.csv')
 
 # 리튬아르헨티나AG 후보: LAAC, LIAG, LAC (원래 회사)
 # 이지케어텍 후보: 287410.KQ, 287410.KS, 030800.KQ
@@ -28,7 +31,7 @@ for name, tickers in candidates.items():
 
 # CSV 업데이트
 rows = []
-with open(r'C:\Users\gagag\Claude\Projects\주식 자동화\toss_portfolio.csv', encoding='utf-8-sig') as f:
+with open(CSV_PATH, encoding='utf-8-sig') as f:
     reader = csv.DictReader(f)
     for r in reader:
         rows.append(dict(r))
@@ -45,7 +48,7 @@ for r in rows:
         note = ' (모주 기준)' if name == '뉴인텍 21R' else ''
         print(f"Updated: {name} -> {ticker} / {price}{note}")
 
-with open(r'C:\Users\gagag\Claude\Projects\주식 자동화\toss_portfolio.csv', 'w', encoding='utf-8-sig', newline='') as f:
+with open(CSV_PATH, 'w', encoding='utf-8-sig', newline='') as f:
     writer = csv.DictWriter(f, fieldnames=['종목명','티커','보유 수량','현재가','평가금','통화'])
     writer.writeheader()
     writer.writerows(rows)
