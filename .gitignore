@@ -138,12 +138,7 @@ cython_debug/
 # API Keys and Token configurations
 config.json
 
-# Backtest state, models and outputs (gene pool, best strategy, meta learning, today signals)
-best_strategy.json
-gene_pool.json
-meta_learning.json
-strategy_history.json
-today_signals.json
+# Backtest state, models and outputs (gene pool, best strategy, meta learning, today signals) - Now Tracked in Git
 
 # Log directory and generated backtest files
 simulation_logs/
