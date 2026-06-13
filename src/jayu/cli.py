@@ -52,6 +52,12 @@ from .reports import (
 )
 from .risk import apply_data_trust, apply_portfolio_risk, risk_explanation
 from .risk_ledger import record_portfolio_snapshot
+from .safety import (
+    enforce_live_price_safety,
+    enforce_research_universe,
+    enforce_shadow_promotion,
+    write_promotion_report,
+)
 from .settings import Settings, load_settings
 from .signal_replay import write_signal_replay_artifact
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
@@ -62,9 +68,11 @@ app = typer.Typer(no_args_is_help=True, help="Jayu stock research automation")
 portfolio_app = typer.Typer(no_args_is_help=True, help="Portfolio maintenance and risk")
 report_app = typer.Typer(no_args_is_help=True, help="Run and signal reports")
 experiments_app = typer.Typer(help="Experiment registry and comparisons")
+promotion_app = typer.Typer(no_args_is_help=True, help="Shadow-to-live promotion")
 app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(report_app, name="report")
 app.add_typer(experiments_app, name="experiments")
+app.add_typer(promotion_app, name="promotion")
 
 
 def _project_root() -> Path:
@@ -363,6 +371,25 @@ def _run_engine(
     try:
         _record_signal_inputs(context, paths)
         provider_registry = build_provider_registry(settings, paths.cache_dir)
+        if optimize:
+            research_safety = enforce_research_universe(settings)
+            research_safety_path = context.run_dir / "research_universe_safety.json"
+            atomic_write_json(research_safety_path, research_safety)
+            context.record_artifact(research_safety_path)
+        if settings.mode == "live" and not replay and not optimize:
+            live_price_safety = enforce_live_price_safety(settings, provider_registry)
+            live_price_path = context.run_dir / "live_price_safety.json"
+            atomic_write_json(live_price_path, live_price_safety)
+            context.record_artifact(live_price_path)
+            promotion = enforce_shadow_promotion(
+                paths.state_dir / "promotion.json",
+                paths.signals_dir / "shadow",
+                paths.state_dir / "health.json",
+                settings.promotion,
+            )
+            promotion_path = context.run_dir / "promotion.json"
+            atomic_write_json(promotion_path, promotion)
+            context.record_artifact(promotion_path)
         collect_supplemental_data(settings, provider_registry, context)
         best_all, _, improved, signals = engine.run(
             settings,
@@ -478,6 +505,13 @@ def _run_engine(
                 status="success",
                 summary=summary,
             )
+            if shadow_mode:
+                write_promotion_report(
+                    paths.state_dir / "promotion.json",
+                    paths.signals_dir / "shadow",
+                    paths.state_dir / "health.json",
+                    settings.promotion,
+                )
         typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
     except Exception as exc:
         failure_code = classify_failure(exc)
@@ -821,7 +855,7 @@ def report_shadow_performance(
     output: Annotated[Path | None, typer.Option("--output")] = None,
     config: Annotated[Path | None, typer.Option("--config")] = None,
 ) -> None:
-    _, paths = _load(config)
+    settings, paths = _load(config)
     price_data = read_json(price_json, default={})
     if not isinstance(price_data, dict):
         raise typer.BadParameter("price-json must be a JSON object")
@@ -829,6 +863,26 @@ def report_shadow_performance(
         paths.signals_dir / "shadow",
         cast("dict[str, list[dict[str, Any]]]", price_data),
         output or (paths.state_dir / "shadow_performance.json"),
+    )
+    report["promotion"] = write_promotion_report(
+        paths.state_dir / "promotion.json",
+        paths.signals_dir / "shadow",
+        paths.state_dir / "health.json",
+        settings.promotion,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@promotion_app.command("status")
+def promotion_status(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    settings, paths = _load(config)
+    report = write_promotion_report(
+        paths.state_dir / "promotion.json",
+        paths.signals_dir / "shadow",
+        paths.state_dir / "health.json",
+        settings.promotion,
     )
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 

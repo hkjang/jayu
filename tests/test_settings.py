@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from jayu.settings import ResearchSettings, load_settings
+from jayu.settings import ResearchSettings, Settings, load_settings
 
 
 def test_environment_overrides_legacy_json(tmp_path, monkeypatch):
@@ -47,10 +47,11 @@ def test_sample_config_is_valid():
     assert settings.portfolio_mapping_file == Path("configs/portfolio_mapping.json")
     assert settings.risk.enforcement == "block"
     assert settings.data.api_key_env_names["tiingo"] == "JAYU_TIINGO_API_KEY"
-    assert settings.mode == "live"
+    assert settings.mode == "shadow"
     assert settings.data.max_relative_volume_delta == 0.05
     assert settings.research.cost_survival_enabled is True
     assert settings.research.cost_survival_buffer_bps == 10.0
+    assert settings.promotion.min_shadow_days == 20
 
 
 def test_inconsistent_cash_limits_are_rejected(tmp_path):
@@ -98,3 +99,37 @@ def test_cross_validation_provider_requires_enough_available_sources(tmp_path):
     assert audit["valid"] is False
     assert "tiingo" in audit["warnings"][0]
     assert "minimum_valid_price_sources" in audit["errors"][0]
+
+
+def test_live_mode_requires_two_source_price_verification():
+    with pytest.raises(ValueError, match="minimum_valid_price_sources"):
+        Settings(mode="live")
+
+    settings = Settings.model_validate(
+        {
+            "mode": "live",
+            "data": {
+                "cross_validation_providers": ["tiingo"],
+                "minimum_valid_price_sources": 2,
+                "price_disagreement_policy": "block",
+                "require_verified_price_for_eligibility": True,
+            },
+        }
+    )
+
+    assert settings.mode == "live"
+    assert settings.data.minimum_valid_price_sources == 2
+
+
+def test_live_mode_cannot_disable_promotion_gate():
+    with pytest.raises(ValueError, match="shadow promotion"):
+        Settings.model_validate(
+            {
+                "mode": "live",
+                "data": {
+                    "cross_validation_providers": ["tiingo"],
+                    "minimum_valid_price_sources": 2,
+                },
+                "promotion": {"enabled": False},
+            }
+        )

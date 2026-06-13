@@ -10,6 +10,9 @@ from .io import atomic_write_json, read_json
 
 
 def classify_failure(exc: Exception) -> str:
+    explicit_code = getattr(exc, "code", None)
+    if isinstance(explicit_code, FailureCode):
+        return explicit_code.value
     text = f"{type(exc).__name__}: {exc}".lower()
     module = type(exc).__module__.lower()
     if FailureCode.DATA_CONTRACT_FAILED.value.lower() in text or "datacontracterror" in text:

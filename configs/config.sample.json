@@ -5,7 +5,7 @@
   "transaction_fee": 0.0015,
   "slippage": 0.0005,
   "random_seed": 42,
-  "mode": "live",
+  "mode": "shadow",
   "account_value_krw": null,
   "cash_balance_krw": null,
   "notification_message_limit": 900,
@@ -90,6 +90,14 @@
     "source": "manual_current_universe",
     "includes_delisted": false,
     "policy": "warn"
+  },
+  "promotion": {
+    "enabled": true,
+    "min_shadow_days": 20,
+    "min_completed_signals": 1,
+    "min_mature_completion_ratio": 0.9,
+    "min_health_score": 80,
+    "maturity_horizon_days": 20
   },
   "risk": {
     "profile": "balanced",

@@ -96,6 +96,15 @@ class UniverseSettings(BaseModel):
     policy: Literal["warn", "strict"] = "warn"
 
 
+class PromotionSettings(BaseModel):
+    enabled: bool = True
+    min_shadow_days: int = Field(default=20, ge=1, le=365)
+    min_completed_signals: int = Field(default=1, ge=0, le=10_000)
+    min_mature_completion_ratio: float = Field(default=0.90, ge=0, le=1)
+    min_health_score: int = Field(default=80, ge=0, le=100)
+    maturity_horizon_days: int = Field(default=20, ge=1, le=252)
+
+
 class ProviderPolicySettings(BaseModel):
     enabled: bool = True
     timeout_seconds: float = Field(default=20.0, gt=0, le=300)
@@ -182,7 +191,7 @@ class DataSettings(BaseModel):
 
 class Settings(BaseModel):
     tickers: list[str] = ["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"]
-    mode: Literal["live", "shadow"] = "live"
+    mode: Literal["live", "shadow"] = "shadow"
     initial_capital: float = Field(default=10_000_000, gt=0)
     sim_runs: int = Field(default=500, ge=1, le=100_000)
     transaction_fee: float = Field(default=0.0015, ge=0, le=0.02)
@@ -218,6 +227,7 @@ class Settings(BaseModel):
     data: DataSettings = Field(default_factory=DataSettings)
     research: ResearchSettings = Field(default_factory=ResearchSettings)
     universe: UniverseSettings = Field(default_factory=UniverseSettings)
+    promotion: PromotionSettings = Field(default_factory=PromotionSettings)
     risk: RiskSettings = Field(default_factory=RiskSettings)
 
     @field_validator("tickers")
@@ -229,6 +239,26 @@ class Settings(BaseModel):
         if len(cleaned) != len(set(cleaned)):
             raise ValueError("tickers must not contain duplicates")
         return cleaned
+
+    @model_validator(mode="after")
+    def validate_live_safety(self) -> "Settings":
+        if self.mode != "live":
+            return self
+        price_sources = {
+            self.data_provider,
+            *self.data.cross_validation_providers,
+        }
+        if self.data.minimum_valid_price_sources < 2:
+            raise ValueError("live mode requires minimum_valid_price_sources >= 2")
+        if len(price_sources) < 2:
+            raise ValueError("live mode requires a distinct cross_validation_providers entry")
+        if self.data.price_disagreement_policy != "block":
+            raise ValueError("live mode requires price_disagreement_policy=block")
+        if not self.data.require_verified_price_for_eligibility:
+            raise ValueError("live mode requires verified price data for eligibility")
+        if not self.promotion.enabled:
+            raise ValueError("live mode requires the shadow promotion gate")
+        return self
 
     def runtime_paths(self, project_root: Path) -> RuntimePaths:
         return RuntimePaths.from_root(
