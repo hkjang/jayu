@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .entries import evaluate_entry
 from .legacy_adapter import migrate_json_structure
 from .markets import benchmark_for_ticker, format_market_notional, vix_filter_applies
 from .optimizer import fill_missing_params
@@ -179,71 +180,22 @@ def check_today_signals(
         use_connors = strategy_mode == "connors_rsi2"
         use_williams = strategy_mode == "williams_breakout"
         use_volume = strategy_mode == "volume_breakout"
-        mandatory = conds["volume"] and conds["gap"] and market_ok
+        # ADX state kept only for the condition-status display below.
+        use_adx = p.get("use_adx_filter", False)
+        adx_val = float(row["adx"]) if "adx" in row else 0.0
 
-        if use_williams:
-            williams_target = float(row["Open"]) + float(row["prev_range"]) * float(
-                row["k_dynamic"]
-            ) * p.get("williams_k_multiplier", 1.0)
-            williams_ok = (float(row["Close"]) > williams_target) and (
-                float(row["Close"]) > float(row["sma200"])
-            )
-            all_ok = mandatory and williams_ok and dollar_vol_ok
-        elif use_volume:
-            vol_mult = p.get("volume_spike_mult", 2.0)
-            vol_period = p.get("volume_breakout_period", 10)
-            high_col = f"high_max_{vol_period}"
-            volume_spike = float(row["Volume"]) > float(row["volume_ma20"]) * vol_mult
-            price_break = float(row["Close"]) > float(row[high_col]) if high_col in row else False
-            trend_ok = float(row["Close"]) > float(row["sma200"])
-            volume_ok = volume_spike and price_break and trend_ok
-            all_ok = mandatory and volume_ok and dollar_vol_ok
-        elif use_connors:
-            connors_ok = (float(row["Close"]) > float(row["sma200"])) and (
-                float(row["rsi2"]) < p.get("connors_rsi2_limit", 10)
-            )
-            all_ok = mandatory and connors_ok and dollar_vol_ok
-        else:
-            # ADX 필터 및 스위칭 로직
-            use_adx = p.get("use_adx_filter", False)
-            adx_val = float(row["adx"]) if "adx" in row else 0.0
-
-            if use_adx and adx_val > p.get("adx_threshold", 25):
-                mandatory = mandatory and conds["ema"]
-                if p["require_macd"]:
-                    mandatory = mandatory and conds["macd"]
-                optionals = [
-                    conds["rsi"],
-                    conds["macd"] if not p["require_macd"] else True,
-                    conds["bb"],
-                    conds["regime"],
-                    conds["obv"],
-                    conds["stoch"],
-                ]
-            elif use_adx and adx_val < 20:
-                mandatory = mandatory and conds["rsi"]
-                if p["require_bb"]:
-                    mandatory = mandatory and conds["bb"]
-                optionals = [
-                    conds["ema"],
-                    conds["macd"],
-                    conds["bb"] if not p["require_bb"] else True,
-                    conds["regime"],
-                    conds["obv"],
-                    conds["stoch"],
-                ]
-            else:
-                mandatory = mandatory and conds["rsi"] and conds["ema"]
-                optionals = [
-                    conds["macd"],
-                    conds["bb"],
-                    conds["regime"],
-                    conds["obv"],
-                    conds["stoch"],
-                ]
-
-            optional_met = sum([bool(cond) for cond in optionals])
-            all_ok = mandatory and (optional_met >= p["ensemble_min"]) and dollar_vol_ok
+        # Entry decision shares jayu.entries.evaluate_entry with the backtester,
+        # so the live signal and backtest can no longer drift apart. The
+        # liquidity (dollar-volume) guard remains signal-specific.
+        entry_decision = evaluate_entry(
+            row,
+            p,
+            close=float(row["Close"]),
+            ema=ema,
+            strategy_mode=strategy_mode,
+            market_ok=market_ok,
+        )
+        all_ok = entry_decision.entered and dollar_vol_ok
 
         # 상세 조건 현황 문자열화
         conds_str = {
