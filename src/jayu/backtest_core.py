@@ -366,6 +366,14 @@ def backtest(
         gross_ret = (exit_settled - entry) / entry
         ret = gross_ret - fee_rate
 
+        # ── Gross→Net 비용 분해 (정확히 가산됨) ───────────────────
+        # raw_ret 은 비용 0 가정의 진짜 시세 수익(체결가 전·후 슬리피지 미반영),
+        # 아래 두 비용을 차감하면 net(ret)과 정확히 일치한다.
+        #   raw_return_pct - slippage_cost_pct - fee_cost_pct == net_return_pct
+        raw_ret = (exit_price - entry_raw) / entry_raw if entry_raw > 0 else 0.0
+        slippage_cost = raw_ret - gross_ret
+        fee_cost = fee_rate
+
         capital_before = capital
         pnl = capital * actual_pos_size * ret
         capital += pnl
@@ -383,6 +391,9 @@ def backtest(
                 "gross_return_pct": round(gross_ret * 100, 4),
                 "net_return_pct": round(ret * 100, 4),
                 "ret": round(ret * 100, 3),
+                "raw_return_pct": round(raw_ret * 100, 4),
+                "slippage_cost_pct": round(slippage_cost * 100, 4),
+                "fee_cost_pct": round(fee_cost * 100, 4),
                 "fee_rate_pct": round(fee_rate * 100, 4),
                 "slippage_rate_pct": round(dynamic_slippage * 100, 4),
                 "position_pct": round(actual_pos_size * 100, 4),

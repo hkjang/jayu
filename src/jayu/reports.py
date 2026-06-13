@@ -185,7 +185,14 @@ def post_signal_performance(
                 values.append(float(row_returns[key]))
         if values:
             aggregate[key] = sum(values) / len(values)
-    return {"signals_evaluated": len(rows), "aggregate": aggregate, "rows": rows}
+    return {
+        # Raw close-to-close moves after a signal: NO fees/spread/slippage are
+        # deducted, so this is a gross signal-quality view, not net tradeable PnL.
+        "basis": "gross_no_costs",
+        "signals_evaluated": len(rows),
+        "aggregate": aggregate,
+        "rows": rows,
+    }
 
 
 def write_signal_performance_report(

@@ -7,6 +7,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .costs import breakeven_transaction_cost, cost_sensitivity
+
 
 FITNESS_VERSION = "v2_daily_equity"
 
@@ -19,6 +21,9 @@ class FitnessSpec:
     calmar_weight: float = 0.20
     annualization_days: int = 252
     downside_mar: float = 0.0
+    # Annualized turnover at which the (reported-only) turnover-adjusted fitness
+    # is halved. Does NOT affect the canonical ``fitness`` used for selection.
+    turnover_halflife: float = 252.0
 
 
 def equity_curve_from_trades(
@@ -59,6 +64,93 @@ def equity_curve_from_trades(
     curve = equity.to_frame()
     curve["daily_return"] = curve["equity"].pct_change().fillna(0.0)
     return curve
+
+
+def _net_return_pct(trade: dict[str, Any]) -> float:
+    """Return a single trade's net return in percent.
+
+    ``ret`` and ``net_return_pct`` are both stored net of fees and slippage;
+    prefer them. Fall back to the (after-slippage, before-fee) ``gross_return_pct``
+    only when no net field exists.
+    """
+    for key in ("ret", "net_return_pct"):
+        value = trade.get(key)
+        if isinstance(value, (int, float)) and np.isfinite(value):
+            return float(value)
+    value = trade.get("gross_return_pct")
+    if isinstance(value, (int, float)) and np.isfinite(value):
+        return float(value)
+    return 0.0
+
+
+def cost_bridge(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Decompose aggregate gross (raw) return down to net return, step by step.
+
+    When trades carry the exact additive cost fields emitted by the backtester
+    (``raw_return_pct``, ``slippage_cost_pct``, ``fee_cost_pct``,
+    ``net_return_pct``) the bridge is exact: gross − slippage − fee == net.
+    When those fields are absent (e.g. externally supplied trade logs that only
+    record ``ret``) the bridge degrades gracefully to net-only with cost
+    components zeroed and ``has_cost_detail=False`` so callers can tell the
+    difference between "no cost" and "cost unknown".
+    """
+    count = len(trades)
+    if count == 0:
+        return {
+            "trades": 0,
+            "has_cost_detail": False,
+            "returns_basis": "net",
+            "avg_gross_return_pct": 0.0,
+            "avg_slippage_cost_pct": 0.0,
+            "avg_fee_cost_pct": 0.0,
+            "avg_net_return_pct": 0.0,
+            "total_gross_return_pct": 0.0,
+            "total_slippage_cost_pct": 0.0,
+            "total_fee_cost_pct": 0.0,
+            "total_net_return_pct": 0.0,
+            "cost_drag_pct_of_gross": 0.0,
+        }
+
+    def column(name: str) -> np.ndarray:
+        values = [trade.get(name) for trade in trades]
+        return np.nan_to_num(
+            np.array(
+                [float(value) if isinstance(value, (int, float)) else 0.0 for value in values],
+                dtype=float,
+            ),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+
+    net = np.array([_net_return_pct(trade) for trade in trades], dtype=float)
+    has_detail = any("raw_return_pct" in trade for trade in trades)
+    if has_detail:
+        gross = column("raw_return_pct")
+        slippage = column("slippage_cost_pct")
+        fee = column("fee_cost_pct")
+    else:
+        gross = net.copy()
+        slippage = np.zeros(count)
+        fee = np.zeros(count)
+
+    total_gross = float(gross.sum())
+    total_net = float(net.sum())
+    cost_drag = round((total_gross - total_net) / abs(total_gross) * 100, 2) if total_gross else 0.0
+    return {
+        "trades": count,
+        "has_cost_detail": has_detail,
+        "returns_basis": "net",
+        "avg_gross_return_pct": round(float(gross.mean()), 4),
+        "avg_slippage_cost_pct": round(float(slippage.mean()), 4),
+        "avg_fee_cost_pct": round(float(fee.mean()), 4),
+        "avg_net_return_pct": round(float(net.mean()), 4),
+        "total_gross_return_pct": round(total_gross, 4),
+        "total_slippage_cost_pct": round(float(slippage.sum()), 4),
+        "total_fee_cost_pct": round(float(fee.sum()), 4),
+        "total_net_return_pct": round(total_net, 4),
+        "cost_drag_pct_of_gross": cost_drag,
+    }
 
 
 def _clean_metric(value: float, limit: float) -> float:
@@ -203,8 +295,34 @@ def calc_metrics(
     mdd_penalty = max(0.1, 1.0 - float(drawdown["max_drawdown"]) / 10.0)
     mae_penalty = max(0.1, 1.0 - (abs(worst_mae) - 8.0) / 10.0) if worst_mae < -8.0 else 1.0
     fitness = round(base_fitness * mdd_penalty * mae_penalty, 3)
+
+    # ── Turnover: reported metric + a turnover-adjusted fitness (NOT used for
+    # selection, so the canonical fitness stays reproducible). More round trips
+    # per year => more cost drag and execution/overfit risk => smaller penalty.
+    annual_turnover = (
+        float(len(returns_pct)) * spec.annualization_days / elapsed_days
+        if elapsed_days > 0
+        else 0.0
+    )
+    turnover_penalty = (
+        spec.turnover_halflife / (spec.turnover_halflife + annual_turnover)
+        if spec.turnover_halflife > 0
+        else 1.0
+    )
+    fitness_turnover_adjusted = round(fitness * turnover_penalty, 3)
+
+    breakeven = breakeven_transaction_cost(trades)
+    sensitivity = cost_sensitivity(trades)
     return {
         "fitness_version": fitness_version,
+        "returns_basis": "net",
+        "cost_bridge": cost_bridge(trades),
+        "breakeven_round_trip_bps": breakeven["breakeven_round_trip_bps"],
+        "cost_sensitivity": sensitivity,
+        "max_survivable_bps": sensitivity.get("max_survivable_bps"),
+        "annual_turnover": round(annual_turnover, 1),
+        "turnover_penalty": round(turnover_penalty, 3),
+        "fitness_turnover_adjusted": fitness_turnover_adjusted,
         "trades": int(len(returns_pct)),
         "win_rate": round(win_rate, 1),
         "avg_win": round(avg_win, 2),
