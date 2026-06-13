@@ -1,0 +1,16 @@
+{
+  "SOXL": {
+    "bull": {
+      "validation_status": "approved",
+      "engine_version": 5,
+      "params": {
+        "ema_span": 20,
+        "pos_size": 0.1,
+        "stop_pct": 0.03,
+        "target_pct": 0.06
+      },
+      "metrics": {},
+      "val_metrics": {}
+    }
+  }
+}

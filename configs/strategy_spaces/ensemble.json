@@ -1,0 +1,11 @@
+{
+  "rsi_lo": [35, 40, 45, 50, 55],
+  "rsi_hi": [60, 65, 70, 75, 80],
+  "ema_span": [10, 20, 50],
+  "require_macd": [true, false],
+  "require_bb": [true, false],
+  "regime_filter": [true, false],
+  "ensemble_min": [1, 2, 3],
+  "use_adx_filter": [true, false],
+  "adx_threshold": [20, 25, 30]
+}

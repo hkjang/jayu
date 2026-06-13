@@ -1,35 +1,51 @@
-# register_task.ps1
-# Stock auto-trading simulation task scheduler registration
+param(
+    [string]$TaskName = "Stock_Jayu_Simulation",
+    [string]$Command = "simulate --notify",
+    [int[]]$Hours = @(0, 4, 8, 12, 16, 20)
+)
 
-$TaskName = "Stock_Danta_Simulation"
-$PythonPath = (Get-Command python -ErrorAction SilentlyContinue).Source
-if (-not $PythonPath) {
-    $PythonPath = "python"  # PATH에서 찾기 실패 시 기본값
-}
-$ScriptPath = Join-Path $PSScriptRoot "danta_simulation.py"
+# Register the Jayu CLI with Windows Task Scheduler.
+
+$ErrorActionPreference = "Stop"
 $WorkDir = $PSScriptRoot
+$JayuPath = Join-Path $WorkDir ".venv\Scripts\jayu.exe"
 
-# Remove existing task
-if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-    Write-Host "Removed existing task: $TaskName"
+if (-not (Test-Path -LiteralPath $JayuPath)) {
+    throw "Jayu environment not found. Run 'uv sync --frozen' first: $JayuPath"
 }
 
-# Define action (Wrapping ScriptPath with escaped quotes for space-safe execution)
-$Action = New-ScheduledTaskAction -Execute $PythonPath -Argument "`"$ScriptPath`"" -WorkingDirectory $WorkDir
+foreach ($ExistingName in @($TaskName, "Stock_Danta_Simulation")) {
+    if (Get-ScheduledTask -TaskName $ExistingName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $ExistingName -Confirm:$false
+    }
+}
 
-# Define trigger (Daily, repeating every 4 hours)
-$Trigger = New-ScheduledTaskTrigger -Daily -At "12:00 AM"
-$Trigger.Repetition = (New-ScheduledTaskTrigger -Once -At "12:00 AM").Repetition
-$Trigger.Repetition.Interval = "PT4H"
-$Trigger.Repetition.Duration = "P1D"
+$Action = New-ScheduledTaskAction `
+    -Execute $JayuPath `
+    -Argument $Command `
+    -WorkingDirectory $WorkDir
 
-# Define settings
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+$Triggers = $Hours | Sort-Object -Unique | ForEach-Object {
+    if ($_ -lt 0 -or $_ -gt 23) {
+        throw "Invalid schedule hour: $_"
+    }
+    New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours($_))
+}
 
-# Register task
-Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Description "Stock trading danta simulation engine v3 (Every 4 hours)"
+$Settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 3)
 
-Write-Host "Task Scheduler Registration Successful!"
-Write-Host "Task Name: $TaskName"
-Write-Host "Schedule: Every 4 hours repeating daily"
+Register-ScheduledTask `
+    -TaskName $TaskName `
+    -Action $Action `
+    -Trigger $Triggers `
+    -Settings $Settings `
+    -Description "Jayu strategy research, signal generation, risk gate, and notification"
+
+Write-Host "Registered: $TaskName"
+Write-Host "Executable: $JayuPath"
+Write-Host "Command: $Command"
+Write-Host "Schedule hours: $($Hours -join ', ')"

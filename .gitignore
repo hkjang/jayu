@@ -141,10 +141,13 @@ config.json
 # Portfolio data (financial position privacy)
 toss_portfolio.csv
 
-# Backtest state, models and outputs (gene pool, best strategy, meta learning, today signals) - Now Tracked in Git
-
-# Log directory and generated backtest files
+# Runtime state and generated outputs
+state/
+signals/
+runs/
+data/cache/
 simulation_logs/
+bin/
 
 # IDE / OS files
 .vscode/

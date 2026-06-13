@@ -1,3 +1,10 @@
-pykrx
-yfinance
-requests
+curl-cffi>=0.13,<1
+exchange-calendars>=4.10,<5
+numpy>=2.0,<3
+pandas>=2.2,<3
+pyarrow>=18,<24
+pydantic>=2.10,<3
+pydantic-settings>=2.7,<3
+requests>=2.32,<3
+typer>=0.15,<1
+yfinance>=0.2.54,<0.3

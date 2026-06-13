@@ -1,0 +1,16 @@
+{
+  "name": "single_take_profit_close_path",
+  "source": "python_reference",
+  "closes": [100.0, 110.0, 104.0, 112.0],
+  "params": {
+    "mode": "ensemble",
+    "stop_loss_pct": 0.05,
+    "take_profit_pct": 0.08,
+    "position_pct": 1.0
+  },
+  "metrics": {
+    "trade_count": 1,
+    "total_return_pct": 0.1,
+    "win_rate": 1.0
+  }
+}

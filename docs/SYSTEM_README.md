@@ -1,6 +1,11 @@
 # 🖥️ 주식 자동화 및 자율 진화 시스템 종합 명세서 (SYSTEM_README)
 
-> **마지막 업데이트**: 2026-06-13  
+> **구조 변경 안내**: 현재 운영 기준은 루트 `README.md`와 `src/jayu/`입니다.
+> 실행 상태는 `state/`, 신호는 `signals/`, 실행별 산출물은 `runs/`에 저장되며
+> 이 디렉터리는 Git에서 제외됩니다. 아래 문서의 루트 JSON 경로 설명은 역사적
+> 설계 참고용입니다.
+
+> **마지막 업데이트**: 2026-06-13
 > **운영 환경**: Windows 11 / Python 3.12 / PowerShell 5.1+
 > **핵심 설계**: 초보수적 자본 보존(Capital Preservation) & 다중 국면 자율 진화(Genetic Optimization)
 
@@ -71,8 +76,8 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
   "SIM_RUNS": 500,
   "TRANSACTION_FEE": 0.0015,
   "SLIPPAGE": 0.0005,
-  "MASSIVE_API_KEY": "YOUR_MASSIVE_NEWS_API_KEY",
-  "KAKAO_ACCESS_TOKEN": "YOUR_KAKAO_TALK_DEVELOPER_ACCESS_TOKEN"
+  "MASSIVE_API_KEY": null,
+  "KAKAO_ACCESS_TOKEN": null
 }
 ```
 

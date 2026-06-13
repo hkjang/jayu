@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "leveraged_name_keywords": ["레버리지", "2X", "3X"],
+  "tickers": {
+    "DFEN": {
+      "leverage_factor": 3.0,
+      "underlying_group": "aerospace_defense",
+      "sector": "industrials",
+      "factors": ["aerospace_defense", "industrials", "leveraged"],
+      "currency": "USD"
+    },
+    "FAS": {
+      "leverage_factor": 3.0,
+      "underlying_group": "financials",
+      "sector": "financials",
+      "factors": ["financials", "leveraged"],
+      "currency": "USD"
+    },
+    "IONQ": {
+      "leverage_factor": 1.0,
+      "underlying_group": "quantum",
+      "sector": "quantum",
+      "factors": ["quantum", "technology", "speculative_growth"],
+      "currency": "USD"
+    },
+    "MSTU": {
+      "leverage_factor": 2.0,
+      "underlying_group": "bitcoin_proxy",
+      "sector": "crypto_equity",
+      "factors": ["bitcoin_proxy", "speculative_growth", "leveraged"],
+      "currency": "USD"
+    },
+    "NVDA": {
+      "leverage_factor": 1.0,
+      "underlying_group": "nvidia",
+      "sector": "semiconductors",
+      "factors": ["semiconductors", "ai", "technology", "growth"],
+      "currency": "USD"
+    },
+    "NVDL": {
+      "leverage_factor": 2.0,
+      "underlying_group": "nvidia",
+      "sector": "semiconductors",
+      "factors": ["semiconductors", "ai", "technology", "growth", "leveraged"],
+      "currency": "USD"
+    },
+    "NVDU": {
+      "leverage_factor": 2.0,
+      "underlying_group": "nvidia",
+      "sector": "semiconductors",
+      "factors": ["semiconductors", "ai", "technology", "growth", "leveraged"],
+      "currency": "USD"
+    },
+    "NVDW": {
+      "leverage_factor": 1.0,
+      "underlying_group": "nvidia",
+      "sector": "semiconductors",
+      "factors": ["semiconductors", "ai", "technology", "growth"],
+      "currency": "USD"
+    },
+    "NVDX": {
+      "leverage_factor": 2.0,
+      "underlying_group": "nvidia",
+      "sector": "semiconductors",
+      "factors": ["semiconductors", "ai", "technology", "growth", "leveraged"],
+      "currency": "USD"
+    },
+    "QBTS": {
+      "leverage_factor": 1.0,
+      "underlying_group": "quantum",
+      "sector": "quantum",
+      "factors": ["quantum", "technology", "speculative_growth"],
+      "currency": "USD"
+    },
+    "QQQ": {
+      "leverage_factor": 1.0,
+      "underlying_group": "nasdaq100",
+      "sector": "technology",
+      "factors": ["nasdaq100", "technology", "growth"],
+      "currency": "USD"
+    },
+    "RGTI": {
+      "leverage_factor": 1.0,
+      "underlying_group": "quantum",
+      "sector": "quantum",
+      "factors": ["quantum", "technology", "speculative_growth"],
+      "currency": "USD"
+    },
+    "SOXL": {
+      "leverage_factor": 3.0,
+      "underlying_group": "semiconductors",
+      "sector": "semiconductors",
+      "factors": ["semiconductors", "technology", "growth", "leveraged"],
+      "currency": "USD"
+    },
+    "SOXX": {
+      "leverage_factor": 1.0,
+      "underlying_group": "semiconductors",
+      "sector": "semiconductors",
+      "factors": ["semiconductors", "technology", "growth"],
+      "currency": "USD"
+    },
+    "TQQQ": {
+      "leverage_factor": 3.0,
+      "underlying_group": "nasdaq100",
+      "sector": "technology",
+      "factors": ["nasdaq100", "technology", "growth", "leveraged"],
+      "currency": "USD"
+    },
+    "TSLA": {
+      "leverage_factor": 1.0,
+      "underlying_group": "tesla",
+      "sector": "consumer_growth",
+      "factors": ["ev", "consumer_growth", "growth"],
+      "currency": "USD"
+    },
+    "TSLL": {
+      "leverage_factor": 2.0,
+      "underlying_group": "tesla",
+      "sector": "consumer_growth",
+      "factors": ["ev", "consumer_growth", "growth", "leveraged"],
+      "currency": "USD"
+    }
+  }
+}

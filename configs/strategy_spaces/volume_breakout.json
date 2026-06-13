@@ -1,0 +1,4 @@
+{
+  "volume_spike_mult": [1.8, 2.0, 2.5, 3.0],
+  "volume_breakout_period": [5, 10, 15, 20]
+}

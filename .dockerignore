@@ -1,0 +1,16 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+state
+signals
+runs
+data/cache
+simulation_logs
+config.json
+toss_portfolio.csv
+bin
+target

@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from jayu.io import atomic_write_json
+from jayu.reports import (
+    equity_curve_svg,
+    parameter_importance,
+    post_signal_performance,
+    strategy_attribution,
+    write_html_report,
+)
+
+
+def test_parameter_importance_ranks_parameter_spread():
+    results = {
+        "SOXL": {
+            "bull": {
+                "params": {"strategy_mode": "ensemble", "rsi": 30},
+                "val_metrics": {"fitness": 1.0},
+            },
+            "bear": {
+                "params": {"strategy_mode": "ensemble", "rsi": 70},
+                "val_metrics": {"fitness": 0.2},
+            },
+        }
+    }
+
+    rows = parameter_importance(results)
+
+    assert rows[0]["parameter"] == "rsi"
+    assert rows[0]["importance"] == pytest.approx(0.8)
+
+
+def test_strategy_attribution_separates_modes():
+    rows = strategy_attribution(
+        [
+            {"strategy_mode": "ensemble", "ret": 0.1},
+            {"strategy_mode": "ensemble", "ret": -0.02},
+            {"strategy_mode": "connors_rsi2", "net_return_pct": 3.0},
+        ]
+    )
+
+    by_mode = {row["strategy_mode"]: row for row in rows}
+    assert by_mode["ensemble"]["trade_count"] == 2
+    assert by_mode["connors_rsi2"]["total_return"] == pytest.approx(0.03)
+
+
+def test_post_signal_performance_uses_future_horizons():
+    report = post_signal_performance(
+        {"SOXL": {"action": "buy", "signal_date": "2026-06-01"}},
+        {
+            "SOXL": [
+                {"date": "2026-06-01", "close": 100},
+                {"date": "2026-06-02", "close": 105},
+                {"date": "2026-06-03", "close": 103},
+                {"date": "2026-06-04", "close": 110},
+                {"date": "2026-06-05", "close": 111},
+                {"date": "2026-06-06", "close": 120},
+            ]
+        },
+        horizons=(1, 5),
+    )
+
+    assert report["signals_evaluated"] == 1
+    assert report["aggregate"]["1d"] == pytest.approx(0.05)
+    assert report["aggregate"]["5d"] == pytest.approx(0.20)
+
+
+def test_write_html_report_includes_equity_svg(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "20260613"
+    atomic_write_json(
+        run_dir / "manifest.json",
+        {"run_id": "20260613", "status": "success", "result": {"signal_count": 2}},
+    )
+    atomic_write_json(
+        run_dir / "equity" / "SOXL_bull.json",
+        [{"date": "2026-06-01", "equity": 100}, {"date": "2026-06-02", "equity": 110}],
+    )
+    atomic_write_json(
+        run_dir / "parameter_importance.json",
+        [{"parameter": "rsi", "importance": 0.5, "best_value": "30", "sample_count": 2}],
+    )
+
+    output = write_html_report(run_dir)
+
+    assert output.exists()
+    content = output.read_text(encoding="utf-8")
+    assert "Jayu Run Report" in content
+    assert "<svg" in equity_curve_svg([{"equity": 100}, {"equity": 110}])
+    assert "SOXL_bull.json" in content

@@ -1,0 +1,58 @@
+{
+  "tickers": ["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"],
+  "initial_capital": 10000000,
+  "sim_runs": 500,
+  "transaction_fee": 0.0015,
+  "slippage": 0.0005,
+  "random_seed": 42,
+  "account_value_krw": null,
+  "cash_balance_krw": null,
+  "notification_message_limit": 900,
+  "notification_retries": 3,
+  "run_retention_days": 30,
+  "run_retention_count": 100,
+  "data_provider": "yahoo",
+  "data_fallback_provider": "massive",
+  "portfolio_mapping_file": "configs/portfolio_mapping.json",
+  "execution": {
+    "path_mode": "worst_case",
+    "max_participation_rate": 0.0005,
+    "broker": "generic",
+    "slippage_model": "atr_participation",
+    "max_slippage": 0.01,
+    "atr_slippage_weight": 0.1,
+    "participation_impact_weight": 0.15
+  },
+  "research": {
+    "train_months": 18,
+    "validation_months": 3,
+    "walk_forward_windows": 3,
+    "purge_days": 5,
+    "embargo_days": 1,
+    "min_oos_windows": 2,
+    "min_oos_pass_rate": 0.67,
+    "ga_min_runs": 100,
+    "ga_early_stop_patience": 150,
+    "fitness_version": "v2_daily_equity"
+  },
+  "universe": {
+    "as_of": null,
+    "source": "manual_current_universe",
+    "includes_delisted": false,
+    "policy": "warn"
+  },
+  "risk": {
+    "profile": "balanced",
+    "max_underlying_exposure": 0.3,
+    "max_sector_exposure": 0.5,
+    "max_leveraged_etf_value": 0.3,
+    "max_adjusted_gross_exposure": 1.75,
+    "max_factor_exposure": 0.6,
+    "min_cash_pct": 0.15,
+    "max_invested_pct": 0.85,
+    "daily_loss_limit": 0.03,
+    "weekly_loss_limit": 0.06,
+    "monthly_mdd_limit": 0.12,
+    "enforcement": "block"
+  }
+}

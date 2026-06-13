@@ -1,0 +1,11 @@
+[Unit]
+Description=Jayu stock automation run
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/jayu-stock-automation
+ExecStart=%h/jayu-stock-automation/scripts/jayu-cron.sh
+Nice=5
+IOSchedulingClass=best-effort

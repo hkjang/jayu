@@ -1,0 +1,13 @@
+{
+  "SOXL": {
+    "signal": "대기",
+    "action": "hold",
+    "eligible": false,
+    "price": 0,
+    "regime": "sideways",
+    "conditions": {},
+    "risk": {
+      "reason": "sample"
+    }
+  }
+}

@@ -1,0 +1,63 @@
+[project]
+name = "jayu-stock-automation"
+version = "0.1.0"
+description = "Reproducible stock strategy research and signal automation"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "curl-cffi>=0.13,<1",
+    "exchange-calendars>=4.10,<5",
+    "numpy>=2.0,<3",
+    "pandas>=2.2,<3",
+    "pyarrow>=18,<24",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+    "requests>=2.32,<3",
+    "typer>=0.15,<1",
+    "yfinance>=0.2.54,<0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "bandit>=1.8,<2",
+    "detect-secrets>=1.5,<2",
+    "mypy>=1.15,<2",
+    "pip-audit>=2.8,<3",
+    "pre-commit>=4,<5",
+    "pytest>=8.3,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.9,<1",
+]
+
+[project.scripts]
+jayu = "jayu.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jayu"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["src/jayu/engine.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "."]
+python_files = ["test_*.py"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_configs = true
+show_error_codes = true
+exclude = ["src/jayu/engine.py", "danta_simulation.py", "test_simulation.py"]
+
+[tool.bandit]
+exclude_dirs = [".venv", "tests"]
+skips = ["B101"]
