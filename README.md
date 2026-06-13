@@ -42,8 +42,14 @@ uv run jayu report signal-performance --price-json tests/fixtures/signal_prices.
 uv run jayu report shadow-performance --price-json tests/fixtures/signal_prices.json
 uv run jayu experiments --limit 20
 uv run jayu experiments compare --left <RUN_ID> --right <RUN_ID> --output comparison.json
+uv run jayu promotion status
 uv run jayu validate-config
 ```
+
+기본 실행 모드는 `shadow`입니다. `live`로 전환하려면 서로 다른 가격 provider를
+2개 이상 설정하고, `price_disagreement_policy=block`을 유지하며,
+`jayu promotion status`의 `eligible` 결과가 `true`여야 합니다. `simulate`는
+`universe.policy=strict`인 point-in-time universe만 허용합니다.
 
 `simulate`는 유전 탐색과 검증을 수행합니다. `signal`은 승인된 기존 전략으로 당일 신호만 계산합니다. 같은 코드, 설정, 데이터와 `--seed`를 사용하면 탐색 난수 흐름을 재현할 수 있습니다.
 

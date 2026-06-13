@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 
+from jayu.failure_codes import FailureCode
 from jayu.monitoring import classify_failure, compute_health_score, prune_runs, update_health
+from jayu.safety import SafetyGateError
 
 
 def test_prune_runs_keeps_newest_count(tmp_path):
@@ -42,6 +44,15 @@ def test_health_tracks_last_success_and_failure(tmp_path):
     assert (
         classify_failure(RuntimeError("DATA_CONTRACT_FAILED: signal_dataframe"))
         == "DATA_CONTRACT_FAILED"
+    )
+    assert (
+        classify_failure(
+            SafetyGateError(
+                FailureCode.SHADOW_PROMOTION_FAILED,
+                ["shadow_days"],
+            )
+        )
+        == "SHADOW_PROMOTION_FAILED"
     )
 
 

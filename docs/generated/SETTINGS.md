@@ -5,7 +5,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | Field | Type | Default | Constraints |
 |---|---|---|---|
 | `tickers` | `array` | `["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"]` | `{}` |
-| `mode` | `string` | `"live"` | `{"enum": ["live", "shadow"]}` |
+| `mode` | `string` | `"shadow"` | `{"enum": ["live", "shadow"]}` |
 | `initial_capital` | `number` | `10000000` | `{"exclusiveMinimum": 0}` |
 | `sim_runs` | `integer` | `500` | `{"maximum": 100000, "minimum": 1}` |
 | `transaction_fee` | `number` | `0.0015` | `{"maximum": 0.02, "minimum": 0}` |
@@ -93,6 +93,13 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `universe.source` | `string` | `"manual_current_universe"` | `{}` |
 | `universe.includes_delisted` | `boolean` | `false` | `{}` |
 | `universe.policy` | `string` | `"warn"` | `{"enum": ["warn", "strict"]}` |
+| `promotion` | `PromotionSettings` | `null` | `{}` |
+| `promotion.enabled` | `boolean` | `true` | `{}` |
+| `promotion.min_shadow_days` | `integer` | `20` | `{"maximum": 365, "minimum": 1}` |
+| `promotion.min_completed_signals` | `integer` | `1` | `{"maximum": 10000, "minimum": 0}` |
+| `promotion.min_mature_completion_ratio` | `number` | `0.9` | `{"maximum": 1, "minimum": 0}` |
+| `promotion.min_health_score` | `integer` | `80` | `{"maximum": 100, "minimum": 0}` |
+| `promotion.maturity_horizon_days` | `integer` | `20` | `{"maximum": 252, "minimum": 1}` |
 | `risk` | `RiskSettings` | `null` | `{}` |
 | `risk.profile` | `string` | `"balanced"` | `{"enum": ["balanced", "conservative", "warning"]}` |
 | `risk.max_underlying_exposure` | `number` | `0.3` | `{"maximum": 1, "minimum": 0}` |
