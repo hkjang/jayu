@@ -101,6 +101,21 @@ def test_cost_bridge_is_exact_when_detail_present():
     assert bridge["cost_drag_pct_of_gross"] == pytest.approx(40.0)
 
 
+def test_cost_bridge_uses_pre_fee_gross_when_raw_return_is_missing():
+    trades = [
+        {"gross_return_pct": 3.0, "fee_cost_pct": 0.3, "net_return_pct": 2.7},
+        {"gross_return_pct": -1.0, "fee_cost_pct": 0.3, "net_return_pct": -1.3},
+    ]
+
+    bridge = cost_bridge(trades)
+
+    assert bridge["has_cost_detail"] is True
+    assert bridge["total_gross_return_pct"] == pytest.approx(2.0)
+    assert bridge["total_fee_cost_pct"] == pytest.approx(0.6)
+    assert bridge["total_net_return_pct"] == pytest.approx(1.4)
+    assert bridge["cost_drag_pct_of_gross"] == pytest.approx(30.0)
+
+
 def test_metrics_surface_breakeven_and_cost_sensitivity():
     metrics = calc_metrics(
         _trades(),

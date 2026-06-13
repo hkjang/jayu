@@ -28,7 +28,7 @@ from typing import Any
 
 import pandas as pd
 
-from .io import atomic_write_json, read_json
+from .io import atomic_write_json, read_json, stable_hash
 
 
 class LockboxReuseError(RuntimeError):
@@ -141,6 +141,108 @@ def double_oos_evaluate(
         "lockbox_retention": retention,
         "degraded": degraded,
     }
+
+
+def final_lockbox_key(
+    *,
+    data_hash: str,
+    ticker: str,
+    regime: str,
+    params: Mapping[str, Any],
+    split: LockboxSplit,
+    fitness_version: str,
+    evaluation_context: Mapping[str, Any] | None = None,
+) -> str:
+    """Stable identity for one strategy evaluated on one immutable lockbox."""
+    return stable_hash(
+        {
+            "data_hash": data_hash,
+            "ticker": ticker,
+            "regime": regime,
+            "params": dict(params),
+            "split": split.to_dict(),
+            "fitness_version": fitness_version,
+            "evaluation_context": dict(evaluation_context or {}),
+        }
+    )
+
+
+def evaluate_final_lockbox(
+    data: pd.DataFrame,
+    *,
+    split: LockboxSplit,
+    development_metrics: Mapping[str, Any],
+    evaluate_fn: Callable[[pd.DataFrame], Mapping[str, Any] | None],
+    ledger: "LockboxLedger",
+    ledger_key: str,
+    metric_key: str = "total_return",
+    minimum_retention: float = 0.5,
+    require_positive_return: bool = True,
+) -> dict[str, Any]:
+    """Open a final lockbox once, persist the result, and reuse only that result.
+
+    Re-running the same code/config/data/strategy never evaluates the sealed
+    rows again. The prior persisted report is returned with ``reused=True``.
+    """
+    assert_lockbox_isolation(split)
+
+    def build_report(
+        lockbox_metrics: Mapping[str, Any] | None,
+        *,
+        reused: bool,
+    ) -> dict[str, Any]:
+        reasons: list[str] = []
+        retention: float | None = None
+        development_value = development_metrics.get(metric_key)
+        lockbox_value = lockbox_metrics.get(metric_key) if lockbox_metrics else None
+        if not isinstance(lockbox_metrics, Mapping):
+            reasons.append("missing_final_lockbox_metrics")
+        elif not isinstance(development_value, (int, float)) or not isinstance(
+            lockbox_value, (int, float)
+        ):
+            reasons.append("missing_final_lockbox_comparison_metric")
+        else:
+            development_number = float(development_value)
+            lockbox_number = float(lockbox_value)
+            retention = (
+                round(lockbox_number / development_number, 4) if development_number > 0 else None
+            )
+            if require_positive_return and float(lockbox_metrics.get("total_return", 0.0)) <= 0:
+                reasons.append("non_positive_final_lockbox_return")
+            if retention is None or retention < minimum_retention:
+                reasons.append("final_lockbox_retention_below_threshold")
+        return {
+            "approved": not reasons,
+            "reasons": reasons,
+            "split": split.to_dict(),
+            "metric_key": metric_key,
+            "minimum_retention": minimum_retention,
+            "development_metric": development_value,
+            "lockbox_metric": lockbox_value,
+            "lockbox_retention": retention,
+            "lockbox_metrics": dict(lockbox_metrics)
+            if isinstance(lockbox_metrics, Mapping)
+            else None,
+            "ledger_key": ledger_key,
+            "reused": reused,
+        }
+
+    existing = ledger.opens(ledger_key)
+    if existing is not None:
+        saved_report = existing.get("metrics")
+        saved_metrics = (
+            saved_report.get("lockbox_metrics") if isinstance(saved_report, Mapping) else None
+        )
+        return build_report(
+            saved_metrics if isinstance(saved_metrics, Mapping) else None,
+            reused=True,
+        )
+
+    lockbox = data.iloc[split.lockbox_start : split.lockbox_end]
+    lockbox_metrics = evaluate_fn(lockbox)
+    report = build_report(lockbox_metrics, reused=False)
+    ledger.record_open(ledger_key, metrics=report)
+    return report
 
 
 class LockboxLedger:

@@ -8,7 +8,10 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .io import atomic_write_json, read_json
+from .costs import breakeven_transaction_cost, cost_sensitivity
+from .io import atomic_write_json, read_json, stable_hash
+from .performance import cost_bridge
+from .stat_tests import probabilistic_sharpe_ratio
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -138,6 +141,34 @@ def strategy_attribution(trades: Iterable[Mapping[str, Any]]) -> list[dict[str, 
     return sorted(rows, key=lambda row: row["total_return"], reverse=True)
 
 
+def trade_cost_stats(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Net + overfitting-aware summary for one strategy's trade log.
+
+    Combines the gross→net cost bridge, breakeven round-trip cost, cost-survival
+    sweep, and the Probabilistic Sharpe Ratio of net per-trade returns (vs a zero
+    benchmark). PSR is only computed when at least three trades carry an explicit
+    ``net_return_pct``.
+    """
+    trade_list: list[dict[str, Any]] = [dict(trade) for trade in trades]
+    bridge = cost_bridge(trade_list)
+    breakeven = breakeven_transaction_cost(trade_list)
+    sensitivity = cost_sensitivity(trade_list)
+    net_returns = [
+        float(trade["net_return_pct"]) / 100.0
+        for trade in trade_list
+        if isinstance(trade.get("net_return_pct"), (int, float))
+    ]
+    psr = probabilistic_sharpe_ratio(net_returns, 0.0) if len(net_returns) >= 3 else None
+    return {
+        "trades": bridge["trades"],
+        "cost_drag_pct_of_gross": bridge["cost_drag_pct_of_gross"],
+        "avg_net_return_pct": bridge["avg_net_return_pct"],
+        "breakeven_round_trip_bps": breakeven["breakeven_round_trip_bps"],
+        "max_survivable_bps": sensitivity.get("max_survivable_bps"),
+        "psr_vs_zero": round(psr, 4) if psr is not None else None,
+    }
+
+
 def post_signal_performance(
     signals: Mapping[str, Mapping[str, Any]],
     price_history: Mapping[str, Sequence[Mapping[str, Any]]],
@@ -150,11 +181,26 @@ def post_signal_performance(
         signal_text = str(signal.get("signal", ""))
         if action != "buy" and "\ub9e4\uc218" not in signal_text:
             continue
+        signal_date = signal.get("signal_date") or signal.get("date")
+        signal_id = stable_hash(
+            {
+                "ticker": ticker,
+                "signal_date": signal_date,
+                "signal": signal_text,
+                "action": action,
+            }
+        )
         prices = list(price_history.get(ticker, []))
         if len(prices) < 2:
-            rows.append({"ticker": ticker, "error": "not_enough_prices"})
+            rows.append(
+                {
+                    "signal_id": signal_id,
+                    "ticker": ticker,
+                    "signal_date": signal_date,
+                    "error": "not_enough_prices",
+                }
+            )
             continue
-        signal_date = signal.get("signal_date") or signal.get("date")
         start_index = 0
         if signal_date:
             start_index = next(
@@ -174,7 +220,14 @@ def post_signal_performance(
             else:
                 end_price = float(prices[end_index].get("close", 0.0))
                 horizon_returns[f"{horizon}d"] = end_price / start_price - 1
-        rows.append({"ticker": ticker, "signal_date": signal_date, "returns": horizon_returns})
+        rows.append(
+            {
+                "signal_id": signal_id,
+                "ticker": ticker,
+                "signal_date": signal_date,
+                "returns": horizon_returns,
+            }
+        )
     aggregate: dict[str, float] = {}
     for horizon in horizons:
         key = f"{horizon}d"
@@ -195,12 +248,77 @@ def post_signal_performance(
     }
 
 
+def _aggregate_signal_rows(
+    rows: Sequence[Mapping[str, Any]],
+    horizons: Sequence[int] = (1, 5, 20),
+) -> dict[str, float]:
+    aggregate: dict[str, float] = {}
+    for horizon in horizons:
+        key = f"{horizon}d"
+        values = [
+            float(row["returns"][key])
+            for row in rows
+            if isinstance(row.get("returns"), Mapping) and row["returns"].get(key) is not None
+        ]
+        if values:
+            aggregate[key] = sum(values) / len(values)
+    return aggregate
+
+
+def _merge_signal_history(
+    existing: Sequence[Mapping[str, Any]],
+    latest: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    merged = {
+        str(row.get("signal_id")): dict(row)
+        for row in existing
+        if isinstance(row.get("signal_id"), str)
+    }
+    for row in latest:
+        signal_id = row.get("signal_id")
+        if not isinstance(signal_id, str):
+            continue
+        previous = merged.get(signal_id, {})
+        raw_previous_returns = previous.get("returns")
+        previous_returns: Mapping[str, Any] = (
+            raw_previous_returns if isinstance(raw_previous_returns, Mapping) else {}
+        )
+        raw_latest_returns = row.get("returns")
+        latest_returns: Mapping[str, Any] = (
+            raw_latest_returns if isinstance(raw_latest_returns, Mapping) else {}
+        )
+        combined_returns = {
+            key: latest_returns.get(key)
+            if latest_returns.get(key) is not None
+            else previous_returns.get(key)
+            for key in set(previous_returns) | set(latest_returns)
+        }
+        merged_row = {**previous, **dict(row), "returns": combined_returns}
+        if latest_returns:
+            merged_row.pop("error", None)
+        merged[signal_id] = merged_row
+    return sorted(
+        merged.values(),
+        key=lambda row: (str(row.get("signal_date") or ""), str(row.get("ticker") or "")),
+    )
+
+
 def write_signal_performance_report(
     signals: Mapping[str, Mapping[str, Any]],
     price_history: Mapping[str, Sequence[Mapping[str, Any]]],
     output_path: Path,
 ) -> dict[str, Any]:
     report = post_signal_performance(signals, price_history)
+    existing = read_json(output_path, default={})
+    existing_history = (
+        existing.get("history_rows", [])
+        if isinstance(existing, Mapping) and isinstance(existing.get("history_rows"), list)
+        else []
+    )
+    history = _merge_signal_history(existing_history, report["rows"])
+    report["history_rows"] = history
+    report["history_signal_count"] = len(history)
+    report["cumulative_aggregate"] = _aggregate_signal_rows(history)
     atomic_write_json(output_path, report)
     return report
 
@@ -215,6 +333,20 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
             equity_svgs.append((path.name, equity_curve_svg(records)))
     importance_data = read_json(run_dir / "parameter_importance.json", default=[])
     importance = importance_data if isinstance(importance_data, list) else []
+    validation_data = read_json(run_dir / "validation_report.json", default={})
+    validation_rows: list[tuple[str, str, Mapping[str, Any]]] = []
+    if isinstance(validation_data, Mapping):
+        for ticker, regimes in validation_data.items():
+            if not isinstance(regimes, Mapping):
+                continue
+            for regime, validation in regimes.items():
+                if isinstance(validation, Mapping):
+                    validation_rows.append((str(ticker), str(regime), validation))
+    cost_rows: list[tuple[str, dict[str, Any]]] = []
+    for path in sorted((run_dir / "trades").glob("*.json")):
+        trades = read_json(path, default=[])
+        if isinstance(trades, list) and trades:
+            cost_rows.append((path.stem, trade_cost_stats(trades)))
     rows = [
         ("run_id", manifest_data.get("run_id")),
         ("status", manifest_data.get("status")),
@@ -242,6 +374,81 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
     graph_blocks = "\n".join(
         f"<section><h3>{html.escape(name)}</h3>{svg}</section>" for name, svg in equity_svgs
     )
+
+    def _cell(value: Any) -> str:
+        return html.escape("—" if value is None else str(value))
+
+    def _validation_value(validation: Mapping[str, Any], key: str) -> Any:
+        evidence = validation.get("statistical_evidence")
+        return evidence.get(key) if isinstance(evidence, Mapping) else None
+
+    def _validation_reasons(validation: Mapping[str, Any]) -> str:
+        reasons = validation.get("reasons")
+        if not isinstance(reasons, Sequence) or isinstance(reasons, (str, bytes)):
+            return ""
+        return ", ".join(str(reason) for reason in reasons)
+
+    def _lockbox_value(validation: Mapping[str, Any], key: str) -> Any:
+        lockbox = validation.get("final_lockbox")
+        return lockbox.get(key) if isinstance(lockbox, Mapping) else None
+
+    def _selection_value(validation: Mapping[str, Any], key: str) -> Any:
+        selection = validation.get("selection_bias")
+        evidence = selection.get("evidence") if isinstance(selection, Mapping) else None
+        return evidence.get(key) if isinstance(evidence, Mapping) else None
+
+    cost_table_rows = "\n".join(
+        "<tr>"
+        f"<td>{html.escape(name)}</td>"
+        f"<td>{int(stats['trades'])}</td>"
+        f"<td>{_cell(stats['avg_net_return_pct'])}</td>"
+        f"<td>{_cell(stats['cost_drag_pct_of_gross'])}</td>"
+        f"<td>{_cell(stats['breakeven_round_trip_bps'])}</td>"
+        f"<td>{_cell(stats['max_survivable_bps'])}</td>"
+        f"<td>{_cell(stats['psr_vs_zero'])}</td>"
+        "</tr>"
+        for name, stats in cost_rows
+    )
+    cost_section = (
+        f"""<h2>Net &amp; Overfitting</h2>
+  <p>Per-strategy net (post-cost) summary. Breakeven and max-survivable are
+  round-trip costs in bps; PSR is P(true Sharpe &gt; 0) on net trade returns.</p>
+  <table>
+    <tr><th>Strategy</th><th>Trades</th><th>Avg net %</th><th>Cost drag % of gross</th>
+        <th>Breakeven bps</th><th>Max survivable bps</th><th>PSR vs 0</th></tr>
+    {cost_table_rows}
+  </table>"""
+        if cost_rows
+        else ""
+    )
+    validation_table_rows = "\n".join(
+        "<tr>"
+        f"<td>{html.escape(ticker)}</td>"
+        f"<td>{html.escape(regime)}</td>"
+        f"<td>{'approved' if validation.get('approved') else 'rejected'}</td>"
+        f"<td>{_cell(_validation_value(validation, 'psr_vs_zero'))}</td>"
+        f"<td>{_cell(_selection_value(validation, 'dsr'))}</td>"
+        f"<td>{_cell(_selection_value(validation, 'pbo'))}</td>"
+        f"<td>{_cell(_selection_value(validation, 'candidate_count'))}</td>"
+        f"<td>{_cell(_lockbox_value(validation, 'lockbox_retention'))}</td>"
+        f"<td>{_cell(_lockbox_value(validation, 'reused'))}</td>"
+        f"<td>{_cell(_validation_reasons(validation))}</td>"
+        "</tr>"
+        for ticker, regime, validation in validation_rows
+    )
+    validation_section = (
+        f"""<h2>OOS Validation</h2>
+  <p>Approval includes purged walk-forward folds and the probability that
+  out-of-sample Sharpe exceeds zero.</p>
+  <table>
+    <tr><th>Ticker</th><th>Regime</th><th>Status</th><th>OOS PSR vs 0</th>
+        <th>DSR</th><th>PBO</th><th>Candidates</th><th>Lockbox retention</th>
+        <th>Lockbox reused</th><th>Rejection reasons</th></tr>
+    {validation_table_rows}
+  </table>"""
+        if validation_rows
+        else ""
+    )
     content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -261,6 +468,8 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
   <table>{html_rows}</table>
   <h2>Equity Curves</h2>
   {graph_blocks or "<p>No equity curve artifacts found.</p>"}
+  {validation_section}
+  {cost_section}
   <h2>Parameter Importance</h2>
   <table>
     <tr><th>Parameter</th><th>Importance</th><th>Best Value</th><th>Samples</th></tr>

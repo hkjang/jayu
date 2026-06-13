@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from jayu.settings import load_settings
+from jayu.settings import ResearchSettings, load_settings
 
 
 def test_environment_overrides_legacy_json(tmp_path, monkeypatch):
@@ -45,3 +45,15 @@ def test_inconsistent_cash_limits_are_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="max_invested_pct"):
         load_settings(config)
+
+
+def test_psr_observation_requirement_must_fit_walk_forward_windows():
+    with pytest.raises(ValueError, match="min_oos_psr_observations"):
+        ResearchSettings(walk_forward_windows=2, min_oos_psr_observations=3)
+
+
+def test_selection_pbo_blocks_must_be_even_and_fit_windows():
+    with pytest.raises(ValueError, match="must be even"):
+        ResearchSettings(walk_forward_windows=4, selection_pbo_blocks=3)
+    with pytest.raises(ValueError, match="cannot exceed"):
+        ResearchSettings(walk_forward_windows=3, selection_pbo_blocks=4)

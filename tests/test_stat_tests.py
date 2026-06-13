@@ -6,6 +6,7 @@ import pytest
 from jayu.stat_tests import (
     _norm_cdf,
     _norm_ppf,
+    candidate_selection_bias,
     deflated_sharpe_ratio,
     expected_max_sharpe,
     observed_sharpe,
@@ -43,6 +44,12 @@ def test_psr_half_at_benchmark_and_monotonic():
 
 def test_psr_handles_tiny_sample():
     assert probabilistic_sharpe_ratio([0.01, 0.02], 0.0) == 0.0
+
+
+def test_psr_handles_constant_return_series():
+    assert probabilistic_sharpe_ratio([0.01, 0.01, 0.01], 0.0) == 1.0
+    assert probabilistic_sharpe_ratio([-0.01, -0.01, -0.01], 0.0) == 0.0
+    assert probabilistic_sharpe_ratio([0.0, 0.0, 0.0], 0.0) == 0.5
 
 
 def test_expected_max_sharpe_grows_with_trials():
@@ -91,3 +98,40 @@ def test_pbo_validates_inputs():
         probability_of_backtest_overfitting(np.zeros((100, 1)))  # need >= 2 strategies
     with pytest.raises(ValueError):
         probability_of_backtest_overfitting(np.zeros((100, 3)), blocks=7)  # odd blocks
+
+
+def test_candidate_selection_bias_combines_dsr_and_pbo():
+    candidates = [
+        [0.03, 0.03, 0.03],
+        [0.01, 0.00, -0.01],
+        [-0.01, 0.01, 0.00],
+        [0.00, -0.01, 0.01],
+        [-0.03, -0.02, -0.01],
+    ]
+
+    evidence = candidate_selection_bias(
+        candidates,
+        candidates[0],
+        trials=500,
+        minimum_candidates=5,
+        pbo_blocks=2,
+    )
+
+    assert evidence["sufficient_candidates"] is True
+    assert evidence["candidate_count"] == 5
+    assert evidence["evaluated_trials"] == 500
+    assert evidence["dsr"] > 0.5
+    assert evidence["pbo"] == 0.0
+
+
+def test_candidate_selection_bias_marks_small_candidate_set_insufficient():
+    evidence = candidate_selection_bias(
+        [[0.03, 0.02, 0.01], [0.01, 0.00, -0.01]],
+        [0.03, 0.02, 0.01],
+        trials=10,
+        minimum_candidates=5,
+        pbo_blocks=2,
+    )
+
+    assert evidence["sufficient_candidates"] is False
+    assert evidence["pbo"] is None

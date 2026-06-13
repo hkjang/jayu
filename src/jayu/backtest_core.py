@@ -8,9 +8,11 @@ from .execution import (
     ExecutionModel,
     FixedRateFeeModel,
 )
+from .markets import benchmark_for_ticker
 from .optimizer import fill_missing_params
 from .performance import calc_metrics
 from .settings import ResearchSettings, Settings
+from .stat_tests import candidate_selection_bias, probabilistic_sharpe_ratio
 from .strategy_space import infer_strategy_mode
 from .validation import assert_purged_splits, purged_walk_forward_splits
 
@@ -113,7 +115,7 @@ def backtest(
         market_ok = True
         if market_trend_dict:
             date_key = df.index[i]
-            idx_name = "^SOX" if p.get("ticker") == "SOXL" else "^IXIC"
+            idx_name = benchmark_for_ticker(str(p.get("ticker", "")))
             if idx_name in market_trend_dict:
                 market_ok = market_trend_dict[idx_name].get(date_key, True)
 
@@ -415,6 +417,78 @@ def backtest(
 
 # ── 성과 지표 v3 ─────────────────────────────────────────────────
 # ── 멀티 윈도우 Walk-Forward 검증 ────────────────────────────────
+def oos_statistical_evidence(
+    fold_metrics: list[dict],
+    *,
+    minimum_observations: int | None = None,
+) -> dict:
+    required = minimum_observations or _ACTIVE_RESEARCH.min_oos_psr_observations
+    returns = [
+        float(metrics["total_return"]) / 100.0
+        for metrics in fold_metrics
+        if isinstance(metrics.get("total_return"), (int, float))
+    ]
+    psr = probabilistic_sharpe_ratio(returns, 0.0) if len(returns) >= required else None
+    return {
+        "return_observations": len(returns),
+        "minimum_observations": required,
+        "psr_vs_zero": round(psr, 6) if psr is not None else None,
+        "mean_oos_return_pct": round(float(np.mean(returns)) * 100.0, 4) if returns else None,
+    }
+
+
+def oos_fold_returns(validation_metrics: dict) -> list[float]:
+    returns: list[float] = []
+    for fold in validation_metrics.get("folds", []):
+        if not isinstance(fold, dict):
+            continue
+        metrics = fold.get("validation")
+        value = metrics.get("total_return") if isinstance(metrics, dict) else None
+        if isinstance(value, (int, float)) and np.isfinite(value):
+            returns.append(float(value) / 100.0)
+    return returns
+
+
+def assess_candidate_selection(
+    candidate_fold_returns: list[list[float]],
+    selected_fold_returns: list[float],
+    *,
+    evaluated_trials: int,
+) -> dict:
+    research = _ACTIVE_RESEARCH
+    if not research.selection_bias_enabled:
+        return {
+            "approved": True,
+            "reasons": [],
+            "evidence": {"enabled": False},
+        }
+    evidence = candidate_selection_bias(
+        candidate_fold_returns,
+        selected_fold_returns,
+        trials=evaluated_trials,
+        minimum_candidates=research.selection_min_candidates,
+        pbo_blocks=research.selection_pbo_blocks,
+    )
+    reasons: list[str] = []
+    if not evidence["sufficient_candidates"]:
+        reasons.append("insufficient_candidates_for_selection_bias_test")
+    if evidence["dsr"] < research.selection_min_dsr:
+        reasons.append("deflated_sharpe_ratio_below_threshold")
+    if evidence["pbo"] is None:
+        reasons.append("missing_probability_of_backtest_overfitting")
+    elif evidence["pbo"] > research.selection_max_pbo:
+        reasons.append("probability_of_backtest_overfitting_above_threshold")
+    return {
+        "approved": not reasons,
+        "reasons": reasons,
+        "thresholds": {
+            "min_dsr": research.selection_min_dsr,
+            "max_pbo": research.selection_max_pbo,
+        },
+        "evidence": evidence,
+    }
+
+
 def multi_window_validate(df, p, market_trend_dict=None, target_regime=None):
     """Evaluate non-overlapping OOS folds with purge and embargo gaps."""
     research = _ACTIVE_RESEARCH
@@ -427,6 +501,8 @@ def multi_window_validate(df, p, market_trend_dict=None, target_regime=None):
         embargo_rows=research.embargo_days,
     )
     assert_purged_splits(splits)
+    if len(splits) < research.min_oos_psr_observations:
+        return None, None
     windows = []
     for split in splits:
         df_train = df.iloc[split.train_start : split.train_end]
@@ -468,6 +544,8 @@ def multi_window_validate(df, p, market_trend_dict=None, target_regime=None):
         windows.append((split, tr_m, vl_m))
 
     completed = [(split, tr, vl) for split, tr, vl in windows if vl]
+    if len(completed) != len(splits):
+        return None, None
     if len(completed) < research.min_oos_windows:
         return None, None
     positive = [item for item in completed if item[2]["total_return"] > 0]
@@ -477,11 +555,19 @@ def multi_window_validate(df, p, market_trend_dict=None, target_regime=None):
 
     best_tr = max(completed, key=lambda item: item[1]["fitness"])[1]
     metrics = [item[2] for item in completed]
+    statistical_evidence = oos_statistical_evidence(metrics)
+    psr = statistical_evidence["psr_vs_zero"]
+    if psr is None or psr < research.min_oos_psr:
+        return None, None
     average_sharpe = float(np.mean([item["daily_sharpe"] for item in metrics]))
     avg_val = {
         "fitness_version": research.fitness_version,
         "fitness": round(float(np.mean([item["fitness"] for item in metrics])), 3),
         "total_return": round(float(np.mean([item["total_return"] for item in metrics])), 1),
+        "annualized_return": round(
+            float(np.mean([item["annualized_return"] for item in metrics])),
+            2,
+        ),
         "win_rate": round(float(np.mean([item["win_rate"] for item in metrics])), 1),
         "daily_sharpe": round(average_sharpe, 2),
         "sharpe": round(average_sharpe, 2),
@@ -489,6 +575,7 @@ def multi_window_validate(df, p, market_trend_dict=None, target_regime=None):
         "windows": len(completed),
         "positive_windows": len(positive),
         "pass_rate": round(pass_rate, 3),
+        "statistical_evidence": statistical_evidence,
         "purge_days": research.purge_days,
         "embargo_days": research.embargo_days,
         "folds": [
@@ -504,6 +591,7 @@ def multi_window_validate(df, p, market_trend_dict=None, target_regime=None):
 
 def assess_validation(train_metrics, validation_metrics):
     reasons = []
+    statistical_evidence = None
     if not validation_metrics:
         reasons.append("missing_out_of_sample_metrics")
     else:
@@ -515,6 +603,24 @@ def assess_validation(train_metrics, validation_metrics):
             reasons.append("out_of_sample_pass_rate_below_threshold")
         if not validation_metrics.get("folds"):
             reasons.append("missing_purged_fold_metadata")
+        fold_metrics = [
+            fold["validation"]
+            for fold in validation_metrics.get("folds", [])
+            if isinstance(fold, dict) and isinstance(fold.get("validation"), dict)
+        ]
+        statistical_evidence = validation_metrics.get("statistical_evidence")
+        if not isinstance(statistical_evidence, dict):
+            statistical_evidence = oos_statistical_evidence(fold_metrics)
+        if (
+            statistical_evidence.get("return_observations", 0)
+            < _ACTIVE_RESEARCH.min_oos_psr_observations
+        ):
+            reasons.append("insufficient_out_of_sample_observations_for_psr")
+        elif (
+            statistical_evidence.get("psr_vs_zero") is None
+            or statistical_evidence["psr_vs_zero"] < _ACTIVE_RESEARCH.min_oos_psr
+        ):
+            reasons.append("out_of_sample_psr_below_threshold")
         train_return = abs(float(train_metrics.get("total_return", 0)))
         valid_return = abs(float(validation_metrics.get("total_return", 0)))
         if train_return / max(valid_return, 0.1) > 5:
@@ -522,6 +628,7 @@ def assess_validation(train_metrics, validation_metrics):
     return {
         "approved": not reasons,
         "reasons": reasons,
+        "statistical_evidence": statistical_evidence,
         "train_metrics": train_metrics,
         "validation_metrics": validation_metrics,
     }

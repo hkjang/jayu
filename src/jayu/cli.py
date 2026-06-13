@@ -38,6 +38,7 @@ from .reports import (
 from .risk import apply_portfolio_risk
 from .risk_ledger import record_portfolio_snapshot
 from .settings import Settings, load_settings
+from .strategy_space import load_strategy_spaces, validate_strategy_spaces
 from .survivorship import audit_survivorship
 
 
@@ -268,10 +269,14 @@ def validate_config(
     config: Annotated[Path | None, typer.Option("--config")] = None,
 ) -> None:
     settings, paths = _load(config)
+    strategy_space_audit = validate_strategy_spaces(load_strategy_spaces())
     typer.echo(json.dumps(settings.public_dict(), ensure_ascii=False, indent=2))
     typer.echo(
         json.dumps(
-            {"survivorship_audit": audit_survivorship(settings).to_dict()},
+            {
+                "strategy_space_audit": strategy_space_audit,
+                "survivorship_audit": audit_survivorship(settings).to_dict(),
+            },
             ensure_ascii=False,
             indent=2,
         )

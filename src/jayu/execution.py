@@ -8,6 +8,8 @@ import pandas as pd
 
 ExitPathMode = Literal["worst_case", "best_case", "open_high_low_close", "intraday"]
 
+OrderSide = Literal["buy", "sell"]
+
 
 @dataclass(frozen=True)
 class ExitDecision:
@@ -167,3 +169,101 @@ class ExecutionModel:
             if decision:
                 return decision
         return None
+
+
+# ── Quote-aware fill realism (roadmap #43–#46) ───────────────────────
+# Daily OHLCV backtests implicitly assume you trade at the close/open with a
+# flat slippage rate. In reality a marketable order crosses the spread (a buy
+# pays the ask, a sell hits the bid), and a resting limit order only fills if
+# price actually reaches it — and even then not always, depending on queue
+# position. These models make those costs explicit without needing tick data.
+
+
+@dataclass(frozen=True)
+class QuotedSpreadModel:
+    """Estimate the half-spread (as a fraction of price) for a marketable fill.
+
+    Prefers an observed ``relative_spread`` when available; otherwise derives one
+    from intraday volatility (ATR). The result is floored so a fill never assumes
+    a zero spread.
+    """
+
+    floor_rate: float = 0.0001
+    atr_weight: float = 0.05
+    maximum_rate: float = 0.02
+
+    def half_spread_rate(
+        self,
+        *,
+        atr: float = 0.0,
+        close: float = 0.0,
+        relative_spread: float | None = None,
+    ) -> float:
+        if relative_spread is not None:
+            estimate = relative_spread / 2.0
+        else:
+            estimate = (atr / close) * self.atr_weight if close > 0 else 0.0
+        return min(max(self.floor_rate, estimate), self.maximum_rate)
+
+
+def quote_aware_fill_price(
+    side: OrderSide,
+    reference_price: float,
+    half_spread_rate: float,
+) -> float:
+    """Marketable fill price: a buy pays the ask, a sell hits the bid.
+
+    ``reference_price`` is the midpoint; the order crosses half the spread.
+    """
+    if side == "buy":
+        return reference_price * (1.0 + half_spread_rate)
+    return reference_price * (1.0 - half_spread_rate)
+
+
+@dataclass(frozen=True)
+class LimitFillModel:
+    """Whether — and with what probability — a resting limit order fills in a bar.
+
+    A buy limit needs price to trade down to it (``low <= limit``); a sell limit
+    needs price up to it (``high >= limit``). When price merely tags the level the
+    fill is uncertain (you may be at the back of the queue); when price gaps
+    through or penetrates deeply the fill is near-certain. ``fill_probability``
+    turns the bar's penetration depth into that likelihood.
+    """
+
+    def fills(
+        self,
+        *,
+        side: OrderSide,
+        limit_price: float,
+        bar_high: float,
+        bar_low: float,
+    ) -> bool:
+        if side == "buy":
+            return bar_low <= limit_price
+        return bar_high >= limit_price
+
+    def fill_probability(
+        self,
+        *,
+        side: OrderSide,
+        limit_price: float,
+        bar_open: float,
+        bar_high: float,
+        bar_low: float,
+    ) -> float:
+        if not self.fills(side=side, limit_price=limit_price, bar_high=bar_high, bar_low=bar_low):
+            return 0.0
+        # A gap straight through the limit at the open fills with certainty.
+        if side == "buy" and bar_open <= limit_price:
+            return 1.0
+        if side == "sell" and bar_open >= limit_price:
+            return 1.0
+        bar_range = bar_high - bar_low
+        if bar_range <= 0:
+            return 1.0
+        if side == "buy":
+            penetration = (limit_price - bar_low) / bar_range
+        else:
+            penetration = (bar_high - limit_price) / bar_range
+        return float(min(max(penetration, 0.0), 1.0))

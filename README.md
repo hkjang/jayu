@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/hkjang/jayu/actions/workflows/ci.yml/badge.svg)](https://github.com/hkjang/jayu/actions/workflows/ci.yml)
 
-미국 주식 전략 탐색, 당일 신호 생성, 포트폴리오 위험 심사, 카카오 알림을 분리된 CLI로 실행하는 Python 3.12 프로젝트입니다. 생성된 매수 신호는 보유 계좌의 레버리지, 기초자산, 섹터, 팩터, 현금 및 손실 한도를 통과해야 `eligible=true`가 됩니다.
+미국·한국 주식 전략 탐색, 당일 신호 생성, 포트폴리오 위험 심사, 카카오 알림을 분리된 CLI로 실행하는 Python 3.12 프로젝트입니다. 한국 종목은 Yahoo 형식의 `.KS`·`.KQ` 티커를 사용하며 KRX 거래일과 KOSPI·KOSDAQ 벤치마크로 검증합니다. 생성된 매수 신호는 보유 계좌의 레버리지, 기초자산, 섹터, 팩터, 현금 및 손실 한도를 통과해야 `eligible=true`가 됩니다.
 
 ## 설치
 
@@ -98,6 +98,9 @@ docker run --rm -v ${PWD}\state:/app/state -v ${PWD}\signals:/app/signals -v ${P
 
 - 학습과 검증 구간 사이에 purge 기간을 두고, 검증 구간끼리는 embargo를 포함해 완전히 분리합니다.
 - 모든 OOS fold를 평가하며 최소 통과 개수와 양수 수익 fold 비율을 함께 검사합니다.
+- OOS fold 수익률의 Probabilistic Sharpe Ratio(PSR)를 계산하고 `research.min_oos_psr` 미만인 후보는 승인하지 않습니다.
+- 같은 국면에서 평가한 후보들의 OOS fold 벡터로 Deflated Sharpe Ratio(DSR)와 Probability of Backtest Overfitting(PBO)를 계산해 다중 탐색·선택 편향을 심사합니다.
+- 최신 데이터의 final lockbox는 GA와 walk-forward 탐색에서 제외하고, OOS 승인 후보를 마지막에 한 번만 평가합니다. 같은 데이터·전략의 재실행은 `state/final_lockbox_ledger.json`에 저장된 결과만 재사용합니다.
 - 테스트는 미래 OHLCV를 변형한 뒤 과거 지표가 바뀌지 않는지 자동 확인합니다.
 - 현재 종목 목록만 사용하면 `survivorship.json`에 경고를 기록합니다. `universe.policy=strict`에서는 기준일과 상장폐지 종목 포함 여부가 없으면 실행을 거부합니다.
 - GA seed는 종목·국면별로 파생되며 최소 실행 횟수 이후 개선이 없으면 조기 종료합니다.
@@ -120,9 +123,9 @@ docker run --rm -v ${PWD}\state:/app/state -v ${PWD}\signals:/app/signals -v ${P
 
 각 실행 디렉터리에는 `report.html`, `parameter_importance.json`, `trades/`, `equity/`가 생성됩니다.
 
-- `report.html`: 실행 요약, equity curve SVG, 파라미터 중요도
+- `report.html`: 실행 요약, OOS 승인·PSR·DSR·PBO, final lockbox 유지율, 순비용 성과, equity curve SVG, 파라미터 중요도
 - `parameter_importance.json`: GA 결과에서 파라미터별 fitness 분산 요약
-- `report signal-performance`: 실전 신호와 사후 가격 데이터를 비교해 1일, 5일, 20일 성과를 계산
+- `report signal-performance`: 실전 신호와 사후 가격 데이터를 비교해 1일, 5일, 20일 성과를 계산하고, 신호 ID별 이력을 중복 없이 누적·갱신
 
 Rust 이전 작업은 `rust/jayu-core`에서 시작하며, `StrategyParams`, `Trade`, `Metrics`, `FillModel`, `SlippageModel`, `RiskModel` 타입을 먼저 고정했습니다. Python 기준 골든 fixture는 `tests/fixtures/rust_golden.json`입니다.
 

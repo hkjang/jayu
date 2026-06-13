@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,42 @@ CONDITIONAL_PARAMETERS = {
     "use_volatility_sizing": {"max_risk_per_trade_pct": True},
 }
 
+REQUIRED_SPACE_PARAMETERS = {
+    "common": {
+        "hold_days",
+        "vol_mult",
+        "gap_min",
+        "use_atr_stop",
+        "atr_mult_stop",
+        "stop_pct",
+        "use_atr_target",
+        "atr_mult_target",
+        "target_pct",
+        "trail_stop",
+        "trail_pct",
+        "use_breakeven_stop",
+        "breakeven_trigger_pct",
+        "min_dollar_volume",
+        "use_volatility_sizing",
+        "max_risk_per_trade_pct",
+        "kelly_fraction",
+    },
+    "ensemble": {
+        "rsi_lo",
+        "rsi_hi",
+        "ema_span",
+        "require_macd",
+        "require_bb",
+        "regime_filter",
+        "ensemble_min",
+        "use_adx_filter",
+        "adx_threshold",
+    },
+    "connors_rsi2": {"connors_rsi2_limit"},
+    "williams_breakout": {"williams_k_multiplier"},
+    "volume_breakout": {"volume_spike_mult", "volume_breakout_period"},
+}
+
 
 def strategy_space_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "configs" / "strategy_spaces"
@@ -46,6 +83,87 @@ def load_strategy_spaces(base_dir: Path | None = None) -> dict[str, dict[str, li
             raise ValueError(f"{path} must contain a JSON object")
         spaces[name] = value
     return spaces
+
+
+def validate_strategy_spaces(
+    spaces: dict[str, dict[str, list[Any]]],
+) -> dict[str, int | bool]:
+    expected_sections = {"common", *STRATEGY_MODES}
+    actual_sections = set(spaces)
+    errors = [
+        *(
+            f"missing strategy space: {name}"
+            for name in sorted(expected_sections - actual_sections)
+        ),
+        *(
+            f"unknown strategy space: {name}"
+            for name in sorted(actual_sections - expected_sections)
+        ),
+    ]
+    owners: dict[str, str] = {}
+    parameter_count = 0
+    choice_count = 0
+
+    for section in sorted(expected_sections & actual_sections):
+        space = spaces[section]
+        if not isinstance(space, dict):
+            errors.append(f"{section} strategy space must be an object")
+            continue
+        missing = REQUIRED_SPACE_PARAMETERS[section] - set(space)
+        errors.extend(
+            f"{section} strategy space is missing parameter: {name}" for name in sorted(missing)
+        )
+        unexpected = set(space) - REQUIRED_SPACE_PARAMETERS[section]
+        errors.extend(
+            f"{section} strategy space has unknown parameter: {name}" for name in sorted(unexpected)
+        )
+        for parameter, choices in space.items():
+            parameter_count += 1
+            if not isinstance(parameter, str) or not parameter:
+                errors.append(f"{section} strategy space has an invalid parameter name")
+                continue
+            if parameter == "strategy_mode":
+                errors.append("strategy_mode is generated from the configured modes")
+            previous_owner = owners.get(parameter)
+            if previous_owner is not None:
+                errors.append(f"{parameter} is duplicated in {previous_owner} and {section}")
+            owners[parameter] = section
+            if not isinstance(choices, list) or not choices:
+                errors.append(f"{section}.{parameter} must be a non-empty list")
+                continue
+            choice_count += len(choices)
+            seen: list[Any] = []
+            for choice in choices:
+                if (
+                    choice is None
+                    or isinstance(choice, (dict, list))
+                    or isinstance(choice, float)
+                    and not math.isfinite(choice)
+                ):
+                    errors.append(f"{section}.{parameter} contains an invalid choice")
+                    continue
+                if any(type(choice) is type(existing) and choice == existing for existing in seen):
+                    errors.append(f"{section}.{parameter} contains duplicate choices")
+                    continue
+                seen.append(choice)
+
+    for switch in CONDITIONAL_PARAMETERS:
+        switch_choices = spaces.get("common", {}).get(switch)
+        if switch_choices is not None and (
+            len(switch_choices) != 2
+            or not any(choice is True for choice in switch_choices)
+            or not any(choice is False for choice in switch_choices)
+        ):
+            errors.append(f"common.{switch} must contain true and false")
+
+    if errors:
+        raise ValueError("invalid strategy spaces: " + "; ".join(errors))
+    return {
+        "valid": True,
+        "space_count": len(spaces),
+        "parameter_count": parameter_count,
+        "choice_count": choice_count,
+    }
 
 
 def infer_strategy_mode(params: dict[str, Any]) -> str:

@@ -20,6 +20,10 @@ from .yahoo import get_yahoo_session
 REQUIRED_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 
 
+def exchange_calendar_for_ticker(ticker: str) -> str:
+    return "XKRX" if ticker.upper().endswith((".KS", ".KQ")) else "XNYS"
+
+
 @dataclass
 class DataRequest:
     ticker: str
@@ -52,6 +56,7 @@ class DataQualityReport:
     non_monotonic_index: bool
     invalid_price_rows: int
     invalid_ohlc_rows: int
+    invalid_volume_rows: int
     missing_sessions: int | None
     adjusted: bool
     valid: bool
@@ -155,15 +160,17 @@ def build_quality_report(
     *,
     calendar_name: str | None = None,
 ) -> DataQualityReport:
-    calendar_name = calendar_name or ("XKRX" if request.ticker.endswith((".KS", ".KQ")) else "XNYS")
+    calendar_name = calendar_name or exchange_calendar_for_ticker(request.ticker)
     missing_columns = [column for column in REQUIRED_COLUMNS if column not in frame.columns]
     usable = frame if not missing_columns else pd.DataFrame(columns=REQUIRED_COLUMNS)
     null_counts = {column: int(usable[column].isna().sum()) for column in REQUIRED_COLUMNS}
     invalid_price_rows = 0
     invalid_ohlc_rows = 0
+    invalid_volume_rows = 0
     if not usable.empty:
         prices = usable[["Open", "High", "Low", "Close"]]
         invalid_price_rows = int((prices <= 0).any(axis=1).sum())
+        invalid_volume_rows = int((usable["Volume"] < 0).sum())
         invalid_ohlc_rows = int(
             (
                 (usable["High"] < usable[["Open", "Close", "Low"]].max(axis=1))
@@ -189,11 +196,22 @@ def build_quality_report(
         warnings.append("provider returned no rows")
     if any(null_counts.values()):
         warnings.append("null OHLCV values found")
+    duplicate_index_count = int(usable.index.duplicated().sum())
+    non_monotonic_index = not usable.index.is_monotonic_increasing
+    if duplicate_index_count:
+        warnings.append(f"{duplicate_index_count} duplicate timestamps found")
+    if non_monotonic_index:
+        warnings.append("OHLCV index is not monotonic increasing")
+    if invalid_volume_rows:
+        warnings.append(f"{invalid_volume_rows} rows have negative volume")
     valid = (
         not usable.empty
         and not missing_columns
         and invalid_price_rows == 0
         and invalid_ohlc_rows == 0
+        and invalid_volume_rows == 0
+        and duplicate_index_count == 0
+        and not non_monotonic_index
         and not any(null_counts.values())
     )
     return DataQualityReport(
@@ -203,10 +221,11 @@ def build_quality_report(
         last_date=str(usable.index.max()) if not usable.empty else None,
         missing_columns=missing_columns,
         null_counts=null_counts,
-        duplicate_index_count=int(usable.index.duplicated().sum()),
-        non_monotonic_index=not usable.index.is_monotonic_increasing,
+        duplicate_index_count=duplicate_index_count,
+        non_monotonic_index=non_monotonic_index,
         invalid_price_rows=invalid_price_rows,
         invalid_ohlc_rows=invalid_ohlc_rows,
+        invalid_volume_rows=invalid_volume_rows,
         missing_sessions=missing_sessions,
         adjusted=request.adjusted,
         valid=valid,

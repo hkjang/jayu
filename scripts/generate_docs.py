@@ -17,6 +17,52 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
+def _resolve_schema(root: dict[str, Any], field: dict[str, Any]) -> dict[str, Any]:
+    reference = field.get("$ref")
+    if isinstance(reference, str):
+        return root.get("$defs", {}).get(reference.rsplit("/", 1)[-1], field)
+    for option in field.get("anyOf", []):
+        reference = option.get("$ref")
+        if isinstance(reference, str):
+            return root.get("$defs", {}).get(reference.rsplit("/", 1)[-1], field)
+    return field
+
+
+def _field_type(field: dict[str, Any]) -> str:
+    field_type = field.get("type") or field.get("$ref", "").split("/")[-1]
+    if not field_type and "anyOf" in field:
+        field_type = " | ".join(
+            option.get("type", option.get("$ref", "").split("/")[-1]) for option in field["anyOf"]
+        )
+    return field_type or "object"
+
+
+def _settings_rows(
+    root: dict[str, Any],
+    schema: dict[str, Any],
+    *,
+    prefix: str = "",
+) -> list[str]:
+    lines: list[str] = []
+    required = set(schema.get("required", []))
+    for name, field in schema.get("properties", {}).items():
+        full_name = f"{prefix}.{name}" if prefix else name
+        default = field.get("default", "<required>" if name in required else None)
+        constraints = {
+            key: field[key]
+            for key in ("minimum", "maximum", "exclusiveMinimum", "enum")
+            if key in field
+        }
+        lines.append(
+            f"| `{full_name}` | `{_field_type(field)}` | `{_json(default)}` | "
+            f"`{_json(constraints)}` |"
+        )
+        resolved = _resolve_schema(root, field)
+        if resolved is not field and resolved.get("properties"):
+            lines.extend(_settings_rows(root, resolved, prefix=full_name))
+    return lines
+
+
 def settings_markdown() -> str:
     schema = Settings.model_json_schema()
     lines = [
@@ -27,24 +73,7 @@ def settings_markdown() -> str:
         "| Field | Type | Default | Constraints |",
         "|---|---|---|---|",
     ]
-    required = set(schema.get("required", []))
-    for name, field in schema["properties"].items():
-        field_type = field.get("type") or field.get("$ref", "").split("/")[-1]
-        if not field_type and "anyOf" in field:
-            field_type = " | ".join(
-                option.get("type", option.get("$ref", "").split("/")[-1])
-                for option in field["anyOf"]
-            )
-        default = field.get("default", "<required>" if name in required else None)
-        constraints = {
-            key: field[key]
-            for key in ("minimum", "maximum", "exclusiveMinimum", "enum")
-            if key in field
-        }
-        lines.append(
-            f"| `{name}` | `{field_type or 'object'}` | `{_json(default)}` | "
-            f"`{_json(constraints)}` |"
-        )
+    lines.extend(_settings_rows(schema, schema))
     return "\n".join(lines) + "\n"
 
 

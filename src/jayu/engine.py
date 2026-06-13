@@ -27,13 +27,22 @@ from pathlib import Path
 import yfinance as yf
 
 from .backtest_core import (
+    assess_candidate_selection,
     assess_validation as _assess_validation,
     backtest as _backtest,
     configure as configure_backtest_core,
     kelly_size,
     multi_window_validate as _multi_window_validate,
+    oos_fold_returns,
 )
-from .data import DataRequest
+from .data import DataRequest, dataframe_sha256
+from .double_oos import (
+    LockboxLedger,
+    LockboxSplit,
+    evaluate_final_lockbox,
+    final_lockbox_key,
+    lockbox_split,
+)
 from .execution import (
     AtrParticipationSlippageModel,
     ExecutionModel,
@@ -42,6 +51,7 @@ from .execution import (
 )
 from .genetic import derive_seed, should_early_stop
 from .indicators import indicator_warmup_report
+from .io import stable_hash
 from .legacy_adapter import (
     load_json,
     migrate_gene_pool,
@@ -50,6 +60,7 @@ from .legacy_adapter import (
     numpy_to_python,
     save_json,
 )
+from .markets import benchmarks_for_tickers, format_market_price
 from .optimizer import (
     PARAM_SPACE,
     STRATEGY_SPACES,
@@ -66,6 +77,7 @@ from .settings import Settings
 from .signal_generation import (
     check_today_signals,
     configure as configure_signal_generation,
+    strategy_is_approved,
 )
 from .yahoo import get_yahoo_session
 
@@ -362,6 +374,36 @@ def _fetch_market_data(data_service, ticker, period):
     )
 
 
+def _minimum_development_rows(settings: Settings) -> int:
+    research = settings.research
+    return (
+        research.train_months * 21
+        + research.validation_months * 21 * research.walk_forward_windows
+        + research.purge_days
+        + research.embargo_days * (research.walk_forward_windows - 1)
+    )
+
+
+def _partition_research_data(
+    frame: pd.DataFrame,
+    settings: Settings,
+) -> tuple[pd.DataFrame, LockboxSplit | None]:
+    research = settings.research
+    if not research.final_lockbox_enabled:
+        return frame, None
+    split = lockbox_split(
+        len(frame),
+        lockbox_fraction=research.final_lockbox_fraction,
+        purge_rows=research.purge_days,
+        embargo_rows=research.embargo_days,
+        minimum_dev_rows=_minimum_development_rows(settings),
+        minimum_lockbox_rows=research.final_lockbox_min_rows,
+    )
+    if split is None:
+        raise ValueError("insufficient data for isolated development and final lockbox regions")
+    return frame.iloc[split.development_start : split.development_end], split
+
+
 def run(
     settings=None,
     paths=None,
@@ -402,9 +444,9 @@ def run(
     except Exception as e:
         print(f"  ⚠ VIX 지수 조회 실패: {e}")
 
-    # 시장/섹터 지수 사전 수집 (SOX, IXIC)
+    # 설정된 미국/한국 종목에 필요한 시장·섹터 지수만 수집
     market_trends = {}
-    for index_ticker in ["^SOX", "^IXIC"]:
+    for index_ticker in benchmarks_for_tickers(TICKERS):
         try:
             raw_idx = _fetch_market_data(data_service, index_ticker, "5y")
             if not raw_idx.empty:
@@ -426,9 +468,13 @@ def run(
     today_results = {}
     improved_tickers = []
     df_latest = {}  # 오늘의 신호용
+    lockbox_ledger = LockboxLedger(paths.state_dir / "final_lockbox_ledger.json")
 
     for ticker in TICKERS:
         print(f"\n[{ticker}] 데이터 로드 중...")
+        ticker_data_hash = ""
+        ticker_lockbox_split = None
+        research_df = None
         try:
             raw = _fetch_market_data(data_service, ticker, "5y")
 
@@ -453,8 +499,12 @@ def run(
                 print(f"  ⚠ 유효 데이터 부족 ({len(raw)}행)")
                 continue
 
+            ticker_data_hash = dataframe_sha256(raw)
             df = add_indicators(raw)
             df_latest[ticker] = df
+            research_df = df
+            if optimize:
+                research_df, ticker_lockbox_split = _partition_research_data(df, settings)
             warmup_rows = int(df.attrs.get("warmup_rows_dropped", 0))
             print(
                 f"  {len(df)}행 | 워밍업 제외 {warmup_rows}행 | "
@@ -486,6 +536,8 @@ def run(
 
         if not optimize:
             continue
+        if research_df is None:
+            continue
 
         # 국면별로 나누어 진화 최적화 진행
         best_all.setdefault(ticker, {})
@@ -501,7 +553,11 @@ def run(
                 prev_data = {}
                 best_all[ticker][regime] = prev_data
 
-            if prev_data.get("validation_status") == "approved":
+            if strategy_is_approved(
+                prev_data,
+                require_final_lockbox=settings.research.final_lockbox_enabled,
+                require_selection_bias=settings.research.selection_bias_enabled,
+            ):
                 prev_val_metrics = prev_data.get("val_metrics") or {}
                 prev_metrics = prev_data.get("metrics") or {}
                 prev_fitness = prev_val_metrics.get(
@@ -522,6 +578,7 @@ def run(
             np.random.seed(regime_seed)
             evaluated_runs = 0
             early_stopped = False
+            candidate_oos_returns: dict[str, list[float]] = {}
 
             print(f"    {SIM_RUNS}회 시뮬레이션 (유전자풀 {len(pool)}개)...", end="", flush=True)
 
@@ -552,13 +609,30 @@ def run(
                         # 메타 가중 샘플링
                         use_meta = random.random() < 0.7  # nosec B311
                         p = sample_params(meta, use_meta=use_meta)
+                    p["ticker"] = ticker
 
                     # 멀티 윈도우 Walk-Forward 검증 (특정 국면으로 제한)
-                    tr_m, val_m = multi_window_validate(df, p, market_trends, target_regime=regime)
+                    tr_m, val_m = multi_window_validate(
+                        research_df,
+                        p,
+                        market_trends,
+                        target_regime=regime,
+                    )
                     if tr_m is None:
                         no_improve += 1
                         continue
                     valid_n += 1
+                    candidate_key = stable_hash(
+                        {
+                            "ticker": ticker,
+                            "regime": regime,
+                            "params": p,
+                            "fitness_version": settings.research.fitness_version,
+                        }
+                    )
+                    fold_returns = oos_fold_returns(val_m or {})
+                    if len(fold_returns) == int((val_m or {}).get("windows", 0)):
+                        candidate_oos_returns[candidate_key] = fold_returns
 
                     success = (
                         tr_m["win_rate"] >= 48
@@ -576,8 +650,9 @@ def run(
                         continue
 
                     if eval_fitness > best_fitness:
-                        # Kelly 포지션 사이징
-                        p["pos_size"] = kelly_size(
+                        # Kelly 값은 참고용으로만 저장한다. 검증 뒤 params를 바꾸면
+                        # 검증한 전략과 실제 실행 전략이 달라진다.
+                        kelly_position = kelly_size(
                             tr_m["win_rate"], tr_m["avg_win"], tr_m["avg_loss"]
                         )
                         best_fitness = eval_fitness
@@ -590,8 +665,10 @@ def run(
                             "val_metrics": val_m,
                             "updated": today,
                             "run_time": run_time,
-                            "kelly_pos": p["pos_size"],
-                            "engine_version": 5,
+                            "kelly_pos": kelly_position,
+                            "tested_pos_size": p.get("pos_size"),
+                            "selection_candidate_key": candidate_key,
+                            "engine_version": 6,
                             "fitness_version": settings.research.fitness_version,
                             "random_seed": regime_seed,
                             "execution_model": settings.execution.model_dump(),
@@ -615,10 +692,93 @@ def run(
                 if best_run:
                     best_run["evaluated_runs"] = evaluated_runs
                     best_run["early_stopped"] = early_stopped
+                    best_run = numpy_to_python(best_run)
+                    m = best_run["metrics"]
+                    vm = best_run.get("val_metrics") or {}
+                    p = best_run["params"]
+                    validation = assess_validation(m, vm)
+                    selection_key = best_run.get("selection_candidate_key")
+                    selected_returns = candidate_oos_returns.get(str(selection_key), [])
+                    selection_bias = assess_candidate_selection(
+                        list(candidate_oos_returns.values()),
+                        selected_returns,
+                        evaluated_trials=evaluated_runs,
+                    )
+                    best_run["selection_bias"] = selection_bias
+                    validation["selection_bias"] = selection_bias
+                    if not selection_bias["approved"]:
+                        validation["approved"] = False
+                        validation["reasons"].extend(selection_bias["reasons"])
+                    if validation["approved"] and settings.research.final_lockbox_enabled:
+                        if ticker_lockbox_split is None:
+                            validation["approved"] = False
+                            validation["reasons"].append("missing_final_lockbox_split")
+                        else:
+                            ledger_key = final_lockbox_key(
+                                data_hash=ticker_data_hash,
+                                ticker=ticker,
+                                regime=regime,
+                                params=p,
+                                split=ticker_lockbox_split,
+                                fitness_version=settings.research.fitness_version,
+                                evaluation_context={
+                                    "engine_version": 6,
+                                    "initial_capital": settings.initial_capital,
+                                    "transaction_fee": settings.transaction_fee,
+                                    "slippage": settings.slippage,
+                                    "execution": settings.execution.model_dump(),
+                                },
+                            )
+
+                            def evaluate_lockbox(frame):
+                                trades, capital, capital_history = backtest(
+                                    frame,
+                                    p,
+                                    market_trends,
+                                    target_regime=regime,
+                                    initial_skip=0,
+                                )
+                                return calc_metrics(
+                                    trades,
+                                    capital,
+                                    capital_history,
+                                    min_trades=1,
+                                    fitness_version=settings.research.fitness_version,
+                                )
+
+                            final_lockbox = evaluate_final_lockbox(
+                                df,
+                                split=ticker_lockbox_split,
+                                development_metrics=vm,
+                                evaluate_fn=evaluate_lockbox,
+                                ledger=lockbox_ledger,
+                                ledger_key=ledger_key,
+                                metric_key="annualized_return",
+                                minimum_retention=settings.research.final_lockbox_min_retention,
+                                require_positive_return=(
+                                    settings.research.final_lockbox_require_positive_return
+                                ),
+                            )
+                            best_run["final_lockbox"] = final_lockbox
+                            validation["final_lockbox"] = final_lockbox
+                            if not final_lockbox["approved"]:
+                                validation["approved"] = False
+                                validation["reasons"].extend(final_lockbox["reasons"])
+                    best_run["validation"] = validation
+                    best_run["validation_status"] = (
+                        "approved" if validation["approved"] else "rejected"
+                    )
+                    if not validation["approved"]:
+                        print(
+                            f"    ⚠ [{regime.upper()}] OOS 재검증 거부: "
+                            f"{', '.join(validation['reasons'])}"
+                        )
+                        today_results.setdefault(ticker, {})[regime] = best_run
+                        continue
                     if run_context:
                         trade_log, _, equity_history = backtest(
-                            df,
-                            best_run["params"],
+                            research_df,
+                            p,
                             market_trends,
                             target_regime=regime,
                             initial_skip=0,
@@ -641,22 +801,6 @@ def run(
                             equity_path.relative_to(run_context.run_dir)
                         )
                         best_run["trade_log_count"] = len(trade_log)
-                    best_run = numpy_to_python(best_run)
-                    m = best_run["metrics"]
-                    vm = best_run.get("val_metrics") or {}
-                    p = best_run["params"]
-                    validation = assess_validation(m, vm)
-                    best_run["validation"] = validation
-                    best_run["validation_status"] = (
-                        "approved" if validation["approved"] else "rejected"
-                    )
-                    if not validation["approved"]:
-                        print(
-                            f"    ⚠ [{regime.upper()}] OOS 재검증 거부: "
-                            f"{', '.join(validation['reasons'])}"
-                        )
-                        today_results.setdefault(ticker, {})[regime] = best_run
-                        continue
                     print(f"    ✅ [{regime.upper()}] 전략 개선!")
                     print(
                         f"       [학습] 수익 {m['total_return']}% | Sharpe {m['sharpe']} | Sortino {m.get('sortino', '?')}"
@@ -680,7 +824,14 @@ def run(
                     if regime not in history[ticker]:
                         history[ticker][regime] = []
                     history[ticker][regime].append(
-                        {"date": today, "metrics": m, "val_metrics": vm, "params": p}
+                        {
+                            "date": today,
+                            "metrics": m,
+                            "val_metrics": vm,
+                            "params": p,
+                            "selection_bias": best_run.get("selection_bias"),
+                            "final_lockbox": best_run.get("final_lockbox"),
+                        }
                     )
                 else:
                     prev = best_all.get(ticker, {}).get(regime, {})
@@ -699,6 +850,8 @@ def run(
             vix_val,
             market_trends,
             require_approved=require_approved,
+            require_final_lockbox=settings.research.final_lockbox_enabled,
+            require_selection_bias=settings.research.selection_bias_enabled,
         )
         save_json(signals, SIGNAL_FILE)
     except Exception as e:
@@ -725,13 +878,42 @@ def run(
         log,
     )
     if run_context:
+        run_context.record_artifact(Path(log))
+        validation_path = run_context.run_dir / "validation_report.json"
         save_json(
             {
                 ticker: {regime: result.get("validation", {}) for regime, result in regimes.items()}
                 for ticker, regimes in today_results.items()
             },
-            str(run_context.run_dir / "validation_report.json"),
+            str(validation_path),
         )
+        run_context.record_artifact(validation_path)
+        selection_path = run_context.run_dir / "selection_bias_report.json"
+        save_json(
+            {
+                ticker: {
+                    regime: result.get("selection_bias")
+                    for regime, result in regimes.items()
+                    if result.get("selection_bias") is not None
+                }
+                for ticker, regimes in today_results.items()
+            },
+            str(selection_path),
+        )
+        run_context.record_artifact(selection_path)
+        lockbox_path = run_context.run_dir / "final_lockbox_report.json"
+        save_json(
+            {
+                ticker: {
+                    regime: result.get("final_lockbox")
+                    for regime, result in regimes.items()
+                    if result.get("final_lockbox") is not None
+                }
+                for ticker, regimes in today_results.items()
+            },
+            str(lockbox_path),
+        )
+        run_context.record_artifact(lockbox_path)
 
     # 최종 리포트
     print(f"\n{'=' * 68}")
@@ -778,7 +960,9 @@ def run(
     print(f"{'=' * 68}")
     for t, sig_data in signals.items():
         print(
-            f"  [{t}] {sig_data.get('signal', '?')} (국면: {sig_data.get('regime', '?').upper()}) | 현재가: ${sig_data.get('price', '?')}"
+            f"  [{t}] {sig_data.get('signal', '?')} "
+            f"(국면: {sig_data.get('regime', '?').upper()}) | "
+            f"현재가: {format_market_price(t, sig_data.get('price'))}"
         )
         for cond_name, cond_val in sig_data.get("conditions", {}).items():
             print(f"       {cond_name}: {cond_val}")

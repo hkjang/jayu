@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.generate_docs import generated_documents
+from scripts.generate_docs import generated_documents, settings_markdown
 from typer.testing import CliRunner
 
 from jayu.cli import app
@@ -9,6 +9,13 @@ from jayu.cli import app
 def test_generated_docs_are_current():
     for path, expected in generated_documents().items():
         assert path.read_text(encoding="utf-8") == expected
+
+
+def test_settings_reference_includes_nested_fields():
+    content = settings_markdown()
+
+    assert "`research.min_oos_psr`" in content
+    assert "`risk.max_adjusted_gross_exposure`" in content
 
 
 def test_sample_config_contains_every_non_secret_top_level_setting():

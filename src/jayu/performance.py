@@ -99,6 +99,8 @@ def cost_bridge(trades: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "trades": 0,
             "has_cost_detail": False,
+            "cost_detail_trade_count": 0,
+            "partial_cost_detail": False,
             "returns_basis": "net",
             "avg_gross_return_pct": 0.0,
             "avg_slippage_cost_pct": 0.0,
@@ -111,28 +113,44 @@ def cost_bridge(trades: list[dict[str, Any]]) -> dict[str, Any]:
             "cost_drag_pct_of_gross": 0.0,
         }
 
-    def column(name: str) -> np.ndarray:
-        values = [trade.get(name) for trade in trades]
-        return np.nan_to_num(
-            np.array(
-                [float(value) if isinstance(value, (int, float)) else 0.0 for value in values],
-                dtype=float,
-            ),
-            nan=0.0,
-            posinf=0.0,
-            neginf=0.0,
-        )
-
     net = np.array([_net_return_pct(trade) for trade in trades], dtype=float)
-    has_detail = any("raw_return_pct" in trade for trade in trades)
-    if has_detail:
-        gross = column("raw_return_pct")
-        slippage = column("slippage_cost_pct")
-        fee = column("fee_cost_pct")
-    else:
-        gross = net.copy()
-        slippage = np.zeros(count)
-        fee = np.zeros(count)
+    gross_values: list[float] = []
+    slippage_values: list[float] = []
+    fee_values: list[float] = []
+    detail_flags: list[bool] = []
+
+    def finite_value(value: Any, default: float = 0.0) -> float:
+        return float(value) if isinstance(value, (int, float)) and np.isfinite(value) else default
+
+    for index, trade in enumerate(trades):
+        raw = trade.get("raw_return_pct")
+        pre_fee = trade.get("gross_return_pct")
+        fee_cost = trade.get("fee_cost_pct")
+        if isinstance(raw, (int, float)) and np.isfinite(raw):
+            gross_values.append(float(raw))
+            slippage_values.append(finite_value(trade.get("slippage_cost_pct")))
+            fee_values.append(finite_value(fee_cost))
+            detail_flags.append(True)
+        elif isinstance(pre_fee, (int, float)) and np.isfinite(pre_fee):
+            gross_values.append(float(pre_fee))
+            slippage_values.append(0.0)
+            fee_values.append(
+                float(fee_cost)
+                if isinstance(fee_cost, (int, float)) and np.isfinite(fee_cost)
+                else float(pre_fee) - net[index]
+            )
+            detail_flags.append(True)
+        else:
+            gross_values.append(float(net[index]))
+            slippage_values.append(0.0)
+            fee_values.append(0.0)
+            detail_flags.append(False)
+
+    gross = np.array(gross_values, dtype=float)
+    slippage = np.array(slippage_values, dtype=float)
+    fee = np.array(fee_values, dtype=float)
+    detail_count = sum(detail_flags)
+    has_detail = detail_count == count
 
     total_gross = float(gross.sum())
     total_net = float(net.sum())
@@ -140,6 +158,8 @@ def cost_bridge(trades: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "trades": count,
         "has_cost_detail": has_detail,
+        "cost_detail_trade_count": detail_count,
+        "partial_cost_detail": 0 < detail_count < count,
         "returns_basis": "net",
         "avg_gross_return_pct": round(float(gross.mean()), 4),
         "avg_slippage_cost_pct": round(float(slippage.mean()), 4),

@@ -9,6 +9,8 @@ from jayu.double_oos import (
     LockboxSplit,
     assert_lockbox_isolation,
     double_oos_evaluate,
+    evaluate_final_lockbox,
+    final_lockbox_key,
     lockbox_split,
 )
 
@@ -101,3 +103,76 @@ def test_lockbox_ledger_persists_across_instances(tmp_path):
 
     # A fresh ledger instance reading the same file still sees the seal.
     assert LockboxLedger(path).is_sealed("k")
+
+
+def test_final_lockbox_is_evaluated_once_and_reused(tmp_path):
+    data = pd.DataFrame({"Close": range(1000)})
+    split = lockbox_split(1000, lockbox_fraction=0.2)
+    ledger = LockboxLedger(tmp_path / "lockbox.json")
+    calls = 0
+
+    def evaluate(frame):
+        nonlocal calls
+        calls += 1
+        assert len(frame) == split.lockbox_rows
+        return {"total_return": 8.0, "trades": 4}
+
+    key = final_lockbox_key(
+        data_hash="data",
+        ticker="SOXL",
+        regime="bull",
+        params={"rsi_lo": 30},
+        split=split,
+        fitness_version="v2_daily_equity",
+    )
+    first = evaluate_final_lockbox(
+        data,
+        split=split,
+        development_metrics={"total_return": 10.0},
+        evaluate_fn=evaluate,
+        ledger=ledger,
+        ledger_key=key,
+    )
+    second = evaluate_final_lockbox(
+        data,
+        split=split,
+        development_metrics={"total_return": 10.0},
+        evaluate_fn=evaluate,
+        ledger=ledger,
+        ledger_key=key,
+    )
+    stricter = evaluate_final_lockbox(
+        data,
+        split=split,
+        development_metrics={"total_return": 10.0},
+        evaluate_fn=evaluate,
+        ledger=ledger,
+        ledger_key=key,
+        minimum_retention=0.9,
+    )
+
+    assert first["approved"] is True
+    assert first["lockbox_retention"] == pytest.approx(0.8)
+    assert first["reused"] is False
+    assert second["reused"] is True
+    assert stricter["approved"] is False
+    assert stricter["reused"] is True
+    assert calls == 1
+
+
+def test_final_lockbox_rejects_non_positive_return(tmp_path):
+    data = pd.DataFrame({"Close": range(1000)})
+    split = lockbox_split(1000, lockbox_fraction=0.2)
+
+    report = evaluate_final_lockbox(
+        data,
+        split=split,
+        development_metrics={"total_return": 10.0},
+        evaluate_fn=lambda frame: {"total_return": -1.0},
+        ledger=LockboxLedger(tmp_path / "lockbox.json"),
+        ledger_key="negative",
+    )
+
+    assert report["approved"] is False
+    assert "non_positive_final_lockbox_return" in report["reasons"]
+    assert "final_lockbox_retention_below_threshold" in report["reasons"]

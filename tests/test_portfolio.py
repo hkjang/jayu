@@ -69,6 +69,17 @@ def test_unmapped_ticker_report_lists_missing_symbols(tmp_path: Path):
     assert report["positions"][0]["ticker"] == "ZZZZ"
 
 
+def test_default_mapping_supports_samsung_korean_equity():
+    mapping = load_portfolio_mapping(Path("configs/portfolio_mapping.json"))
+
+    lookup = mapping.lookup("005930.KS")
+
+    assert lookup.mapped is True
+    assert lookup.mapping.currency == "KRW"
+    assert lookup.mapping.sector == "semiconductors"
+    assert lookup.mapping.leverage_factor == 1.0
+
+
 def test_portfolio_rejects_missing_columns(tmp_path: Path):
     path = tmp_path / "portfolio.csv"
     path.write_text("ticker,market_value\nSOXL,100\n", encoding="utf-8")

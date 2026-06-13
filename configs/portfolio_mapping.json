@@ -2,6 +2,13 @@
   "version": 1,
   "leveraged_name_keywords": ["레버리지", "2X", "3X"],
   "tickers": {
+    "005930.KS": {
+      "leverage_factor": 1.0,
+      "underlying_group": "samsung_electronics",
+      "sector": "semiconductors",
+      "factors": ["semiconductors", "technology", "korea"],
+      "currency": "KRW"
+    },
     "DFEN": {
       "leverage_factor": 3.0,
       "underlying_group": "aerospace_defense",

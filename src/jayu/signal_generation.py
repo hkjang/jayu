@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .legacy_adapter import migrate_json_structure
+from .markets import benchmark_for_ticker, format_market_notional, vix_filter_applies
 from .optimizer import fill_missing_params
 from .settings import Settings
 from .signals import TodaySignal, normalize_signal_map
@@ -20,12 +21,32 @@ def _signal_payload(**kwargs: Any) -> dict[str, Any]:
     return TodaySignal(**kwargs).model_dump(mode="json")
 
 
+def strategy_is_approved(
+    data: dict[str, Any] | None,
+    *,
+    require_final_lockbox: bool,
+    require_selection_bias: bool = True,
+) -> bool:
+    if not data or data.get("validation_status") != "approved":
+        return False
+    if require_selection_bias:
+        selection_bias = data.get("selection_bias")
+        if not isinstance(selection_bias, dict) or selection_bias.get("approved") is not True:
+            return False
+    if not require_final_lockbox:
+        return True
+    lockbox = data.get("final_lockbox")
+    return isinstance(lockbox, dict) and lockbox.get("approved") is True
+
+
 def check_today_signals(
     df,
     best_all,
     vix_val=0.0,
     market_trends=None,
     require_approved=False,
+    require_final_lockbox=True,
+    require_selection_bias=True,
 ):
     """현재 데이터 기준 진입 조건 충족 여부 (VIX, 시장 지수, 거래대금 필터 포함)"""
     best_all = migrate_json_structure(best_all)
@@ -42,7 +63,11 @@ def check_today_signals(
         # 최적 파라미터 로드
         ticker_data = best_all.get(ticker, {})
         data = ticker_data.get(today_regime)
-        if require_approved and data and data.get("validation_status") != "approved":
+        if require_approved and not strategy_is_approved(
+            data,
+            require_final_lockbox=require_final_lockbox,
+            require_selection_bias=require_selection_bias,
+        ):
             data = None
 
         # 폴백 처리 (오늘 국면 설정이 없으면 다른 국면이라도 사용)
@@ -53,7 +78,11 @@ def check_today_signals(
                     and "params" in ticker_data[r]
                     and (
                         not require_approved
-                        or ticker_data[r].get("validation_status") == "approved"
+                        or strategy_is_approved(
+                            ticker_data[r],
+                            require_final_lockbox=require_final_lockbox,
+                            require_selection_bias=require_selection_bias,
+                        )
                     )
                 ):
                     data = ticker_data[r]
@@ -71,7 +100,7 @@ def check_today_signals(
 
         # 시장 모멘텀 필터 검사
         market_ok = True
-        idx_name = "^SOX" if ticker == "SOXL" else "^IXIC"
+        idx_name = benchmark_for_ticker(ticker)
         if market_trends and idx_name in market_trends:
             last_date = df[ticker].index[-1]
             market_ok = market_trends[idx_name].get(last_date, True)
@@ -176,7 +205,11 @@ def check_today_signals(
             "BB": f"{'✅' if float(row['bb_pct']) < 0.4 else '❌'} ({float(row['bb_pct']):.2f})",
             "Regime": f"{today_regime} (필터:{'ON' if p['regime_filter'] else 'OFF'})",
             "Market": f"{'✅' if market_ok else '❌'} ({idx_name} 상방)",
-            "Dollar_Volume": f"{'✅' if dollar_vol_ok else '❌'} (${float(row['dollar_volume_ma20']) / 1_000_000:.1f}M vs ${min_vol / 1_000_000:.0f}M)",
+            "Notional_Volume": (
+                f"{'✅' if dollar_vol_ok else '❌'} "
+                f"({format_market_notional(ticker, float(row['dollar_volume_ma20']))} vs "
+                f"{format_market_notional(ticker, float(min_vol))})"
+            ),
         }
         if use_williams:
             williams_target = float(row["Open"]) + float(row["prev_range"]) * float(
@@ -218,21 +251,28 @@ def check_today_signals(
                 f"{adx_val:.1f} (필터:{'ON' if use_adx else 'OFF'}, 임계치:{p.get('adx_threshold', 25)})"
             )
 
-        if vix_val >= 22.0:
+        vix_blocked = vix_filter_applies(ticker) and vix_val >= 22.0
+        if vix_blocked:
             signal_desc = f"🔴 대기 (VIX 위험: {vix_val:.1f})"
         elif not market_ok:
             signal_desc = f"🔴 대기 ({idx_name} 하락세)"
         elif not dollar_vol_ok:
             signal_desc = (
-                f"🔴 대기 (거래대금 부족: ${float(row['dollar_volume_ma20']) / 1_000_000:.1f}M)"
+                "🔴 대기 (거래대금 부족: "
+                f"{format_market_notional(ticker, float(row['dollar_volume_ma20']))})"
             )
         else:
             signal_desc = "🟢 진입 검토" if all_ok else "🔴 대기"
 
+        latest_index = df[ticker].index[-1]
+        signal_date = (
+            latest_index.date().isoformat() if hasattr(latest_index, "date") else str(latest_index)
+        )
         today_sigs[ticker] = {
             "signal": signal_desc,
+            "signal_date": signal_date,
             "action": "buy"
-            if all_ok and vix_val < 22.0 and market_ok and dollar_vol_ok
+            if all_ok and not vix_blocked and market_ok and dollar_vol_ok
             else "hold",
             "conditions": conds_str,
             "price": round(float(row["Close"]), 2),

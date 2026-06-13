@@ -57,6 +57,18 @@ class ResearchSettings(BaseModel):
     embargo_days: int = Field(default=1, ge=0, le=60)
     min_oos_windows: int = Field(default=2, ge=1, le=12)
     min_oos_pass_rate: float = Field(default=0.67, ge=0, le=1)
+    min_oos_psr_observations: int = Field(default=3, ge=3, le=12)
+    min_oos_psr: float = Field(default=0.50, ge=0, le=1)
+    selection_bias_enabled: bool = True
+    selection_min_candidates: int = Field(default=5, ge=2, le=100_000)
+    selection_min_dsr: float = Field(default=0.50, ge=0, le=1)
+    selection_max_pbo: float = Field(default=0.50, ge=0, le=1)
+    selection_pbo_blocks: int = Field(default=2, ge=2, le=12)
+    final_lockbox_enabled: bool = True
+    final_lockbox_fraction: float = Field(default=0.20, gt=0, lt=0.5)
+    final_lockbox_min_rows: int = Field(default=40, ge=20, le=504)
+    final_lockbox_min_retention: float = Field(default=0.50, ge=0, le=2)
+    final_lockbox_require_positive_return: bool = True
     ga_min_runs: int = Field(default=100, ge=1, le=100_000)
     ga_early_stop_patience: int = Field(default=150, ge=10, le=100_000)
     fitness_version: Literal["v2_daily_equity"] = "v2_daily_equity"
@@ -65,6 +77,12 @@ class ResearchSettings(BaseModel):
     def validate_window_requirements(self) -> "ResearchSettings":
         if self.min_oos_windows > self.walk_forward_windows:
             raise ValueError("min_oos_windows cannot exceed walk_forward_windows")
+        if self.min_oos_psr_observations > self.walk_forward_windows:
+            raise ValueError("min_oos_psr_observations cannot exceed walk_forward_windows")
+        if self.selection_pbo_blocks % 2:
+            raise ValueError("selection_pbo_blocks must be even")
+        if self.selection_pbo_blocks > self.walk_forward_windows:
+            raise ValueError("selection_pbo_blocks cannot exceed walk_forward_windows")
         return self
 
 

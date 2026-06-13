@@ -114,7 +114,12 @@ def probabilistic_sharpe_ratio(
     sr = observed_sharpe(array) if sharpe is None else float(sharpe)
     std = float(np.std(array, ddof=1))
     if std == 0.0:
-        return 0.0
+        mean = float(np.mean(array))
+        if mean > 0.0:
+            return 1.0
+        if mean < 0.0:
+            return 0.0
+        return 0.5 if benchmark_sharpe == 0.0 else float(benchmark_sharpe < 0.0)
     centered = (array - np.mean(array)) / std
     skew = float(np.mean(centered**3))
     kurt = float(np.mean(centered**4))  # non-excess (normal == 3)
@@ -158,6 +163,65 @@ def deflated_sharpe_ratio(
         "deflated_benchmark_sharpe": round(benchmark, 6),
         "observed_sharpe": round(observed_sharpe(returns), 6),
         "trials": int(trials),
+    }
+
+
+def candidate_selection_bias(
+    candidate_fold_returns: Sequence[Sequence[float]],
+    selected_fold_returns: Sequence[float],
+    *,
+    trials: int,
+    minimum_candidates: int = 5,
+    pbo_blocks: int = 2,
+) -> dict[str, Any]:
+    """DSR and PBO evidence for a strategy selected from many candidates.
+
+    Candidate rows must contain returns for the same ordered OOS folds. DSR uses
+    all attempted trials for the multiple-testing penalty, while PBO compares
+    the candidates that produced complete, finite OOS vectors.
+    """
+    selected = np.asarray(selected_fold_returns, dtype=float)
+    valid_candidates = [
+        np.asarray(returns, dtype=float)
+        for returns in candidate_fold_returns
+        if len(returns) == selected.size and np.isfinite(returns).all()
+    ]
+    candidate_count = len(valid_candidates)
+    fold_count = int(selected.size)
+    sufficient = (
+        candidate_count >= minimum_candidates
+        and fold_count >= max(2, pbo_blocks)
+        and pbo_blocks % 2 == 0
+    )
+    candidate_sharpes = [observed_sharpe(returns) for returns in valid_candidates]
+    sharpe_variance = (
+        float(np.var(candidate_sharpes, ddof=1)) if len(candidate_sharpes) >= 2 else 0.0
+    )
+    dsr = deflated_sharpe_ratio(
+        selected,
+        trials=max(int(trials), candidate_count),
+        sharpe_variance=sharpe_variance,
+    )
+    pbo: dict[str, Any] | None = None
+    if sufficient:
+        matrix = np.column_stack(valid_candidates)
+        pbo = probability_of_backtest_overfitting(
+            matrix,
+            blocks=pbo_blocks,
+            metric="mean",
+        )
+    return {
+        "candidate_count": candidate_count,
+        "minimum_candidates": minimum_candidates,
+        "evaluated_trials": int(trials),
+        "fold_count": fold_count,
+        "pbo_blocks": pbo_blocks,
+        "sufficient_candidates": sufficient,
+        "sharpe_variance": round(sharpe_variance, 8),
+        **dsr,
+        "pbo": pbo["pbo"] if pbo else None,
+        "pbo_combinations": pbo["combinations"] if pbo else 0,
+        "pbo_mean_logit": pbo["mean_logit"] if pbo else None,
     }
 
 
