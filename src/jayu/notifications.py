@@ -5,12 +5,14 @@ import hashlib
 import os
 import stat
 import time
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
 import requests
 
 from .io import atomic_write_json, read_json
+from .failure_codes import FailureCode
 from .paths import RuntimePaths
 from .settings import Settings
 from .signals import SignalAction, normalize_today_signal
@@ -187,13 +189,73 @@ def build_signal_message(
     signals: dict[str, dict[str, Any]],
     *,
     max_chars: int = 900,
+    health_score: int | None = None,
 ) -> str:
-    lines = ["Jayu daily signals"]
+    approved = 0
+    blocked = 0
+    holds = 0
+    reason_counts: Counter[str] = Counter()
+    for raw_signal in signals.values():
+        signal = normalize_today_signal(dict(raw_signal))
+        eligible = signal.get("eligible", False) and signal.get("action") == SignalAction.BUY.value
+        risk = signal.get("risk", {})
+        details = risk.get("violation_details", []) if isinstance(risk, dict) else []
+        codes = (
+            {
+                str(item.get("code"))
+                for item in details
+                if isinstance(item, dict) and item.get("code")
+            }
+            if isinstance(details, list)
+            else set()
+        )
+        reviewed = signal.get("action") == SignalAction.BUY.value or bool(
+            codes
+            & {
+                FailureCode.COST_FRAGILE.value,
+                FailureCode.COST_NOT_EVALUATED.value,
+            }
+        )
+        approved += int(eligible)
+        blocked += int(reviewed and not eligible)
+        holds += int(not reviewed)
+        if reviewed and isinstance(details, list):
+            for item in details:
+                if isinstance(item, dict) and item.get("code"):
+                    reason_counts[str(item["code"])] += 1
+    lines = [
+        "Jayu daily signals",
+        f"Approved: {approved} | Blocked: {blocked} | Hold: {holds}",
+    ]
+    if health_score is not None and health_score < 70:
+        lines.append(f"Warning: health score is low ({health_score}/100)")
+    if reason_counts:
+        top = ", ".join(f"{code}({count})" for code, count in reason_counts.most_common(3))
+        lines.append(f"Top blocks: {top}")
     for ticker, signal in signals.items():
         signal = normalize_today_signal(dict(signal))
         eligible = signal.get("eligible", False) and signal.get("action") == SignalAction.BUY.value
-        status = "ELIGIBLE" if eligible else "BLOCKED"
-        reasons = signal.get("risk", {}).get("violations", [])
-        suffix = f" | {'; '.join(reasons)}" if reasons else ""
+        risk = signal.get("risk", {})
+        details = risk.get("violation_details", []) if isinstance(risk, dict) else []
+        reasons = (
+            [
+                str(item.get("code"))
+                for item in details
+                if isinstance(item, dict) and item.get("code")
+            ]
+            if isinstance(details, list)
+            else []
+        )
+        reviewed = signal.get("action") == SignalAction.BUY.value or bool(
+            set(reasons)
+            & {
+                FailureCode.COST_FRAGILE.value,
+                FailureCode.COST_NOT_EVALUATED.value,
+            }
+        )
+        status = "ELIGIBLE" if eligible else "BLOCKED" if reviewed else "HOLD"
+        if not reviewed:
+            reasons = []
+        suffix = f" | {', '.join(reasons)}" if reasons else ""
         lines.append(f"{ticker}: {signal.get('signal', '?')} [{status}]{suffix}")
     return _limit_message("\n".join(lines), max_chars)

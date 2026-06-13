@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from jayu.costs import breakeven_transaction_cost, cost_sensitivity
+from jayu.costs import breakeven_transaction_cost, cost_sensitivity, cost_sensitivity_grid
 
 
 def _trades_with_detail():
@@ -74,3 +74,20 @@ def test_degrades_without_cost_detail():
     assert breakeven["breakeven_round_trip_pct"] == pytest.approx(0.25)
     assert report["has_cost_detail"] is False
     assert report["position_weighted"] is False
+
+
+def test_cost_sensitivity_grid_sweeps_fee_and_additional_slippage():
+    grid = cost_sensitivity_grid(
+        [{"gross_return_pct": 0.20, "position_pct": 10.0}],
+        fee_levels_bps=(0, 10),
+        slippage_levels_bps=(0, 15),
+    )
+
+    by_cost = {
+        (row["fee_round_trip_bps"], row["additional_slippage_round_trip_bps"]): row
+        for row in grid["combinations"]
+    }
+    assert by_cost[(0, 0)]["survives"] is True
+    assert by_cost[(10, 15)]["combined_round_trip_bps"] == 25
+    assert by_cost[(10, 15)]["survives"] is False
+    assert grid["slippage_basis"] == "additional_round_trip_bps"

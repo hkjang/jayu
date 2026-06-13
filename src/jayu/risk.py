@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .failure_codes import FailureCode
 from .portfolio import PortfolioMapping, load_portfolio_mapping
 from .settings import RiskSettings
 from .signals import SignalAction, normalize_today_signal
@@ -17,6 +18,7 @@ class RiskDecision:
     projected: dict[str, float]
     # Structured, machine-readable view of the same violations (criterion #12).
     violation_details: list[dict[str, Any]] = field(default_factory=list)
+    pass_details: list[dict[str, Any]] = field(default_factory=list)
     # Non-blocking notes (e.g. an unmapped ticker that fell back to defaults).
     warnings: list[dict[str, Any]] = field(default_factory=list)
     # Whether the approved size was cut below the request by resize enforcement.
@@ -76,6 +78,7 @@ def evaluate_signal_risk(
     }
     violations: list[str] = []
     violation_details: list[dict[str, Any]] = []
+    pass_details: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
 
     def add_violation(
@@ -92,10 +95,20 @@ def evaluate_signal_risk(
             }
         )
 
+    def add_pass(*, metric: str, observed: float, limit: float, direction: str = "<=") -> None:
+        pass_details.append(
+            {
+                "metric": metric,
+                "observed": round(observed, 6),
+                "limit": round(limit, 6),
+                "direction": direction,
+            }
+        )
+
     if not mapped:
         warnings.append(
             {
-                "code": "unmapped_ticker",
+                "code": FailureCode.UNMAPPED_TICKER.value,
                 "message": (
                     f"{ticker} not found in portfolio mapping; using default "
                     f"leverage {leverage:g} and 'unmapped' factor"
@@ -104,10 +117,10 @@ def evaluate_signal_risk(
         )
 
     exposure_codes = {
-        "underlying_exposure": "underlying_exposure_exceeded",
-        "sector_exposure": "sector_exposure_exceeded",
-        "leveraged_etf_value": "leveraged_etf_value_exceeded",
-        "adjusted_gross_exposure": "adjusted_gross_exposure_exceeded",
+        "underlying_exposure": FailureCode.UNDERLYING_EXPOSURE_EXCEEDED.value,
+        "sector_exposure": FailureCode.SECTOR_EXPOSURE_EXCEEDED.value,
+        "leveraged_etf_value": FailureCode.LEVERAGED_ETF_VALUE_EXCEEDED.value,
+        "adjusted_gross_exposure": FailureCode.ADJUSTED_GROSS_EXPOSURE_EXCEEDED.value,
     }
     for name, limit in limits.items():
         if projected[name] > limit:
@@ -118,36 +131,57 @@ def evaluate_signal_risk(
                 limit=limit,
                 metric=name,
             )
+        else:
+            add_pass(metric=name, observed=projected[name], limit=limit)
     for factor in factors:
         key = f"factor:{factor}"
         if projected[key] > settings.max_factor_exposure:
             add_violation(
-                "factor_exposure_exceeded",
+                FailureCode.FACTOR_EXPOSURE_EXCEEDED.value,
                 f"{key} {projected[key]:.1%} > {settings.max_factor_exposure:.1%}",
                 observed=projected[key],
                 limit=settings.max_factor_exposure,
                 metric=key,
             )
+        else:
+            add_pass(
+                metric=key,
+                observed=projected[key],
+                limit=settings.max_factor_exposure,
+            )
     if cash_known and projected["cash_pct"] < settings.min_cash_pct:
         add_violation(
-            "min_cash_breached",
+            FailureCode.MIN_CASH_BREACHED.value,
             f"cash_pct {projected['cash_pct']:.1%} < {settings.min_cash_pct:.1%}",
             observed=projected["cash_pct"],
             limit=settings.min_cash_pct,
             metric="cash_pct",
         )
+    elif cash_known:
+        add_pass(
+            metric="cash_pct",
+            observed=projected["cash_pct"],
+            limit=settings.min_cash_pct,
+            direction=">=",
+        )
     if cash_known and projected["invested_pct"] > settings.max_invested_pct:
         add_violation(
-            "max_invested_exceeded",
+            FailureCode.MAX_INVESTED_EXCEEDED.value,
             f"invested_pct {projected['invested_pct']:.1%} > {settings.max_invested_pct:.1%}",
             observed=projected["invested_pct"],
             limit=settings.max_invested_pct,
             metric="invested_pct",
         )
+    elif cash_known:
+        add_pass(
+            metric="invested_pct",
+            observed=projected["invested_pct"],
+            limit=settings.max_invested_pct,
+        )
     risk_status = portfolio.get("risk_status", {})
     loss_checks = (
-        ("daily_return", settings.daily_loss_limit, "daily_loss_limit_breached"),
-        ("weekly_return", settings.weekly_loss_limit, "weekly_loss_limit_breached"),
+        ("daily_return", settings.daily_loss_limit, FailureCode.DAILY_LOSS_LIMIT_BREACHED.value),
+        ("weekly_return", settings.weekly_loss_limit, FailureCode.WEEKLY_LOSS_LIMIT_BREACHED.value),
     )
     for key, limit, code in loss_checks:
         value = float(risk_status.get(key, 0.0))
@@ -159,14 +193,23 @@ def evaluate_signal_risk(
                 limit=-limit,
                 metric=key,
             )
+        else:
+            add_pass(metric=key, observed=value, limit=-limit, direction=">")
     monthly_drawdown = float(risk_status.get("monthly_drawdown", 0.0))
     if monthly_drawdown >= settings.monthly_mdd_limit:
         add_violation(
-            "monthly_drawdown_breached",
+            FailureCode.MONTHLY_DRAWDOWN_BREACHED.value,
             f"monthly_drawdown {monthly_drawdown:.1%} >= {settings.monthly_mdd_limit:.1%}",
             observed=monthly_drawdown,
             limit=settings.monthly_mdd_limit,
             metric="monthly_drawdown",
+        )
+    else:
+        add_pass(
+            metric="monthly_drawdown",
+            observed=monthly_drawdown,
+            limit=settings.monthly_mdd_limit,
+            direction="<",
         )
     if not violations or settings.enforcement == "warn":
         approved = requested_position_pct
@@ -212,6 +255,7 @@ def evaluate_signal_risk(
         violations=violations,
         projected=projected,
         violation_details=violation_details,
+        pass_details=pass_details,
         warnings=warnings,
         resized=resized,
         mapped=mapped,
@@ -232,7 +276,28 @@ def apply_portfolio_risk(
         is_buy = item.get("action") == SignalAction.BUY.value
         if not is_buy:
             item["eligible"] = False
-            item["risk"] = {"reason": "not_a_buy_signal"}
+            cost_survival = item.get("cost_survival")
+            code = FailureCode.NOT_A_BUY_SIGNAL.value
+            message = "signal action is not buy"
+            if isinstance(cost_survival, dict) and cost_survival.get("survives") is False:
+                if cost_survival.get("checked") is True:
+                    code = FailureCode.COST_FRAGILE.value
+                    message = "strategy does not survive configured trading costs"
+                else:
+                    code = FailureCode.COST_NOT_EVALUATED.value
+                    message = "strategy trading-cost survival was not evaluated"
+            item["risk"] = {
+                "violations": [message],
+                "violation_details": [
+                    {
+                        "code": code,
+                        "message": message,
+                        "metric": "action",
+                        "observed": item.get("action"),
+                        "limit": SignalAction.BUY.value,
+                    }
+                ],
+            }
         else:
             requested = float(item.get("suggested_position_pct", 0.10))
             decision = evaluate_signal_risk(
@@ -277,11 +342,26 @@ def apply_data_trust(
             violations.append(message)
             details.append(
                 {
-                    "code": "unverified_price_data",
+                    "code": FailureCode.UNVERIFIED_PRICE_DATA.value,
                     "message": message,
                     "metric": "price_verified",
                     "observed": False,
                     "limit": True,
+                }
+            )
+            item["eligible"] = False
+            item["approved_position_pct"] = 0.0
+        disagreements = price.get("provider_disagreements")
+        if item.get("action") == SignalAction.BUY.value and disagreements:
+            message = "provider price disagreement exceeded configured tolerance"
+            violations.append(message)
+            details.append(
+                {
+                    "code": FailureCode.DATA_DISAGREEMENT.value,
+                    "message": message,
+                    "metric": "provider_disagreements",
+                    "observed": len(disagreements) if isinstance(disagreements, list) else True,
+                    "limit": 0,
                 }
             )
             item["eligible"] = False
@@ -294,7 +374,7 @@ def apply_data_trust(
                 violations.append(message)
                 details.append(
                     {
-                        "code": "reference_data_conflict",
+                        "code": FailureCode.REFERENCE_DATA_CONFLICT.value,
                         "message": message,
                         "metric": "reference_status",
                         "observed": "conflict",
@@ -304,11 +384,13 @@ def apply_data_trust(
                 item["eligible"] = False
                 item["approved_position_pct"] = 0.0
             else:
-                warnings.append({"code": "reference_data_conflict", "message": message})
+                warnings.append(
+                    {"code": FailureCode.REFERENCE_DATA_CONFLICT.value, "message": message}
+                )
         elif status == "unmapped":
             warnings.append(
                 {
-                    "code": "openfigi_unmapped",
+                    "code": FailureCode.OPENFIGI_UNMAPPED.value,
                     "message": "OpenFIGI returned no mapping for ticker",
                 }
             )
@@ -317,7 +399,7 @@ def apply_data_trust(
             item["risk_notes"] = notes
             warnings.append(
                 {
-                    "code": "event_data_note",
+                    "code": FailureCode.EVENT_DATA_NOTE.value,
                     "message": f"{len(notes)} recent event or news notes attached",
                 }
             )
@@ -327,3 +409,80 @@ def apply_data_trust(
             "event_note_count": len(notes),
         }
     return signals
+
+
+def risk_explanation(signals: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for ticker, signal in signals.items():
+        risk = signal.get("risk") if isinstance(signal, dict) else None
+        risk = risk if isinstance(risk, dict) else {}
+        failed = risk.get("violation_details")
+        passed = risk.get("pass_details")
+        failed_items = (
+            [dict(item) for item in failed if isinstance(item, dict)]
+            if isinstance(failed, list)
+            else []
+        )
+        passed_items = (
+            [dict(item) for item in passed if isinstance(item, dict)]
+            if isinstance(passed, list)
+            else []
+        )
+        failure_codes = {str(item.get("code")) for item in failed_items if item.get("code")}
+        reviewed = (
+            signal.get("action") == SignalAction.BUY.value
+            or FailureCode.COST_FRAGILE.value in failure_codes
+            or FailureCode.COST_NOT_EVALUATED.value in failure_codes
+        )
+        rows.append(
+            {
+                "ticker": ticker,
+                "action": signal.get("action") if isinstance(signal, dict) else None,
+                "reviewed": reviewed,
+                "eligible": bool(signal.get("eligible")) if isinstance(signal, dict) else False,
+                "approved_position_pct": signal.get("approved_position_pct")
+                if isinstance(signal, dict)
+                else None,
+                "passed": passed_items,
+                "failed": [
+                    {
+                        **item,
+                        "excess": _excess(item),
+                    }
+                    for item in failed_items
+                ],
+                "warnings": risk.get("warnings", []),
+            }
+        )
+    reviewed = [row for row in rows if row["reviewed"]]
+    blocked = [row for row in reviewed if not row["eligible"]]
+    return {
+        "signals": rows,
+        "approved_count": len(reviewed) - len(blocked),
+        "blocked_count": len(blocked),
+        "hold_count": len(rows) - len(reviewed),
+        "top_block_reasons": _top_codes(rows),
+    }
+
+
+def _excess(item: dict[str, Any]) -> float | None:
+    observed = item.get("observed")
+    limit = item.get("limit")
+    if isinstance(observed, (int, float)) and isinstance(limit, (int, float)):
+        return round(float(observed) - float(limit), 6)
+    return None
+
+
+def _top_codes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        if not row.get("reviewed"):
+            continue
+        for item in row.get("failed", []):
+            code = str(item.get("code") or "")
+            if code:
+                counts[code] = counts.get(code, 0) + 1
+    return [
+        {"code": code, "count": count}
+        for code, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+    ]

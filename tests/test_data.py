@@ -6,6 +6,7 @@ from jayu.data import (
     DataRequest,
     ProviderCategory,
     TiingoProvider,
+    YahooProvider,
     build_quality_report,
     compare_ohlcv_sources,
     dataframe_sha256,
@@ -98,6 +99,22 @@ def test_compare_ohlcv_sources_records_hash_and_price_disagreement():
     assert report["sources"][0]["ohlcv_hash"] == report["sources"][1]["ohlcv_hash"]
     assert report["agreed"] is False
     assert report["disagreements"][0]["candidate"] == "tiingo"
+    assert report["disagreements"][0]["failure_code"] == "DATA_DISAGREEMENT"
+
+
+def test_compare_ohlcv_sources_records_volume_disagreement():
+    baseline = _price_frame()
+    high_volume = _price_frame()
+    high_volume["Volume"] = [5000.0, 5500.0]
+
+    report = compare_ohlcv_sources(
+        {"yahoo": baseline, "tiingo": high_volume},
+        max_relative_price_delta=0.01,
+        max_relative_volume_delta=0.10,
+    )
+
+    assert report["agreed"] is False
+    assert report["disagreements"][0]["max_relative_volume_delta"] > 0.10
 
 
 def test_tiingo_provider_normalizes_adjusted_daily_response(monkeypatch):
@@ -126,6 +143,20 @@ def test_tiingo_provider_normalizes_adjusted_daily_response(monkeypatch):
     assert list(frame.columns) == ["Open", "High", "Low", "Close", "Volume"]
     assert frame.iloc[0]["Close"] == 101
     assert frame.index.tz is None
+
+
+def test_yahoo_provider_treats_request_end_as_inclusive(monkeypatch):
+    captured = {}
+
+    def fake_download(*args, **kwargs):
+        captured.update(kwargs)
+        return _price_frame()
+
+    monkeypatch.setattr("jayu.data.yf.download", fake_download)
+
+    YahooProvider().fetch(DataRequest("TEST", period="1y", end="2026-01-05"))
+
+    assert captured["end"] == "2026-01-06"
 
 
 def test_cached_service_blocks_provider_disagreement(tmp_path):

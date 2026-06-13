@@ -23,6 +23,7 @@ import numpy as np
 
 # Default round-trip cost levels (in basis points) for the sensitivity sweep.
 DEFAULT_FEE_LEVELS_BPS: tuple[int, ...] = (0, 5, 10, 20, 50)
+DEFAULT_SLIPPAGE_LEVELS_BPS: tuple[int, ...] = (0, 5, 10, 20)
 
 
 def _pre_fee_return_pct(trade: Mapping[str, Any]) -> tuple[float, bool]:
@@ -151,4 +152,57 @@ def cost_sensitivity(
         "position_weighted": fractions is not None,
         "max_survivable_bps": max(survivable) if survivable else None,
         "levels": levels,
+    }
+
+
+def cost_sensitivity_grid(
+    trades: Sequence[Mapping[str, Any]],
+    *,
+    fee_levels_bps: Sequence[int] = DEFAULT_FEE_LEVELS_BPS,
+    slippage_levels_bps: Sequence[int] = DEFAULT_SLIPPAGE_LEVELS_BPS,
+) -> dict[str, Any]:
+    """Sweep fee and additional-slippage combinations.
+
+    ``gross_return_pct`` is already after the backtest's baseline slippage, so
+    the slippage axis represents extra round-trip slippage stress.
+    """
+    pre_fee, has_detail = _pre_fee_returns(trades)
+    if pre_fee.size == 0:
+        return {
+            "trades": 0,
+            "has_cost_detail": False,
+            "slippage_basis": "additional_round_trip_bps",
+            "combinations": [],
+        }
+    fraction_values = [_position_fraction(trade) for trade in trades]
+    fractions = (
+        np.array([value for value in fraction_values], dtype=float)
+        if all(value is not None for value in fraction_values)
+        else None
+    )
+    combinations: list[dict[str, Any]] = []
+    for fee_bps in fee_levels_bps:
+        for slippage_bps in slippage_levels_bps:
+            combined_bps = int(fee_bps) + int(slippage_bps)
+            combined_pct = float(combined_bps) / 100.0
+            net_expectancy = float(np.mean(pre_fee)) - combined_pct
+            combinations.append(
+                {
+                    "fee_round_trip_bps": int(fee_bps),
+                    "additional_slippage_round_trip_bps": int(slippage_bps),
+                    "combined_round_trip_bps": combined_bps,
+                    "net_expectancy_pct": round(net_expectancy, 4),
+                    "total_return_pct": round(
+                        _total_return_pct(pre_fee, combined_pct, fractions),
+                        2,
+                    ),
+                    "survives": net_expectancy > 0,
+                }
+            )
+    return {
+        "trades": int(pre_fee.size),
+        "has_cost_detail": has_detail,
+        "position_weighted": fractions is not None,
+        "slippage_basis": "additional_round_trip_bps",
+        "combinations": combinations,
     }

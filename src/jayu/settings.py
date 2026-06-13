@@ -71,6 +71,7 @@ class ResearchSettings(BaseModel):
     final_lockbox_min_retention: float = Field(default=0.50, ge=0, le=2)
     final_lockbox_require_positive_return: bool = True
     cost_survival_enabled: bool = True
+    cost_survival_buffer_bps: float = Field(default=10.0, ge=0, le=200)
     ga_min_runs: int = Field(default=100, ge=1, le=100_000)
     ga_early_stop_patience: int = Field(default=150, ge=10, le=100_000)
     fitness_version: Literal["v2_daily_equity"] = "v2_daily_equity"
@@ -132,6 +133,7 @@ class DataSettings(BaseModel):
     max_row_count_delta: int = Field(default=2, ge=0, le=100)
     max_index_mismatches: int = Field(default=2, ge=0, le=100)
     max_relative_price_delta: float = Field(default=0.005, ge=0, le=0.25)
+    max_relative_volume_delta: float = Field(default=0.05, ge=0, le=2)
     require_verified_price_for_eligibility: bool = True
     supplemental_providers: list[
         Literal[
@@ -180,6 +182,7 @@ class DataSettings(BaseModel):
 
 class Settings(BaseModel):
     tickers: list[str] = ["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"]
+    mode: Literal["live", "shadow"] = "live"
     initial_capital: float = Field(default=10_000_000, gt=0)
     sim_runs: int = Field(default=500, ge=1, le=100_000)
     transaction_fee: float = Field(default=0.0015, ge=0, le=0.02)

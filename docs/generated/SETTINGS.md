@@ -5,6 +5,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | Field | Type | Default | Constraints |
 |---|---|---|---|
 | `tickers` | `array` | `["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"]` | `{}` |
+| `mode` | `string` | `"live"` | `{"enum": ["live", "shadow"]}` |
 | `initial_capital` | `number` | `10000000` | `{"exclusiveMinimum": 0}` |
 | `sim_runs` | `integer` | `500` | `{"maximum": 100000, "minimum": 1}` |
 | `transaction_fee` | `number` | `0.0015` | `{"maximum": 0.02, "minimum": 0}` |
@@ -52,6 +53,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `data.max_row_count_delta` | `integer` | `2` | `{"maximum": 100, "minimum": 0}` |
 | `data.max_index_mismatches` | `integer` | `2` | `{"maximum": 100, "minimum": 0}` |
 | `data.max_relative_price_delta` | `number` | `0.005` | `{"maximum": 0.25, "minimum": 0}` |
+| `data.max_relative_volume_delta` | `number` | `0.05` | `{"maximum": 2, "minimum": 0}` |
 | `data.require_verified_price_for_eligibility` | `boolean` | `true` | `{}` |
 | `data.supplemental_providers` | `array` | `[]` | `{}` |
 | `data.supplemental_failure_policy` | `string` | `"warn"` | `{"enum": ["warn", "block"]}` |
@@ -82,6 +84,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `research.final_lockbox_min_retention` | `number` | `0.5` | `{"maximum": 2, "minimum": 0}` |
 | `research.final_lockbox_require_positive_return` | `boolean` | `true` | `{}` |
 | `research.cost_survival_enabled` | `boolean` | `true` | `{}` |
+| `research.cost_survival_buffer_bps` | `number` | `10.0` | `{"maximum": 200, "minimum": 0}` |
 | `research.ga_min_runs` | `integer` | `100` | `{"maximum": 100000, "minimum": 1}` |
 | `research.ga_early_stop_patience` | `integer` | `150` | `{"maximum": 100000, "minimum": 10}` |
 | `research.fitness_version` | `string` | `"v2_daily_equity"` | `{}` |

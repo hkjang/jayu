@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,9 @@ from jayu.reports import (
     strategy_attribution,
     trade_cost_stats,
     train_oos_decay,
+    write_cost_sensitivity_report,
     write_html_report,
+    write_shadow_performance_report,
     write_signal_performance_report,
 )
 
@@ -27,8 +30,8 @@ def test_risk_decision_rows_prefers_structured_codes():
             "risk": {
                 "requested_position_pct": 0.10,
                 "violations": ["sector_exposure 65.0% > 50.0%"],
-                "violation_details": [{"code": "sector_exposure_exceeded", "message": "…"}],
-                "warnings": [{"code": "unmapped_ticker", "message": "…"}],
+                "violation_details": [{"code": "SECTOR_EXPOSURE_EXCEEDED", "message": "x"}],
+                "warnings": [{"code": "UNMAPPED_TICKER", "message": "y"}],
                 "resized": False,
                 "mapped": False,
             },
@@ -41,8 +44,8 @@ def test_risk_decision_rows_prefers_structured_codes():
     assert len(rows) == 1
     row = rows[0]
     assert row["ticker"] == "SOXL"
-    assert row["reasons"] == ["sector_exposure_exceeded"]  # structured code preferred
-    assert row["warnings"] == ["unmapped_ticker"]
+    assert row["reasons"] == ["SECTOR_EXPOSURE_EXCEEDED"]  # structured code preferred
+    assert row["warnings"] == ["UNMAPPED_TICKER"]
     assert row["eligible"] is False
 
 
@@ -205,6 +208,152 @@ def test_signal_performance_report_accumulates_and_updates_horizons(tmp_path: Pa
     assert second["cumulative_aggregate"]["1d"] == pytest.approx(0.035)
 
 
+def test_shadow_signal_performance_rows_include_shadow_fields(tmp_path: Path):
+    output = tmp_path / "signal_performance.json"
+    report = write_signal_performance_report(
+        {
+            "SOXL": {
+                "action": "buy",
+                "signal": "entry",
+                "signal_date": "2026-06-01",
+                "shadow_status": "pending",
+                "shadow_reason": "mode=shadow",
+            }
+        },
+        {
+            "SOXL": [
+                {"date": "2026-06-01", "close": 100},
+                {"date": "2026-06-02", "close": 105},
+            ]
+        },
+        output,
+    )
+
+    row = report["rows"][0]
+    assert row["shadow_status"] == "partial"
+    assert row["shadow_reason"] == "awaiting_remaining_horizons"
+    assert row["future_return_1d"] == pytest.approx(0.05)
+
+
+def test_shadow_signal_performance_completes_all_horizons():
+    prices = [{"date": f"2026-06-{day:02d}", "close": 100 + day} for day in range(1, 22)]
+
+    report = post_signal_performance(
+        {
+            "SOXL": {
+                "action": "buy",
+                "signal": "entry",
+                "signal_date": "2026-06-01",
+                "shadow_status": "pending",
+                "shadow_reason": "mode=shadow",
+            }
+        },
+        {"SOXL": prices},
+    )
+
+    row = report["rows"][0]
+    assert row["shadow_status"] == "completed"
+    assert row["shadow_reason"] == "all_horizons_evaluated"
+    assert row["future_return_20d"] is not None
+
+
+def test_future_signal_date_does_not_fall_back_to_old_prices():
+    report = post_signal_performance(
+        {
+            "SOXL": {
+                "action": "buy",
+                "signal": "entry",
+                "signal_date": "2026-07-01",
+                "shadow_status": "pending",
+            }
+        },
+        {
+            "SOXL": [
+                {"date": "2026-06-01", "close": 100},
+                {"date": "2026-06-02", "close": 105},
+            ]
+        },
+    )
+
+    row = report["rows"][0]
+    assert row["error"] == "signal_date_not_in_price_history"
+    assert row["future_return_1d"] is None
+    assert row["shadow_status"] == "pending"
+
+
+def test_shadow_performance_rollup_updates_source_files(tmp_path: Path):
+    shadow_dir = tmp_path / "signals" / "shadow"
+    source = shadow_dir / "2026-06-01.json"
+    atomic_write_json(
+        source,
+        {
+            "SOXL": {
+                "action": "buy",
+                "signal": "entry",
+                "signal_date": "2026-06-01",
+                "shadow_status": "pending",
+                "shadow_reason": "mode=shadow",
+                "future_return_1d": None,
+                "future_return_5d": None,
+                "future_return_20d": None,
+            }
+        },
+    )
+    prices = {"SOXL": [{"date": f"2026-06-{day:02d}", "close": 100 + day} for day in range(1, 22)]}
+
+    report = write_shadow_performance_report(
+        shadow_dir,
+        prices,
+        tmp_path / "state" / "shadow_performance.json",
+    )
+
+    updated = json.loads(source.read_text(encoding="utf-8"))
+    assert report["files_processed"] == 1
+    assert report["history_signal_count"] == 1
+    assert updated["SOXL"]["shadow_status"] == "completed"
+    assert updated["SOXL"]["future_return_20d"] is not None
+
+
+def test_write_cost_sensitivity_report_creates_artifact(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    atomic_write_json(run_dir / "trades" / "SOXL_bull.json", _net_trades())
+
+    report = write_cost_sensitivity_report(run_dir)
+
+    assert (run_dir / "cost_sensitivity.json").exists()
+    assert report["strategy_count"] == 1
+    assert report["strategies"][0]["strategy"] == "SOXL_bull"
+    assert report["strategies"][0]["fee_slippage_grid"]["combinations"]
+
+
+def test_cost_sensitivity_report_does_not_approve_without_evidence(tmp_path: Path):
+    report = write_cost_sensitivity_report(tmp_path / "run")
+
+    assert report["cost_survival_status"] == "not_evaluated"
+
+
+def test_cost_sensitivity_report_rejects_failed_signal_gate(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    atomic_write_json(run_dir / "trades" / "SOXL_bull.json", _net_trades())
+
+    report = write_cost_sensitivity_report(
+        run_dir,
+        current_round_trip_bps=20,
+        approval_buffer_bps=10,
+        signals={
+            "SOXL": {
+                "cost_survival": {
+                    "checked": False,
+                    "survives": False,
+                    "status": "not_evaluated",
+                }
+            }
+        },
+    )
+
+    assert report["cost_survival_status"] == "rejected"
+
+
 def test_write_html_report_includes_equity_svg(tmp_path: Path):
     run_dir = tmp_path / "runs" / "20260613"
     atomic_write_json(
@@ -279,12 +428,33 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
                 "approved_position_pct": 0.0,
                 "risk": {
                     "requested_position_pct": 0.10,
-                    "violation_details": [{"code": "sector_exposure_exceeded", "message": "x"}],
-                    "warnings": [{"code": "unmapped_ticker", "message": "y"}],
+                    "violation_details": [{"code": "SECTOR_EXPOSURE_EXCEEDED", "message": "x"}],
+                    "warnings": [{"code": "UNMAPPED_TICKER", "message": "y"}],
                     "resized": False,
                     "mapped": False,
                 },
             }
+        },
+    )
+    write_cost_sensitivity_report(run_dir)
+    atomic_write_json(
+        run_dir / "risk_explanation.json",
+        {
+            "signals": [
+                {
+                    "ticker": "SOXL",
+                    "eligible": False,
+                    "passed": [{"metric": "cash_pct"}],
+                    "failed": [
+                        {
+                            "code": "SECTOR_EXPOSURE_EXCEEDED",
+                            "observed": 0.6,
+                            "limit": 0.5,
+                            "excess": 0.1,
+                        }
+                    ],
+                }
+            ]
         },
     )
     atomic_write_json(
@@ -321,8 +491,10 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
     assert "Fitness retention" in content
     # The risk-decisions section renders structured block reasons (criterion #12).
     assert "Risk Decisions" in content
-    assert "sector_exposure_exceeded" in content
-    assert "unmapped_ticker" in content
+    assert "SECTOR_EXPOSURE_EXCEEDED" in content
+    assert "UNMAPPED_TICKER" in content
     assert "Data Sources &amp; Quality" in content
     assert "tiingo" in content
     assert "1 provider disagreement reports" in content
+    assert "Cost Sensitivity" in content
+    assert "Risk Explanation" in content

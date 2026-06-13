@@ -35,6 +35,7 @@ from .backtest_core import (
     multi_window_validate as _multi_window_validate,
     oos_fold_returns,
 )
+from .contracts import ensure_contract, validate_trade_log_contract
 from .data import DataRequest, dataframe_sha256
 from .double_oos import (
     LockboxLedger,
@@ -361,8 +362,17 @@ def add_indicators(df):
 
 
 # ── Kelly Criterion 포지션 사이징 ────────────────────────────────
-def _fetch_market_data(data_service, ticker, period):
+def _fetch_market_data(data_service, ticker, period, *, end: str | None = None):
     if data_service is None:
+        if end:
+            return yf.download(
+                ticker,
+                period=period,
+                end=end,
+                auto_adjust=True,
+                progress=False,
+                session=get_yahoo_session(),
+            )
         return yf.download(
             ticker,
             period=period,
@@ -371,7 +381,7 @@ def _fetch_market_data(data_service, ticker, period):
             session=get_yahoo_session(),
         )
     return data_service.fetch(
-        DataRequest(ticker=ticker, period=period, interval="1d", adjusted=True)
+        DataRequest(ticker=ticker, period=period, end=end, interval="1d", adjusted=True)
     )
 
 
@@ -414,6 +424,9 @@ def run(
     notify=False,
     run_context=None,
     require_approved=True,
+    as_of_date: str | None = None,
+    persist_state: bool = True,
+    persist_signal: bool = True,
 ):
     settings = settings or Settings()
     paths = configure(settings, paths)
@@ -438,7 +451,7 @@ def run(
     # VIX 지수 사전 수집
     vix_val = 0.0
     try:
-        vix_df = _fetch_market_data(data_service, "^VIX", "5d")
+        vix_df = _fetch_market_data(data_service, "^VIX", "5d", end=as_of_date)
         if not vix_df.empty:
             vix_val = float(vix_df["Close"].dropna().iloc[-1])
             print(f"  📉 현재 VIX 지수: {vix_val:.2f}")
@@ -449,7 +462,7 @@ def run(
     market_trends = {}
     for index_ticker in benchmarks_for_tickers(TICKERS):
         try:
-            raw_idx = _fetch_market_data(data_service, index_ticker, "5y")
+            raw_idx = _fetch_market_data(data_service, index_ticker, "5y", end=as_of_date)
             if not raw_idx.empty:
                 if isinstance(raw_idx.columns, pd.MultiIndex):
                     raw_idx.columns = raw_idx.columns.get_level_values(0)
@@ -466,7 +479,7 @@ def run(
     gene_pool = migrate_gene_pool(load_json(GENE_POOL_FILE))
     meta = load_json(META_FILE)
 
-    today_results = {}
+    today_results: dict[str, dict[str, dict[str, object]]] = {}
     improved_tickers = []
     df_latest = {}  # 오늘의 신호용
     lockbox_ledger = LockboxLedger(paths.state_dir / "final_lockbox_ledger.json")
@@ -477,7 +490,7 @@ def run(
         ticker_lockbox_split = None
         research_df = None
         try:
-            raw = _fetch_market_data(data_service, ticker, "5y")
+            raw = _fetch_market_data(data_service, ticker, "5y", end=as_of_date)
 
             if raw.empty or len(raw) < 250:
                 print("  ⚠ 데이터 부족")
@@ -784,6 +797,7 @@ def run(
                             target_regime=regime,
                             initial_skip=0,
                         )
+                        ensure_contract("trade_log", validate_trade_log_contract(trade_log))
                         trade_path = run_context.run_dir / "trades" / f"{ticker}_{regime}.json"
                         trade_path.parent.mkdir(parents=True, exist_ok=True)
                         save_json(trade_log, str(trade_path))
@@ -857,17 +871,20 @@ def run(
             round_trip_cost_bps_value=(settings.transaction_fee + settings.slippage)
             * 2.0
             * 10_000.0,
+            cost_survival_buffer_bps=settings.research.cost_survival_buffer_bps,
         )
-        save_json(signals, SIGNAL_FILE)
+        if persist_signal:
+            save_json(signals, SIGNAL_FILE)
     except Exception as e:
         signals = {}
         print(f"  ⚠ 신호 생성 오류: {e}")
 
     # 저장
-    save_json(best_all, BEST_FILE)
-    save_json(history, HISTORY_FILE)
-    save_json(gene_pool, GENE_POOL_FILE)
-    save_json(meta, META_FILE)
+    if persist_state:
+        save_json(best_all, BEST_FILE)
+        save_json(history, HISTORY_FILE)
+        save_json(gene_pool, GENE_POOL_FILE)
+        save_json(meta, META_FILE)
     log = (
         str(run_context.run_dir / "result.json")
         if run_context
