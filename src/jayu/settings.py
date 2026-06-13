@@ -47,6 +47,7 @@ class ExecutionSettings(BaseModel):
     max_slippage: float = Field(default=0.01, ge=0, le=0.10)
     atr_slippage_weight: float = Field(default=0.10, ge=0, le=2)
     participation_impact_weight: float = Field(default=0.15, ge=0, le=2)
+    quoted_spread_bps: float = Field(default=0.0, ge=0, le=100)
 
 
 class ResearchSettings(BaseModel):

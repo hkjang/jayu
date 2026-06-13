@@ -67,6 +67,11 @@ def test_limit_fill_probability_scales_with_penetration():
     assert 0.0 <= deep <= 1.0
 
 
+def test_execution_model_spread_half_rate_defaults_to_zero():
+    # Default keeps quote-aware spread crossing off (back-compatible behaviour).
+    assert ExecutionModel().spread_half_rate == 0.0
+
+
 def test_gap_stop_uses_open_price():
     model = ExecutionModel(path_mode="worst_case")
 

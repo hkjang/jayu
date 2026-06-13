@@ -204,6 +204,7 @@ def configure(settings=None, paths=None):
         max_participation_rate=settings.execution.max_participation_rate,
         fee_model=FixedRateFeeModel(settings.transaction_fee),
         slippage_model=slippage_model,
+        spread_half_rate=settings.execution.quoted_spread_bps / 2.0 / 10_000.0,
     )
     _ACTIVE_RESEARCH = settings.research
     configure_optimizer(top_k=TOP_K)

@@ -38,6 +38,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `execution.max_slippage` | `number` | `0.01` | `{"maximum": 0.1, "minimum": 0}` |
 | `execution.atr_slippage_weight` | `number` | `0.1` | `{"maximum": 2, "minimum": 0}` |
 | `execution.participation_impact_weight` | `number` | `0.15` | `{"maximum": 2, "minimum": 0}` |
+| `execution.quoted_spread_bps` | `number` | `0.0` | `{"maximum": 100, "minimum": 0}` |
 | `research` | `ResearchSettings` | `null` | `{}` |
 | `research.train_months` | `integer` | `18` | `{"maximum": 120, "minimum": 6}` |
 | `research.validation_months` | `integer` | `3` | `{"maximum": 24, "minimum": 1}` |

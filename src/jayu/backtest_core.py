@@ -263,8 +263,13 @@ def backtest(
             order_notional=capital * actual_pos_size,
             average_dollar_volume=dollar_vol_20,
         )
+        # Quote-aware fill: cross half the quoted spread on each side (opt-in;
+        # spread_half_rate defaults to 0, so default runs are unchanged). Folded
+        # into the effective slippage so the gross→net cost bridge stays additive.
+        spread_half = getattr(execution_model, "spread_half_rate", 0.0)
+        effective_slippage = dynamic_slippage + spread_half
 
-        entry = entry_raw * (1.0 + dynamic_slippage)
+        entry = entry_raw * (1.0 + effective_slippage)
 
         # ── 손절/목표 결정 ────────────────────────────────────────
         stop_dist = (atr * p["atr_mult_stop"]) if p["use_atr_stop"] else (entry * p["stop_pct"])
@@ -363,7 +368,7 @@ def backtest(
             exit_price = float(df.iloc[fidx]["Close"])
             exit_idx = fidx
 
-        exit_settled = exit_price * (1.0 - dynamic_slippage)
+        exit_settled = exit_price * (1.0 - effective_slippage)
         fee_rate = execution_model.fee_model.round_trip_cost_rate(entry, exit_settled)
         gross_ret = (exit_settled - entry) / entry
         ret = gross_ret - fee_rate
@@ -398,6 +403,7 @@ def backtest(
                 "fee_cost_pct": round(fee_cost * 100, 4),
                 "fee_rate_pct": round(fee_rate * 100, 4),
                 "slippage_rate_pct": round(dynamic_slippage * 100, 4),
+                "spread_half_rate_pct": round(spread_half * 100, 4),
                 "position_pct": round(actual_pos_size * 100, 4),
                 "capital_before": round(capital_before, 2),
                 "capital_after": round(capital, 2),

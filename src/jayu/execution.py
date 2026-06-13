@@ -88,6 +88,9 @@ class ExecutionModel:
     max_participation_rate: float = 0.0005
     fee_model: FeeModel = FixedRateFeeModel(0.0015)
     slippage_model: SlippageModel = AtrParticipationSlippageModel()
+    # Half of the quoted spread (fraction) crossed on each fill. 0 disables
+    # quote-aware spread crossing, leaving fills driven by slippage alone.
+    spread_half_rate: float = 0.0
 
     def position_size_cap(
         self,
