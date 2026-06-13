@@ -11,6 +11,7 @@ from .execution import (
 from .markets import benchmark_for_ticker
 from .optimizer import fill_missing_params
 from .performance import calc_metrics
+from .sizing import resolve_position_fraction
 from .settings import ResearchSettings, Settings
 from .stat_tests import candidate_selection_bias, probabilistic_sharpe_ratio
 from .strategy_space import infer_strategy_mode
@@ -224,26 +225,15 @@ def backtest(
         entry_idx = i + 1
 
         # ── 포지션 비중 결정 (Kelly + Volatility Sizing) ──────────
-        confidence_score = optional_met / len(optionals) if optionals else 0.6
-        confidence_score = max(0.2, min(confidence_score, 1.0))
-        base_pos_size = p["pos_size"] * confidence_score * p.get("kelly_fraction", 0.50)
-
-        if p.get("use_volatility_sizing", False):
-            atr_pct = (
-                float(row["atr_pct"]) if "atr_pct" in row and row["atr_pct"] > 0 else (atr / close)
-            )
-            atr_mult_stop = (
-                p.get("atr_mult_stop", 2.0)
-                if p["use_atr_stop"]
-                else (p["stop_pct"] / (atr / close))
-            )
-            max_risk = p.get("max_risk_per_trade_pct", 0.015)
-            risk_adjusted_size = max_risk / (atr_mult_stop * atr_pct)
-            actual_pos_size = min(base_pos_size, risk_adjusted_size)
-        else:
-            actual_pos_size = base_pos_size
-
-        actual_pos_size = max(min(actual_pos_size, MAX_POS), 0.05)
+        actual_pos_size = resolve_position_fraction(
+            p,
+            optional_met=optional_met,
+            optional_count=len(optionals),
+            atr=atr,
+            close=close,
+            atr_pct=(float(row["atr_pct"]) if "atr_pct" in row and row["atr_pct"] > 0 else None),
+            max_position=MAX_POS,
+        )
 
         # ── 변동성 및 시장 충격 슬리피지 적용 ─────────────────────
         dollar_vol_20 = (
