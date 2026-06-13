@@ -16,8 +16,8 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `notification_retries` | `integer` | `3` | `{"maximum": 10, "minimum": 1}` |
 | `run_retention_days` | `integer` | `30` | `{"maximum": 3650, "minimum": 1}` |
 | `run_retention_count` | `integer` | `100` | `{"maximum": 10000, "minimum": 1}` |
-| `data_provider` | `string` | `"yahoo"` | `{"enum": ["yahoo", "massive"]}` |
-| `data_fallback_provider` | `string` | `"massive"` | `{"enum": ["none", "yahoo", "massive"]}` |
+| `data_provider` | `string` | `"yahoo"` | `{"enum": ["yahoo", "massive", "tiingo"]}` |
+| `data_fallback_provider` | `string` | `"massive"` | `{"enum": ["none", "yahoo", "massive", "tiingo"]}` |
 | `config_file` | `string | null` | `null` | `{}` |
 | `state_dir` | `string | null` | `null` | `{}` |
 | `signals_dir` | `string | null` | `null` | `{}` |
@@ -26,6 +26,12 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `portfolio_file` | `string | null` | `null` | `{}` |
 | `portfolio_mapping_file` | `string | null` | `null` | `{}` |
 | `massive_api_key` | `string | null` | `null` | `{}` |
+| `tiingo_api_key` | `string | null` | `null` | `{}` |
+| `sec_user_agent` | `string | null` | `null` | `{}` |
+| `fred_api_key` | `string | null` | `null` | `{}` |
+| `openfigi_api_key` | `string | null` | `null` | `{}` |
+| `alpha_vantage_api_key` | `string | null` | `null` | `{}` |
+| `finnhub_api_key` | `string | null` | `null` | `{}` |
 | `kakao_access_token` | `string | null` | `null` | `{}` |
 | `kakao_refresh_token` | `string | null` | `null` | `{}` |
 | `kakao_rest_api_key` | `string | null` | `null` | `{}` |
@@ -39,6 +45,22 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `execution.atr_slippage_weight` | `number` | `0.1` | `{"maximum": 2, "minimum": 0}` |
 | `execution.participation_impact_weight` | `number` | `0.15` | `{"maximum": 2, "minimum": 0}` |
 | `execution.quoted_spread_bps` | `number` | `0.0` | `{"maximum": 100, "minimum": 0}` |
+| `data` | `DataSettings` | `null` | `{}` |
+| `data.cross_validation_providers` | `array` | `[]` | `{}` |
+| `data.minimum_valid_price_sources` | `integer` | `1` | `{"maximum": 3, "minimum": 1}` |
+| `data.price_disagreement_policy` | `string` | `"block"` | `{"enum": ["warn", "block"]}` |
+| `data.max_row_count_delta` | `integer` | `2` | `{"maximum": 100, "minimum": 0}` |
+| `data.max_index_mismatches` | `integer` | `2` | `{"maximum": 100, "minimum": 0}` |
+| `data.max_relative_price_delta` | `number` | `0.005` | `{"maximum": 0.25, "minimum": 0}` |
+| `data.require_verified_price_for_eligibility` | `boolean` | `true` | `{}` |
+| `data.supplemental_providers` | `array` | `[]` | `{}` |
+| `data.supplemental_failure_policy` | `string` | `"warn"` | `{"enum": ["warn", "block"]}` |
+| `data.reference_conflict_policy` | `string` | `"block"` | `{"enum": ["warn", "block"]}` |
+| `data.macro_series` | `array` | `["FEDFUNDS", "DGS10", "DGS2", "CPIAUCSL", "UNRATE", "VIXCLS"]` | `{}` |
+| `data.macro_gate_min_return_retention` | `number` | `0.9` | `{"maximum": 2, "minimum": 0}` |
+| `data.macro_gate_min_positive_fold_ratio` | `number` | `0.5` | `{"maximum": 1, "minimum": 0}` |
+| `data.api_key_env_names` | `object` | `{"alpha_vantage_news": "JAYU_ALPHA_VANTAGE_API_KEY", "finnhub": "JAYU_FINNHUB_API_KEY", "fred": "JAYU_FRED_API_KEY", "massive": "JAYU_MASSIVE_API_KEY", "openfigi": "JAYU_OPENFIGI_API_KEY", "sec_edgar_user_agent": "JAYU_SEC_USER_AGENT", "tiingo": "JAYU_TIINGO_API_KEY"}` | `{}` |
+| `data.provider_policies` | `object` | `null` | `{}` |
 | `research` | `ResearchSettings` | `null` | `{}` |
 | `research.train_months` | `integer` | `18` | `{"maximum": 120, "minimum": 6}` |
 | `research.validation_months` | `integer` | `3` | `{"maximum": 24, "minimum": 1}` |

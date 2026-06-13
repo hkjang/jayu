@@ -247,3 +247,83 @@ def apply_portfolio_risk(
             item["risk"] = decision.to_dict()
         evaluated[ticker] = item
     return evaluated
+
+
+def apply_data_trust(
+    signals: dict[str, dict[str, Any]],
+    *,
+    price_trust: dict[str, dict[str, Any]],
+    reference_audits: dict[str, dict[str, Any]],
+    event_notes: dict[str, list[dict[str, Any]]],
+    require_verified_price: bool,
+    reference_conflict_policy: str,
+) -> dict[str, dict[str, Any]]:
+    for ticker, item in signals.items():
+        ticker_key = ticker.upper()
+        risk = item.setdefault("risk", {})
+        if not isinstance(risk, dict):
+            risk = {"portfolio_risk": risk}
+            item["risk"] = risk
+        violations = risk.setdefault("violations", [])
+        details = risk.setdefault("violation_details", [])
+        warnings = risk.setdefault("warnings", [])
+        price = price_trust.get(ticker_key, {})
+        if (
+            item.get("action") == SignalAction.BUY.value
+            and require_verified_price
+            and price.get("verified") is not True
+        ):
+            message = "price data was not verified by the configured quality policy"
+            violations.append(message)
+            details.append(
+                {
+                    "code": "unverified_price_data",
+                    "message": message,
+                    "metric": "price_verified",
+                    "observed": False,
+                    "limit": True,
+                }
+            )
+            item["eligible"] = False
+            item["approved_position_pct"] = 0.0
+        reference = reference_audits.get(ticker_key, {})
+        status = reference.get("status")
+        if status == "conflict":
+            message = "reference data conflict detected for ticker"
+            if reference_conflict_policy == "block":
+                violations.append(message)
+                details.append(
+                    {
+                        "code": "reference_data_conflict",
+                        "message": message,
+                        "metric": "reference_status",
+                        "observed": "conflict",
+                        "limit": "verified_or_warning",
+                    }
+                )
+                item["eligible"] = False
+                item["approved_position_pct"] = 0.0
+            else:
+                warnings.append({"code": "reference_data_conflict", "message": message})
+        elif status == "unmapped":
+            warnings.append(
+                {
+                    "code": "openfigi_unmapped",
+                    "message": "OpenFIGI returned no mapping for ticker",
+                }
+            )
+        notes = event_notes.get(ticker_key, [])
+        if notes:
+            item["risk_notes"] = notes
+            warnings.append(
+                {
+                    "code": "event_data_note",
+                    "message": f"{len(notes)} recent event or news notes attached",
+                }
+            )
+        risk["data_trust"] = {
+            "price": price,
+            "reference": reference,
+            "event_note_count": len(notes),
+        }
+    return signals

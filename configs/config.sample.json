@@ -13,6 +13,40 @@
   "run_retention_count": 100,
   "data_provider": "yahoo",
   "data_fallback_provider": "massive",
+  "data": {
+    "cross_validation_providers": [],
+    "minimum_valid_price_sources": 1,
+    "price_disagreement_policy": "block",
+    "max_row_count_delta": 2,
+    "max_index_mismatches": 2,
+    "max_relative_price_delta": 0.005,
+    "require_verified_price_for_eligibility": true,
+    "supplemental_providers": [],
+    "supplemental_failure_policy": "warn",
+    "reference_conflict_policy": "block",
+    "macro_series": ["FEDFUNDS", "DGS10", "DGS2", "CPIAUCSL", "UNRATE", "VIXCLS"],
+    "macro_gate_min_return_retention": 0.9,
+    "macro_gate_min_positive_fold_ratio": 0.5,
+    "api_key_env_names": {
+      "tiingo": "JAYU_TIINGO_API_KEY",
+      "massive": "JAYU_MASSIVE_API_KEY",
+      "sec_edgar_user_agent": "JAYU_SEC_USER_AGENT",
+      "fred": "JAYU_FRED_API_KEY",
+      "openfigi": "JAYU_OPENFIGI_API_KEY",
+      "alpha_vantage_news": "JAYU_ALPHA_VANTAGE_API_KEY",
+      "finnhub": "JAYU_FINNHUB_API_KEY"
+    },
+    "provider_policies": {
+      "yahoo": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 60, "cache_ttl_seconds": 14400},
+      "massive": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 60, "cache_ttl_seconds": 14400},
+      "tiingo": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 50, "cache_ttl_seconds": 14400},
+      "sec_edgar": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 600, "cache_ttl_seconds": 86400},
+      "fred": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 120, "cache_ttl_seconds": 86400},
+      "openfigi": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 25, "cache_ttl_seconds": 604800},
+      "alpha_vantage_news": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 5, "cache_ttl_seconds": 900},
+      "finnhub_events": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 30, "cache_ttl_seconds": 900}
+    }
+  },
   "portfolio_mapping_file": "configs/portfolio_mapping.json",
   "execution": {
     "path_mode": "worst_case",

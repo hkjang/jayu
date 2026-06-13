@@ -14,8 +14,6 @@ from .artifacts import RunContext
 from .data import (
     CachedMarketDataService,
     MarketDataProvider,
-    MassiveProvider,
-    YahooProvider,
 )
 from .io import atomic_write_json, read_json
 from .monitoring import classify_failure, prune_runs, update_health
@@ -28,6 +26,14 @@ from .portfolio import (
     unmapped_ticker_report,
 )
 from .portfolio_build import build_portfolio_csv
+from .provider_factory import (
+    build_provider_registry,
+    collect_supplemental_data,
+    price_provider_sequence,
+    provider_configuration_audit,
+    provider_policy,
+)
+from .provider_core import ProviderCategory, ProviderRegistry
 from .paths import RuntimePaths
 from .registry import ExperimentRegistry
 from .reports import (
@@ -35,7 +41,7 @@ from .reports import (
     write_html_report,
     write_signal_performance_report,
 )
-from .risk import apply_portfolio_risk
+from .risk import apply_data_trust, apply_portfolio_risk
 from .risk_ledger import record_portfolio_snapshot
 from .settings import Settings, load_settings
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
@@ -67,28 +73,39 @@ def _data_service(
     paths: RuntimePaths,
     context: RunContext,
     refresh: bool,
+    provider_registry: ProviderRegistry,
 ):
-    providers: list[MarketDataProvider] = []
-    massive_key = settings.massive_api_key.get_secret_value() if settings.massive_api_key else None
-    if settings.data_provider == "yahoo":
-        providers.append(YahooProvider())
-    elif massive_key:
-        providers.append(MassiveProvider(massive_key))
-    else:
-        raise ValueError("massive data provider requires JAYU_MASSIVE_API_KEY")
-    if (
-        settings.data_fallback_provider != "none"
-        and settings.data_fallback_provider != settings.data_provider
-    ):
-        if settings.data_fallback_provider == "yahoo":
-            providers.append(YahooProvider())
-        elif massive_key:
-            providers.append(MassiveProvider(massive_key))
+    providers, unavailable = price_provider_sequence(settings, provider_registry)
+    for name in unavailable:
+        context.record_data_source(
+            {
+                "provider": name,
+                "category": ProviderCategory.PRICE.value,
+                "status": "failed",
+                "error": "provider credentials are not configured",
+            }
+        )
+    primary_policy = provider_policy(settings, settings.data_provider)
+    price_policies = {
+        provider.name: provider_policy(settings, provider.name) for provider in providers
+    }
     service = CachedMarketDataService(
         paths.cache_dir,
-        providers,
+        cast(list[MarketDataProvider], providers),
         run_context=context,
+        retries=primary_policy.retries,
         refresh_all=refresh,
+        cross_validate=bool(settings.data.cross_validation_providers),
+        minimum_valid_sources=settings.data.minimum_valid_price_sources,
+        disagreement_policy=settings.data.price_disagreement_policy,
+        max_row_count_delta=settings.data.max_row_count_delta,
+        max_index_mismatches=settings.data.max_index_mismatches,
+        max_relative_price_delta=settings.data.max_relative_price_delta,
+        cache_ttl_seconds=primary_policy.cache_ttl_seconds,
+        provider_retries={name: policy.retries for name, policy in price_policies.items()},
+        provider_rate_limits_per_minute={
+            name: policy.rate_limit_per_minute for name, policy in price_policies.items()
+        },
     )
     return service
 
@@ -97,6 +114,7 @@ def _apply_risk(
     settings: Settings,
     paths: RuntimePaths,
     signals: dict[str, dict[str, Any]],
+    context: RunContext,
 ) -> dict[str, dict[str, Any]]:
     if not paths.portfolio_file.exists():
         for signal in signals.values():
@@ -105,29 +123,38 @@ def _apply_risk(
                 signal["risk"] = {
                     "violations": ["portfolio file unavailable; risk cannot be evaluated"]
                 }
-        return signals
-    mapping = load_portfolio_mapping(paths.portfolio_mapping_file)
-    fx_rates = get_fx_rates(["USD", "EUR", "JPY", "HKD"])
-    portfolio = portfolio_summary(
-        load_portfolio(
-            paths.portfolio_file,
-            fx_rates["USD"],
-            mapping=mapping,
-            fx_rates=fx_rates,
-        ),
-        account_value_krw=settings.account_value_krw,
-        cash_balance_krw=settings.cash_balance_krw,
+        evaluated = signals
+    else:
+        mapping = load_portfolio_mapping(paths.portfolio_mapping_file)
+        fx_rates = get_fx_rates(["USD", "EUR", "JPY", "HKD"])
+        portfolio = portfolio_summary(
+            load_portfolio(
+                paths.portfolio_file,
+                fx_rates["USD"],
+                mapping=mapping,
+                fx_rates=fx_rates,
+            ),
+            account_value_krw=settings.account_value_krw,
+            cash_balance_krw=settings.cash_balance_krw,
+        )
+        atomic_write_json(
+            paths.state_dir / "portfolio_unmapped_tickers.json",
+            unmapped_ticker_report(portfolio),
+        )
+        portfolio["risk_status"] = record_portfolio_snapshot(
+            paths.state_dir / "portfolio_snapshots.jsonl",
+            account_value_krw=float(portfolio["account_value_krw"]),
+            cash_balance_krw=float(portfolio["cash_balance_krw"]),
+        )
+        evaluated = apply_portfolio_risk(signals, portfolio, settings.risk, mapping=mapping)
+    return apply_data_trust(
+        evaluated,
+        price_trust=context.price_trust,
+        reference_audits=context.reference_audits,
+        event_notes=context.event_notes,
+        require_verified_price=settings.data.require_verified_price_for_eligibility,
+        reference_conflict_policy=settings.data.reference_conflict_policy,
     )
-    atomic_write_json(
-        paths.state_dir / "portfolio_unmapped_tickers.json",
-        unmapped_ticker_report(portfolio),
-    )
-    portfolio["risk_status"] = record_portfolio_snapshot(
-        paths.state_dir / "portfolio_snapshots.jsonl",
-        account_value_krw=float(portfolio["account_value_krw"]),
-        cash_balance_krw=float(portfolio["cash_balance_krw"]),
-    )
-    return apply_portfolio_risk(signals, portfolio, settings.risk, mapping=mapping)
 
 
 def _best_fitness(best_all: dict[str, Any]) -> float | None:
@@ -143,6 +170,17 @@ def _best_fitness(best_all: dict[str, Any]) -> float | None:
                 if isinstance(value, (int, float)):
                     values.append(float(value))
     return max(values) if values else None
+
+
+def _failed_market_tickers(settings: Settings, context: RunContext) -> list[str]:
+    successful = {
+        str(report.get("ticker"))
+        for report in context.data_reports.values()
+        if report.get("valid")
+        and report.get("price_usable")
+        and report.get("ticker") in settings.tickers
+    }
+    return sorted(set(settings.tickers) - successful)
 
 
 def _run_engine(
@@ -178,16 +216,30 @@ def _run_engine(
     registry = ExperimentRegistry(paths.state_dir / "experiments.sqlite")
     registry.start(context)
     try:
+        provider_registry = build_provider_registry(settings, paths.cache_dir)
+        collect_supplemental_data(settings, provider_registry, context)
         best_all, _, improved, signals = engine.run(
             settings,
             paths,
-            data_service=_data_service(settings, paths, context, refresh_data),
+            data_service=_data_service(
+                settings,
+                paths,
+                context,
+                refresh_data,
+                provider_registry,
+            ),
             optimize=optimize,
             notify=False,
             run_context=context,
             require_approved=True,
         )
-        signals = _apply_risk(settings, paths, signals)
+        failed_market_tickers = _failed_market_tickers(settings, context)
+        if failed_market_tickers:
+            raise RuntimeError(
+                "market data provider failed verification for requested tickers: "
+                + ", ".join(failed_market_tickers)
+            )
+        signals = _apply_risk(settings, paths, signals, context)
         atomic_write_json(paths.signal_file, signals)
         risk_signal_path = context.run_dir / "signals_risk.json"
         atomic_write_json(risk_signal_path, signals)
@@ -201,11 +253,7 @@ def _run_engine(
                 )
             )
             atomic_write_json(context.run_dir / "notification.json", notification_result)
-        successful_tickers = {
-            str(report.get("ticker"))
-            for report in context.data_reports.values()
-            if report.get("valid") and report.get("ticker") in settings.tickers
-        }
+        successful_tickers = set(settings.tickers)
         summary = {
             "run_id": context.run_id,
             "random_seed": settings.random_seed,
@@ -273,11 +321,19 @@ def validate_config(
 ) -> None:
     settings, paths = _load(config)
     strategy_space_audit = validate_strategy_spaces(load_strategy_spaces())
+    provider_registry = build_provider_registry(settings, paths.cache_dir)
+    provider_audit = provider_configuration_audit(settings, provider_registry)
+    if not provider_audit["valid"]:
+        raise ValueError(
+            "provider configuration is invalid: "
+            + "; ".join(str(error) for error in provider_audit["errors"])
+        )
     typer.echo(json.dumps(settings.public_dict(), ensure_ascii=False, indent=2))
     typer.echo(
         json.dumps(
             {
                 "strategy_space_audit": strategy_space_audit,
+                "provider_audit": provider_audit,
                 "survivorship_audit": audit_survivorship(settings).to_dict(),
             },
             ensure_ascii=False,

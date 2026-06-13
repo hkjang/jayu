@@ -448,6 +448,21 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         decay_rows = train_oos_decay(result_data["results"])
     risk_signals = read_json(run_dir / "signals_risk.json", default={})
     risk_rows = risk_decision_rows(risk_signals) if isinstance(risk_signals, Mapping) else []
+    data_sources_payload = read_json(run_dir / "data_sources.json", default={})
+    data_sources = (
+        data_sources_payload.get("sources", [])
+        if isinstance(data_sources_payload, Mapping)
+        and isinstance(data_sources_payload.get("sources"), list)
+        else []
+    )
+    disagreement_payload = read_json(run_dir / "provider_disagreement_report.json", default={})
+    disagreements = (
+        disagreement_payload.get("disagreements", [])
+        if isinstance(disagreement_payload, Mapping)
+        and isinstance(disagreement_payload.get("disagreements"), list)
+        else []
+    )
+    quality_reports = manifest_data.get("data_reports", {})
     rows = [
         ("run_id", manifest_data.get("run_id")),
         ("status", manifest_data.get("status")),
@@ -602,6 +617,40 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         if risk_rows
         else ""
     )
+    data_source_rows = "\n".join(
+        "<tr>"
+        f"<td>{_cell(row.get('category'))}</td>"
+        f"<td>{_cell(row.get('provider'))}</td>"
+        f"<td>{_cell(row.get('ticker') or row.get('symbol'))}</td>"
+        f"<td>{_cell(row.get('status'))}</td>"
+        f"<td>{_cell(row.get('rows'))}</td>"
+        f"<td>{_cell(row.get('first_date'))}</td>"
+        f"<td>{_cell(row.get('last_date'))}</td>"
+        f"<td>{_cell(row.get('hash'))}</td>"
+        f"<td>{_cell(row.get('error'))}</td>"
+        "</tr>"
+        for row in data_sources
+        if isinstance(row, Mapping)
+    )
+    quality_valid = 0
+    quality_total = 0
+    if isinstance(quality_reports, Mapping):
+        for report in quality_reports.values():
+            if isinstance(report, Mapping):
+                quality_total += 1
+                quality_valid += int(report.get("valid") is True)
+    data_section = (
+        f"""<h2>Data Sources &amp; Quality</h2>
+  <p>{quality_valid}/{quality_total} canonical datasets passed OHLCV quality checks;
+  {len(disagreements)} provider disagreement reports were recorded.</p>
+  <table>
+    <tr><th>Category</th><th>Provider</th><th>Symbol</th><th>Status</th>
+        <th>Rows</th><th>First</th><th>Last</th><th>Hash</th><th>Error</th></tr>
+    {data_source_rows}
+  </table>"""
+        if data_sources or quality_total
+        else ""
+    )
     content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -621,6 +670,7 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
   <table>{html_rows}</table>
   <h2>Equity Curves</h2>
   {graph_blocks or "<p>No equity curve artifacts found.</p>"}
+  {data_section}
   {validation_section}
   {risk_section}
   {decay_section}

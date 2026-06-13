@@ -209,7 +209,31 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
     run_dir = tmp_path / "runs" / "20260613"
     atomic_write_json(
         run_dir / "manifest.json",
-        {"run_id": "20260613", "status": "success", "result": {"signal_count": 2}},
+        {
+            "run_id": "20260613",
+            "status": "success",
+            "result": {"signal_count": 2},
+            "data_reports": {"SOXL": {"valid": True}},
+        },
+    )
+    atomic_write_json(
+        run_dir / "data_sources.json",
+        {
+            "sources": [
+                {
+                    "category": "price",
+                    "provider": "tiingo",
+                    "ticker": "SOXL",
+                    "status": "success",
+                    "rows": 100,
+                    "hash": "abc",
+                }
+            ]
+        },
+    )
+    atomic_write_json(
+        run_dir / "provider_disagreement_report.json",
+        {"disagreements": [{"ticker": "SOXL"}]},
     )
     atomic_write_json(
         run_dir / "equity" / "SOXL_bull.json",
@@ -299,3 +323,6 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
     assert "Risk Decisions" in content
     assert "sector_exposure_exceeded" in content
     assert "unmapped_ticker" in content
+    assert "Data Sources &amp; Quality" in content
+    assert "tiingo" in content
+    assert "1 provider disagreement reports" in content

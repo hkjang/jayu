@@ -85,6 +85,11 @@ class RunContext:
     survivorship_audit: dict[str, Any]
     data_reports: dict[str, dict[str, Any]] = field(default_factory=dict)
     data_hashes: dict[str, str] = field(default_factory=dict)
+    data_sources: list[dict[str, Any]] = field(default_factory=list)
+    provider_disagreements: list[dict[str, Any]] = field(default_factory=list)
+    price_trust: dict[str, dict[str, Any]] = field(default_factory=dict)
+    reference_audits: dict[str, dict[str, Any]] = field(default_factory=dict)
+    event_notes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     artifacts: list[str] = field(default_factory=list)
 
     @classmethod
@@ -122,7 +127,19 @@ class RunContext:
         atomic_write_json(run_dir / "config.json", public_config)
         atomic_write_json(run_dir / "environment.json", context.environment)
         atomic_write_json(run_dir / "survivorship.json", survivorship)
+        atomic_write_json(run_dir / "data_sources.json", {"sources": []})
+        atomic_write_json(
+            run_dir / "provider_disagreement_report.json",
+            {"disagreements": []},
+        )
+        atomic_write_json(
+            run_dir / "data_trust.json",
+            {"price": {}, "reference": {}, "events": {}},
+        )
         context.record_artifact(run_dir / "survivorship.json")
+        context.record_artifact(run_dir / "data_sources.json")
+        context.record_artifact(run_dir / "provider_disagreement_report.json")
+        context.record_artifact(run_dir / "data_trust.json")
         context.write_manifest(status="running")
         return context
 
@@ -139,6 +156,42 @@ class RunContext:
 
     def record_artifact(self, path: Path) -> None:
         self.artifacts.append(str(path.relative_to(self.run_dir)))
+
+    def record_data_source(self, record: dict[str, Any]) -> None:
+        self.data_sources.append(record)
+        path = self.run_dir / "data_sources.json"
+        atomic_write_json(path, {"sources": self.data_sources})
+        self.record_artifact(path)
+
+    def record_provider_disagreement(self, report: dict[str, Any]) -> None:
+        self.provider_disagreements.append(report)
+        path = self.run_dir / "provider_disagreement_report.json"
+        atomic_write_json(path, {"disagreements": self.provider_disagreements})
+        self.record_artifact(path)
+
+    def record_price_trust(self, ticker: str, report: dict[str, Any]) -> None:
+        self.price_trust[ticker.upper()] = report
+        self._write_data_trust()
+
+    def _write_data_trust(self) -> None:
+        path = self.run_dir / "data_trust.json"
+        atomic_write_json(
+            path,
+            {
+                "price": self.price_trust,
+                "reference": self.reference_audits,
+                "events": self.event_notes,
+            },
+        )
+        self.record_artifact(path)
+
+    def record_reference_audit(self, ticker: str, report: dict[str, Any]) -> None:
+        self.reference_audits[ticker.upper()] = report
+        self._write_data_trust()
+
+    def record_event_notes(self, ticker: str, notes: list[dict[str, Any]]) -> None:
+        self.event_notes[ticker.upper()] = notes
+        self._write_data_trust()
 
     def write_manifest(
         self,
@@ -161,6 +214,11 @@ class RunContext:
             "environment": self.environment,
             "survivorship_audit": self.survivorship_audit,
             "data_reports": self.data_reports,
+            "data_sources": self.data_sources,
+            "provider_disagreements": self.provider_disagreements,
+            "price_trust": self.price_trust,
+            "reference_audits": self.reference_audits,
+            "event_notes": self.event_notes,
             "artifacts": sorted(set(self.artifacts)),
             "data_hashes": self.data_hashes,
             "result": result,

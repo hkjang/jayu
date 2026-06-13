@@ -95,6 +95,89 @@ class UniverseSettings(BaseModel):
     policy: Literal["warn", "strict"] = "warn"
 
 
+class ProviderPolicySettings(BaseModel):
+    enabled: bool = True
+    timeout_seconds: float = Field(default=20.0, gt=0, le=300)
+    retries: int = Field(default=3, ge=1, le=10)
+    rate_limit_per_minute: int = Field(default=60, ge=1, le=60_000)
+    cache_ttl_seconds: int = Field(default=14_400, ge=0, le=31_536_000)
+
+
+def _default_provider_policies() -> dict[str, ProviderPolicySettings]:
+    return {
+        "yahoo": ProviderPolicySettings(rate_limit_per_minute=60, cache_ttl_seconds=14_400),
+        "massive": ProviderPolicySettings(rate_limit_per_minute=60, cache_ttl_seconds=14_400),
+        "tiingo": ProviderPolicySettings(rate_limit_per_minute=50, cache_ttl_seconds=14_400),
+        "sec_edgar": ProviderPolicySettings(
+            rate_limit_per_minute=600,
+            cache_ttl_seconds=86_400,
+        ),
+        "fred": ProviderPolicySettings(rate_limit_per_minute=120, cache_ttl_seconds=86_400),
+        "openfigi": ProviderPolicySettings(rate_limit_per_minute=25, cache_ttl_seconds=604_800),
+        "alpha_vantage_news": ProviderPolicySettings(
+            rate_limit_per_minute=5,
+            cache_ttl_seconds=900,
+        ),
+        "finnhub_events": ProviderPolicySettings(
+            rate_limit_per_minute=30,
+            cache_ttl_seconds=900,
+        ),
+    }
+
+
+class DataSettings(BaseModel):
+    cross_validation_providers: list[Literal["yahoo", "massive", "tiingo"]] = []
+    minimum_valid_price_sources: int = Field(default=1, ge=1, le=3)
+    price_disagreement_policy: Literal["warn", "block"] = "block"
+    max_row_count_delta: int = Field(default=2, ge=0, le=100)
+    max_index_mismatches: int = Field(default=2, ge=0, le=100)
+    max_relative_price_delta: float = Field(default=0.005, ge=0, le=0.25)
+    require_verified_price_for_eligibility: bool = True
+    supplemental_providers: list[
+        Literal[
+            "sec_edgar",
+            "fred",
+            "openfigi",
+            "alpha_vantage_news",
+            "finnhub_events",
+        ]
+    ] = []
+    supplemental_failure_policy: Literal["warn", "block"] = "warn"
+    reference_conflict_policy: Literal["warn", "block"] = "block"
+    macro_series: list[str] = [
+        "FEDFUNDS",
+        "DGS10",
+        "DGS2",
+        "CPIAUCSL",
+        "UNRATE",
+        "VIXCLS",
+    ]
+    macro_gate_min_return_retention: float = Field(default=0.90, ge=0, le=2)
+    macro_gate_min_positive_fold_ratio: float = Field(default=0.50, ge=0, le=1)
+    api_key_env_names: dict[str, str] = {
+        "tiingo": "JAYU_TIINGO_API_KEY",
+        "massive": "JAYU_MASSIVE_API_KEY",
+        "sec_edgar_user_agent": "JAYU_SEC_USER_AGENT",
+        "fred": "JAYU_FRED_API_KEY",
+        "openfigi": "JAYU_OPENFIGI_API_KEY",
+        "alpha_vantage_news": "JAYU_ALPHA_VANTAGE_API_KEY",
+        "finnhub": "JAYU_FINNHUB_API_KEY",
+    }
+    provider_policies: dict[str, ProviderPolicySettings] = Field(
+        default_factory=_default_provider_policies
+    )
+
+    @field_validator("cross_validation_providers")
+    @classmethod
+    def unique_validation_providers(
+        cls,
+        value: list[Literal["yahoo", "massive", "tiingo"]],
+    ) -> list[Literal["yahoo", "massive", "tiingo"]]:
+        if len(value) != len(set(value)):
+            raise ValueError("cross_validation_providers must not contain duplicates")
+        return value
+
+
 class Settings(BaseModel):
     tickers: list[str] = ["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"]
     initial_capital: float = Field(default=10_000_000, gt=0)
@@ -108,8 +191,8 @@ class Settings(BaseModel):
     notification_retries: int = Field(default=3, ge=1, le=10)
     run_retention_days: int = Field(default=30, ge=1, le=3650)
     run_retention_count: int = Field(default=100, ge=1, le=10_000)
-    data_provider: Literal["yahoo", "massive"] = "yahoo"
-    data_fallback_provider: Literal["none", "yahoo", "massive"] = "massive"
+    data_provider: Literal["yahoo", "massive", "tiingo"] = "yahoo"
+    data_fallback_provider: Literal["none", "yahoo", "massive", "tiingo"] = "massive"
     config_file: Path | None = None
     state_dir: Path | None = None
     signals_dir: Path | None = None
@@ -118,11 +201,18 @@ class Settings(BaseModel):
     portfolio_file: Path | None = None
     portfolio_mapping_file: Path | None = None
     massive_api_key: SecretStr | None = None
+    tiingo_api_key: SecretStr | None = None
+    sec_user_agent: SecretStr | None = None
+    fred_api_key: SecretStr | None = None
+    openfigi_api_key: SecretStr | None = None
+    alpha_vantage_api_key: SecretStr | None = None
+    finnhub_api_key: SecretStr | None = None
     kakao_access_token: SecretStr | None = None
     kakao_refresh_token: SecretStr | None = None
     kakao_rest_api_key: SecretStr | None = None
     kakao_client_secret: SecretStr | None = None
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
+    data: DataSettings = Field(default_factory=DataSettings)
     research: ResearchSettings = Field(default_factory=ResearchSettings)
     universe: UniverseSettings = Field(default_factory=UniverseSettings)
     risk: RiskSettings = Field(default_factory=RiskSettings)
@@ -153,6 +243,12 @@ class Settings(BaseModel):
         data = self.model_dump(mode="json")
         for key in (
             "massive_api_key",
+            "tiingo_api_key",
+            "sec_user_agent",
+            "fred_api_key",
+            "openfigi_api_key",
+            "alpha_vantage_api_key",
+            "finnhub_api_key",
             "kakao_access_token",
             "kakao_refresh_token",
             "kakao_rest_api_key",

@@ -1,4 +1,4 @@
-from jayu.risk import apply_portfolio_risk, evaluate_signal_risk
+from jayu.risk import apply_data_trust, apply_portfolio_risk, evaluate_signal_risk
 from jayu.settings import RiskSettings
 
 
@@ -118,3 +118,30 @@ def test_account_loss_limit_blocks_new_buy():
 
     assert decision.eligible is False
     assert any("daily_return" in item for item in decision.violations)
+
+
+def test_unverified_price_and_reference_conflict_block_eligible_signal():
+    signals = {
+        "TEST": {
+            "signal": "entry",
+            "action": "buy",
+            "eligible": True,
+            "approved_position_pct": 0.1,
+            "risk": {},
+        }
+    }
+
+    result = apply_data_trust(
+        signals,
+        price_trust={"TEST": {"verified": False}},
+        reference_audits={"TEST": {"status": "conflict"}},
+        event_notes={"TEST": [{"code": "recent_news"}]},
+        require_verified_price=True,
+        reference_conflict_policy="block",
+    )
+
+    assert result["TEST"]["eligible"] is False
+    assert result["TEST"]["approved_position_pct"] == 0
+    codes = {item["code"] for item in result["TEST"]["risk"]["violation_details"]}
+    assert {"unverified_price_data", "reference_data_conflict"} <= codes
+    assert result["TEST"]["risk_notes"] == [{"code": "recent_news"}]

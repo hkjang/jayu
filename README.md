@@ -16,6 +16,12 @@ uv run jayu validate-config
 
 ```powershell
 $env:JAYU_MASSIVE_API_KEY = "..."
+$env:JAYU_TIINGO_API_KEY = "..."
+$env:JAYU_SEC_USER_AGENT = "Jayu research contact@example.com"
+$env:JAYU_FRED_API_KEY = "..."
+$env:JAYU_OPENFIGI_API_KEY = "..."
+$env:JAYU_ALPHA_VANTAGE_API_KEY = "..."
+$env:JAYU_FINNHUB_API_KEY = "..."
 $env:JAYU_KAKAO_ACCESS_TOKEN = "..."
 $env:JAYU_KAKAO_REFRESH_TOKEN = "..."
 $env:JAYU_KAKAO_REST_API_KEY = "..."
@@ -61,6 +67,8 @@ docker run --rm -v ${PWD}\state:/app/state -v ${PWD}\signals:/app/signals -v ${P
 | `src/jayu/signal_generation.py` | 예 | 당일 신호 생성과 action schema 적용 |
 | `src/jayu/optimizer.py` | 예 | GA 파라미터 샘플링/변이/교차 |
 | `src/jayu/legacy_adapter.py` | 예 | 구버전 상태 JSON 마이그레이션 |
+| `src/jayu/provider_core.py` | 예 | provider category registry, HTTP 정책, JSON 캐시 |
+| `src/jayu/supplemental_data.py` | 예 | SEC, FRED, OpenFIGI, 뉴스·이벤트 point-in-time 수집 |
 | `configs/config.sample.json` | 예 | 설정 예시 |
 | `configs/portfolio_mapping.json` | 예 | 포트폴리오 티커, 통화, 섹터, 팩터, 레버리지 매핑 |
 | `configs/strategy_spaces/` | 예 | 전략 모드별 탐색 공간 |
@@ -68,9 +76,9 @@ docker run --rm -v ${PWD}\state:/app/state -v ${PWD}\signals:/app/signals -v ${P
 | `state/` | 아니오 | 전략 상태, 실험 DB, health, 토큰, 위험 스냅샷 |
 | `signals/` | 아니오 | 최신 당일 신호 |
 | `runs/<run_id>/` | 아니오 | 실행 설정, 환경, 데이터 품질, 결과, JSONL 로그 |
-| `data/cache/` | 아니오 | 요청별 Parquet OHLCV 캐시와 해시 |
+| `data/cache/` | 아니오 | OHLCV Parquet와 공시·거시·뉴스·기준정보 JSON 캐시 |
 
-실행 ID에는 시각, 명령, 티커, seed가 포함됩니다. `manifest.json`과 `state/experiments.sqlite`에는 Git 커밋과 dirty 여부, 설정 해시, seed, Python 및 패키지 버전, 데이터 해시, 결과 또는 실패 코드가 기록됩니다. 승인 후보의 표준 거래 로그는 `trades/`, 일별 equity curve는 `equity/`에 저장됩니다.
+실행 ID에는 시각, 명령, 티커, seed가 포함됩니다. `manifest.json`과 `state/experiments.sqlite`에는 Git 커밋과 dirty 여부, 설정 해시, seed, Python 및 패키지 버전, 데이터 해시, 결과 또는 실패 코드가 기록됩니다. `data_sources.json`은 provider별 성공·실패·기간·행 수·해시를, `provider_disagreement_report.json`은 가격 불일치를 기록합니다. 승인 후보의 표준 거래 로그는 `trades/`, 일별 equity curve는 `equity/`에 저장됩니다.
 
 ## 전략 공간
 
@@ -92,7 +100,27 @@ docker run --rm -v ${PWD}\state:/app/state -v ${PWD}\signals:/app/signals -v ${P
 - 시가가 손절가를 갭 하락하면 손절가가 아니라 시가로 청산합니다.
 - 주문 크기는 평균 거래대금 참여율 제한을 받습니다.
 - 수수료와 슬리피지는 독립 모델이며 슬리피지는 고정 또는 ATR·참여율 기반으로 선택합니다.
-- Yahoo 데이터는 Parquet로 캐시하며 공급자, 기간, 품질 보고서와 OHLCV 해시를 실행별로 저장합니다.
+- Yahoo, Massive, Tiingo 일봉은 같은 `DataRequest`와 OHLCV 스키마를 사용합니다.
+- `data.cross_validation_providers`를 설정하면 행 수, 날짜 인덱스, OHLCV 상대 오차와 해시를 비교합니다. `price_disagreement_policy=block`에서는 불일치 데이터를 canonical 캐시나 운영 신호에 사용하지 않습니다.
+- 가격은 Parquet로 캐시하며 현재 provider 검증 정책과 캐시 정책 서명이 다르면 다시 수집합니다.
+- SEC facts는 CIK 매핑과 submissions의 acceptance time을 결합해 저장하며 발표 전 값은 point-in-time 조회에서 제외합니다.
+- FRED는 initial-release vintage를 발표 가능일 기준으로 거래일에 forward fill하고, 거시 regime은 별도 OOS gate를 통과해야 전략 조건으로 승격할 수 있습니다.
+- OpenFIGI 충돌은 기본적으로 신호를 차단하며, Alpha Vantage·Finnhub 뉴스·내부자·실적 이벤트는 매수 조건이 아니라 `risk_notes`로만 첨부합니다.
+- 요청 티커 중 검증된 가격 데이터가 하나라도 없으면 CLI 실행은 `DATA_FAILURE`로 종료됩니다.
+
+Tiingo 교차검증을 활성화하려면 환경변수를 설정한 뒤 다음 값을 사용합니다.
+
+```json
+{
+  "data": {
+    "cross_validation_providers": ["tiingo"],
+    "minimum_valid_price_sources": 2,
+    "price_disagreement_policy": "block"
+  }
+}
+```
+
+보조 데이터는 `data.supplemental_providers`에 `sec_edgar`, `fred`, `openfigi`, `alpha_vantage_news`, `finnhub_events`를 선택해 활성화합니다. provider별 `timeout_seconds`, `retries`, `rate_limit_per_minute`, `cache_ttl_seconds`는 `data.provider_policies`에서 조정합니다.
 
 ## 연구 검증
 
@@ -123,7 +151,7 @@ docker run --rm -v ${PWD}\state:/app/state -v ${PWD}\signals:/app/signals -v ${P
 
 각 실행 디렉터리에는 `report.html`, `parameter_importance.json`, `trades/`, `equity/`가 생성됩니다.
 
-- `report.html`: 실행 요약, OOS 승인·PSR·DSR·PBO, final lockbox 유지율, 순비용 성과, equity curve SVG, 파라미터 중요도
+- `report.html`: 실행 요약, 데이터 출처·품질·provider 불일치, OOS 승인·PSR·DSR·PBO, final lockbox 유지율, 순비용 성과, equity curve SVG, 파라미터 중요도
 - `parameter_importance.json`: GA 결과에서 파라미터별 fitness 분산 요약
 - `report signal-performance`: 실전 신호와 사후 가격 데이터를 비교해 1일, 5일, 20일 성과를 계산하고, 신호 ID별 이력을 중복 없이 누적·갱신
 
