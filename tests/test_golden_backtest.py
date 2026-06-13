@@ -97,6 +97,6 @@ def test_backtest_golden_snapshot():
     # strategy or fill logic changes (constraint #5). Do not "fix" by editing.
     assert len(trades) == 41
     assert final_capital == pytest.approx(10_483_818.51, abs=0.01)
-    assert sequence_hash == "248af2c0bbaf7579"
+    assert sequence_hash == "248af2c0bbaf7579"  # pragma: allowlist secret
     assert trades[0]["net_return_pct"] == pytest.approx(2.0755, abs=1e-4)
     assert trades[-1]["net_return_pct"] == pytest.approx(10.6698, abs=1e-4)

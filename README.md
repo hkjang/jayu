@@ -33,12 +33,15 @@ $env:JAYU_KAKAO_CLIENT_SECRET = "..."
 ```powershell
 uv run jayu simulate --ticker SOXL --runs 500 --seed 42
 uv run jayu signal --date today --seed 42
+uv run jayu signal --date 2026-06-12 --replay --seed 42
 uv run jayu notify --channel kakao
 uv run jayu portfolio build
 uv run jayu portfolio analyze --details
 uv run jayu report build --run runs/<run_id>
 uv run jayu report signal-performance --price-json tests/fixtures/signal_prices.json
+uv run jayu report shadow-performance --price-json tests/fixtures/signal_prices.json
 uv run jayu experiments --limit 20
+uv run jayu experiments compare --left <RUN_ID> --right <RUN_ID> --output comparison.json
 uv run jayu validate-config
 ```
 

@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .costs import breakeven_transaction_cost, cost_sensitivity
+from .costs import breakeven_transaction_cost, cost_sensitivity, cost_sensitivity_grid
 from .io import atomic_write_json, read_json, stable_hash
 from .performance import cost_bridge
 from .stat_tests import probabilistic_sharpe_ratio
@@ -169,6 +169,78 @@ def trade_cost_stats(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def write_cost_sensitivity_report(
+    run_dir: Path,
+    *,
+    current_round_trip_bps: float | None = None,
+    approval_buffer_bps: float = 10.0,
+    signals: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    target_bps = (
+        current_round_trip_bps + approval_buffer_bps if current_round_trip_bps is not None else 20.0
+    )
+    for path in sorted((run_dir / "trades").glob("*.json")):
+        trades = read_json(path, default=[])
+        if not isinstance(trades, list):
+            continue
+        trade_rows = [dict(trade) for trade in trades if isinstance(trade, Mapping)]
+        fee_levels = sorted({0, 5, 10, 20, 50, int(round(target_bps))})
+        report = cost_sensitivity(trade_rows, fee_levels_bps=fee_levels)
+        grid = cost_sensitivity_grid(
+            trade_rows,
+            fee_levels_bps=fee_levels,
+            slippage_levels_bps=(0, 5, 10, 20),
+        )
+        rows.append(
+            {
+                "strategy": path.stem,
+                "trade_log": str(path.relative_to(run_dir)),
+                "fee_slippage_grid": grid,
+                **report,
+            }
+        )
+    fragile = [
+        row
+        for row in rows
+        if row.get("trades", 0)
+        and not any(
+            isinstance(level, Mapping)
+            and level.get("round_trip_bps") == int(round(target_bps))
+            and level.get("survives") is True
+            for level in row.get("levels", [])
+        )
+    ]
+    signal_gates = []
+    if signals:
+        for ticker, signal in signals.items():
+            gate = signal.get("cost_survival")
+            if isinstance(gate, Mapping):
+                signal_gates.append({"ticker": ticker, **dict(gate)})
+    rejected_signal_gates = [gate for gate in signal_gates if gate.get("survives") is not True]
+    evaluated_rows = [row for row in rows if row.get("trades", 0)]
+    has_evidence = bool(evaluated_rows or signal_gates)
+    if fragile or rejected_signal_gates:
+        status = "rejected"
+    elif has_evidence:
+        status = "approved"
+    else:
+        status = "not_evaluated"
+    payload = {
+        "strategies": rows,
+        "strategy_count": len(rows),
+        "fragile_strategy_count": len(fragile),
+        "current_round_trip_bps": current_round_trip_bps,
+        "approval_buffer_bps": approval_buffer_bps,
+        "approval_round_trip_bps": target_bps,
+        "signal_gates": signal_gates,
+        "cost_survival_status": status,
+        "fragile_strategies": [row.get("strategy") for row in fragile],
+    }
+    atomic_write_json(run_dir / "cost_sensitivity.json", payload)
+    return payload
+
+
 def risk_decision_rows(signals: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Flatten per-signal risk decisions for display (criterion #12, report side).
 
@@ -264,6 +336,33 @@ def train_oos_decay(results: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _shadow_outcome_fields(
+    signal: Mapping[str, Any],
+    returns: Mapping[str, float | None],
+) -> dict[str, Any]:
+    is_shadow = signal.get("shadow_status") is not None or signal.get("shadow_reason") is not None
+    if not is_shadow:
+        return {}
+    values = [returns.get("1d"), returns.get("5d"), returns.get("20d")]
+    available = sum(value is not None for value in values)
+    if available == len(values):
+        status = "completed"
+        reason = "all_horizons_evaluated"
+    elif available:
+        status = "partial"
+        reason = "awaiting_remaining_horizons"
+    else:
+        status = "pending"
+        reason = "awaiting_future_prices"
+    return {
+        "shadow_status": status,
+        "shadow_reason": reason,
+        "future_return_1d": returns.get("1d"),
+        "future_return_5d": returns.get("5d"),
+        "future_return_20d": returns.get("20d"),
+    }
+
+
 def post_signal_performance(
     signals: Mapping[str, Mapping[str, Any]],
     price_history: Mapping[str, Sequence[Mapping[str, Any]]],
@@ -285,7 +384,11 @@ def post_signal_performance(
                 "action": action,
             }
         )
-        prices = list(price_history.get(ticker, []))
+        prices = sorted(
+            price_history.get(ticker, []),
+            key=lambda row: str(row.get("date", "")),
+        )
+        empty_returns = {f"{horizon}d": None for horizon in horizons}
         if len(prices) < 2:
             rows.append(
                 {
@@ -293,10 +396,12 @@ def post_signal_performance(
                     "ticker": ticker,
                     "signal_date": signal_date,
                     "error": "not_enough_prices",
+                    "returns": empty_returns,
+                    **_shadow_outcome_fields(signal, empty_returns),
                 }
             )
             continue
-        start_index = 0
+        start_index: int | None = 0
         if signal_date:
             start_index = next(
                 (
@@ -304,8 +409,20 @@ def post_signal_performance(
                     for index, row in enumerate(prices)
                     if str(row.get("date", "")) >= str(signal_date)
                 ),
-                0,
+                None,
             )
+        if start_index is None:
+            rows.append(
+                {
+                    "signal_id": signal_id,
+                    "ticker": ticker,
+                    "signal_date": signal_date,
+                    "error": "signal_date_not_in_price_history",
+                    "returns": empty_returns,
+                    **_shadow_outcome_fields(signal, empty_returns),
+                }
+            )
+            continue
         start_price = float(prices[start_index].get("close", 0.0))
         horizon_returns: dict[str, float | None] = {}
         for horizon in horizons:
@@ -321,6 +438,7 @@ def post_signal_performance(
                 "ticker": ticker,
                 "signal_date": signal_date,
                 "returns": horizon_returns,
+                **_shadow_outcome_fields(signal, horizon_returns),
             }
         )
     aggregate: dict[str, float] = {}
@@ -360,6 +478,36 @@ def _aggregate_signal_rows(
     return aggregate
 
 
+def _survives_cost(row: Mapping[str, Any], bps: int) -> bool:
+    levels = row.get("levels")
+    if not isinstance(levels, Sequence) or isinstance(levels, (str, bytes)):
+        return False
+    for level in levels:
+        if (
+            isinstance(level, Mapping)
+            and level.get("round_trip_bps") == bps
+            and level.get("survives") is True
+        ):
+            return True
+    return False
+
+
+def _risk_failed_summary(row: Mapping[str, Any]) -> str:
+    failed = row.get("failed")
+    if not isinstance(failed, Sequence) or isinstance(failed, (str, bytes)):
+        return ""
+    parts = []
+    for item in failed:
+        if not isinstance(item, Mapping):
+            continue
+        code = item.get("code")
+        observed = item.get("observed")
+        limit = item.get("limit")
+        excess = item.get("excess")
+        parts.append(f"{code} observed={observed} limit={limit} excess={excess}")
+    return "; ".join(parts)
+
+
 def _merge_signal_history(
     existing: Sequence[Mapping[str, Any]],
     latest: Sequence[Mapping[str, Any]],
@@ -389,7 +537,9 @@ def _merge_signal_history(
             for key in set(previous_returns) | set(latest_returns)
         }
         merged_row = {**previous, **dict(row), "returns": combined_returns}
-        if latest_returns:
+        shadow_source = merged_row if isinstance(merged_row, Mapping) else row
+        merged_row.update(_shadow_outcome_fields(shadow_source, combined_returns))
+        if any(value is not None for value in latest_returns.values()):
             merged_row.pop("error", None)
         merged[signal_id] = merged_row
     return sorted(
@@ -418,6 +568,65 @@ def write_signal_performance_report(
     return report
 
 
+def write_shadow_performance_report(
+    shadow_dir: Path,
+    price_history: Mapping[str, Sequence[Mapping[str, Any]]],
+    output_path: Path,
+) -> dict[str, Any]:
+    latest_rows: list[dict[str, Any]] = []
+    files_processed = 0
+    for path in sorted(shadow_dir.glob("*.json")):
+        payload = read_json(path, default={})
+        if not isinstance(payload, Mapping):
+            continue
+        signals = {
+            str(ticker): signal for ticker, signal in payload.items() if isinstance(signal, Mapping)
+        }
+        report = post_signal_performance(signals, price_history)
+        rows = report.get("rows", [])
+        if not isinstance(rows, list):
+            continue
+        row_by_ticker = {str(row.get("ticker")): row for row in rows if isinstance(row, Mapping)}
+        updated_payload: dict[str, Any] = {}
+        for ticker, signal in payload.items():
+            item = dict(signal) if isinstance(signal, Mapping) else signal
+            outcome = row_by_ticker.get(str(ticker))
+            if isinstance(item, dict) and isinstance(outcome, Mapping):
+                for key in (
+                    "shadow_status",
+                    "shadow_reason",
+                    "future_return_1d",
+                    "future_return_5d",
+                    "future_return_20d",
+                ):
+                    if key in outcome:
+                        item[key] = outcome[key]
+            updated_payload[str(ticker)] = item
+        atomic_write_json(path, updated_payload)
+        latest_rows.extend(dict(row) for row in rows if isinstance(row, Mapping))
+        files_processed += 1
+
+    existing = read_json(output_path, default={})
+    existing_history = (
+        existing.get("history_rows", [])
+        if isinstance(existing, Mapping) and isinstance(existing.get("history_rows"), list)
+        else []
+    )
+    history = _merge_signal_history(existing_history, latest_rows)
+    report = {
+        "basis": "gross_no_costs",
+        "files_processed": files_processed,
+        "signals_evaluated": len(latest_rows),
+        "aggregate": _aggregate_signal_rows(latest_rows),
+        "rows": latest_rows,
+        "history_rows": history,
+        "history_signal_count": len(history),
+        "cumulative_aggregate": _aggregate_signal_rows(history),
+    }
+    atomic_write_json(output_path, report)
+    return report
+
+
 def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) -> Path:
     manifest_data = dict(manifest or read_json(run_dir / "manifest.json", default={}) or {})
     result = manifest_data.get("result") if isinstance(manifest_data.get("result"), Mapping) else {}
@@ -442,12 +651,32 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         trades = read_json(path, default=[])
         if isinstance(trades, list) and trades:
             cost_rows.append((path.stem, trade_cost_stats(trades)))
+    cost_sensitivity_payload = read_json(run_dir / "cost_sensitivity.json", default={})
+    cost_sensitivity_rows = (
+        cost_sensitivity_payload.get("strategies", [])
+        if isinstance(cost_sensitivity_payload, Mapping)
+        and isinstance(cost_sensitivity_payload.get("strategies"), list)
+        else []
+    )
+    approval_cost_bps = (
+        cost_sensitivity_payload.get("approval_round_trip_bps")
+        if isinstance(cost_sensitivity_payload, Mapping)
+        else None
+    )
+    approval_cost_bps = approval_cost_bps if isinstance(approval_cost_bps, (int, float)) else 20
     result_data = read_json(run_dir / "result.json", default={})
     decay_rows: list[dict[str, Any]] = []
     if isinstance(result_data, Mapping) and isinstance(result_data.get("results"), Mapping):
         decay_rows = train_oos_decay(result_data["results"])
     risk_signals = read_json(run_dir / "signals_risk.json", default={})
     risk_rows = risk_decision_rows(risk_signals) if isinstance(risk_signals, Mapping) else []
+    risk_explanation_payload = read_json(run_dir / "risk_explanation.json", default={})
+    risk_explanation_rows = (
+        risk_explanation_payload.get("signals", [])
+        if isinstance(risk_explanation_payload, Mapping)
+        and isinstance(risk_explanation_payload.get("signals"), list)
+        else []
+    )
     data_sources_payload = read_json(run_dir / "data_sources.json", default={})
     data_sources = (
         data_sources_payload.get("sources", [])
@@ -537,6 +766,27 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         if cost_rows
         else ""
     )
+    sensitivity_table_rows = "\n".join(
+        "<tr>"
+        f"<td>{_cell(row.get('strategy'))}</td>"
+        f"<td>{_cell(row.get('trades'))}</td>"
+        f"<td>{_cell(row.get('max_survivable_bps'))}</td>"
+        f"<td>{_cell('ok' if _survives_cost(row, int(round(approval_cost_bps))) else 'fragile')}</td>"
+        "</tr>"
+        for row in cost_sensitivity_rows
+        if isinstance(row, Mapping)
+    )
+    sensitivity_section = (
+        f"""<h2>Cost Sensitivity</h2>
+  <p>Strategies must survive modest round-trip cost increases before operational approval.</p>
+  <table>
+    <tr><th>Strategy</th><th>Trades</th><th>Max survivable bps</th>
+        <th>{approval_cost_bps:g} bps approval status</th></tr>
+    {sensitivity_table_rows}
+  </table>"""
+        if cost_sensitivity_rows
+        else ""
+    )
     validation_table_rows = "\n".join(
         "<tr>"
         f"<td>{html.escape(ticker)}</td>"
@@ -617,6 +867,26 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         if risk_rows
         else ""
     )
+    explanation_rows = "\n".join(
+        "<tr>"
+        f"<td>{_cell(row.get('ticker'))}</td>"
+        f"<td>{'eligible' if row.get('eligible') else 'blocked'}</td>"
+        f"<td>{_cell(len(row.get('passed', [])) if isinstance(row.get('passed'), list) else 0)}</td>"
+        f"<td>{_cell(_risk_failed_summary(row))}</td>"
+        "</tr>"
+        for row in risk_explanation_rows
+        if isinstance(row, Mapping)
+    )
+    explanation_section = (
+        f"""<h2>Risk Explanation</h2>
+  <p>Human-readable summary of passed checks, failed checks, limits, current values, and excess.</p>
+  <table>
+    <tr><th>Ticker</th><th>Status</th><th>Passed checks</th><th>Failed checks</th></tr>
+    {explanation_rows}
+  </table>"""
+        if risk_explanation_rows
+        else ""
+    )
     data_source_rows = "\n".join(
         "<tr>"
         f"<td>{_cell(row.get('category'))}</td>"
@@ -636,7 +906,7 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
     quality_total = 0
     if isinstance(quality_reports, Mapping):
         for report in quality_reports.values():
-            if isinstance(report, Mapping):
+            if isinstance(report, Mapping) and report.get("ticker"):
                 quality_total += 1
                 quality_valid += int(report.get("valid") is True)
     data_section = (
@@ -673,8 +943,10 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
   {data_section}
   {validation_section}
   {risk_section}
+  {explanation_section}
   {decay_section}
   {cost_section}
+  {sensitivity_section}
   <h2>Parameter Importance</h2>
   <table>
     <tr><th>Parameter</th><th>Importance</th><th>Best Value</th><th>Samples</th></tr>

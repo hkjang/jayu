@@ -1,4 +1,9 @@
-from jayu.risk import apply_data_trust, apply_portfolio_risk, evaluate_signal_risk
+from jayu.risk import (
+    apply_data_trust,
+    apply_portfolio_risk,
+    evaluate_signal_risk,
+    risk_explanation,
+)
 from jayu.settings import RiskSettings
 
 
@@ -52,7 +57,7 @@ def test_violation_details_carry_codes_and_numbers():
     # Same number of structured details as legacy strings, with stable codes.
     assert len(decision.violation_details) == len(decision.violations)
     codes = {detail["code"] for detail in decision.violation_details}
-    assert "sector_exposure_exceeded" in codes
+    assert "SECTOR_EXPOSURE_EXCEEDED" in codes
     for detail in decision.violation_details:
         assert {"code", "message", "metric", "observed", "limit"} <= detail.keys()
 
@@ -70,7 +75,7 @@ def test_daily_loss_emits_structured_code():
     decision = evaluate_signal_risk("TSLA", 0.05, portfolio, RiskSettings())
 
     codes = {detail["code"] for detail in decision.violation_details}
-    assert "daily_loss_limit_breached" in codes
+    assert "DAILY_LOSS_LIMIT_BREACHED" in codes
 
 
 def test_resize_enforcement_sets_resized_flag():
@@ -101,7 +106,7 @@ def test_unmapped_ticker_is_flagged_as_warning():
     decision = evaluate_signal_risk("ZZZZ", 0.05, portfolio, RiskSettings())
 
     assert decision.mapped is False
-    assert any(warning["code"] == "unmapped_ticker" for warning in decision.warnings)
+    assert any(warning["code"] == "UNMAPPED_TICKER" for warning in decision.warnings)
 
 
 def test_account_loss_limit_blocks_new_buy():
@@ -143,5 +148,53 @@ def test_unverified_price_and_reference_conflict_block_eligible_signal():
     assert result["TEST"]["eligible"] is False
     assert result["TEST"]["approved_position_pct"] == 0
     codes = {item["code"] for item in result["TEST"]["risk"]["violation_details"]}
-    assert {"unverified_price_data", "reference_data_conflict"} <= codes
+    assert {"UNVERIFIED_PRICE_DATA", "REFERENCE_DATA_CONFLICT"} <= codes
     assert result["TEST"]["risk_notes"] == [{"code": "recent_news"}]
+
+
+def test_provider_disagreement_blocks_even_when_verified_price_not_required():
+    signals = {
+        "TEST": {
+            "signal": "entry",
+            "action": "buy",
+            "eligible": True,
+            "approved_position_pct": 0.1,
+            "risk": {},
+        }
+    }
+
+    result = apply_data_trust(
+        signals,
+        price_trust={"TEST": {"verified": True, "provider_disagreements": [{"x": 1}]}},
+        reference_audits={},
+        event_notes={},
+        require_verified_price=False,
+        reference_conflict_policy="warn",
+    )
+
+    assert result["TEST"]["eligible"] is False
+    codes = {item["code"] for item in result["TEST"]["risk"]["violation_details"]}
+    assert "DATA_DISAGREEMENT" in codes
+
+
+def test_risk_explanation_does_not_count_hold_as_failed_review():
+    report = risk_explanation(
+        {
+            "HOLD": {
+                "signal": "wait",
+                "action": "hold",
+                "eligible": False,
+                "risk": {"violation_details": [{"code": "NOT_A_BUY_SIGNAL", "message": "not buy"}]},
+            },
+            "BUY": {
+                "signal": "entry",
+                "action": "buy",
+                "eligible": True,
+                "risk": {"pass_details": [{"metric": "cash_pct"}]},
+            },
+        }
+    )
+
+    assert report["approved_count"] == 1
+    assert report["blocked_count"] == 0
+    assert report["hold_count"] == 1

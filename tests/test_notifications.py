@@ -54,6 +54,27 @@ def test_signal_message_is_truncated_with_detail_pointer():
     assert "signals/today_signals.json" in message
 
 
+def test_signal_message_summarizes_blocks_and_low_health():
+    message = build_signal_message(
+        {
+            "SOXL": {
+                "signal": "entry",
+                "action": "buy",
+                "eligible": False,
+                "risk": {
+                    "violation_details": [{"code": "DATA_DISAGREEMENT", "message": "bad data"}]
+                },
+            },
+            "TSLA": {"signal": "entry", "action": "buy", "eligible": True},
+        },
+        health_score=45,
+    )
+
+    assert "Approved: 1 | Blocked: 1" in message
+    assert "Warning: health score is low (45/100)" in message
+    assert "DATA_DISAGREEMENT(1)" in message
+
+
 def test_kakao_retries_with_exponential_backoff_and_records_failure(tmp_path):
     settings = Settings(
         kakao_access_token="token",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 
-from jayu.monitoring import classify_failure, prune_runs, update_health
+from jayu.monitoring import classify_failure, compute_health_score, prune_runs, update_health
 
 
 def test_prune_runs_keeps_newest_count(tmp_path):
@@ -35,4 +35,41 @@ def test_health_tracks_last_success_and_failure(tmp_path):
 
     assert health["last_success"]["run_id"] == "ok"
     assert health["last_failure"]["failure_code"] == "DATA_FAILURE"
+    assert 0 <= health["health_score"] <= 100
+    assert health["health_score"] < health["last_success"]["health_score"]
+    assert health["health_components"]
     assert classify_failure(RuntimeError("market data download failed")) == "DATA_FAILURE"
+    assert (
+        classify_failure(RuntimeError("DATA_CONTRACT_FAILED: signal_dataframe"))
+        == "DATA_CONTRACT_FAILED"
+    )
+
+
+def test_health_score_penalizes_recent_failure_after_recovery():
+    now = datetime(2026, 6, 13, 12, tzinfo=UTC)
+    recent = {
+        "timestamp": (now - timedelta(hours=2)).isoformat(),
+        "failure_code": "DATA_FAILURE",
+    }
+    old = {
+        "timestamp": (now - timedelta(days=2)).isoformat(),
+        "failure_code": "DATA_FAILURE",
+    }
+
+    recent_score = compute_health_score(
+        status="success",
+        summary={"signal_count": 2, "risk_status": "passed"},
+        failure_code=None,
+        previous_failure=recent,
+        now=now,
+    )
+    old_score = compute_health_score(
+        status="success",
+        summary={"signal_count": 2, "risk_status": "passed"},
+        failure_code=None,
+        previous_failure=old,
+        now=now,
+    )
+
+    assert recent_score == 90
+    assert old_score == 100

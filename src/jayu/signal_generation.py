@@ -28,33 +28,44 @@ def round_trip_cost_bps(settings: Settings | None = None) -> float:
     return (settings.transaction_fee + settings.slippage) * 2.0 * 10_000.0
 
 
-def cost_survival_gate(data: dict[str, Any] | None, round_trip_bps: float) -> dict[str, Any]:
+def cost_survival_gate(
+    data: dict[str, Any] | None,
+    round_trip_bps: float,
+    *,
+    buffer_bps: float = 10.0,
+) -> dict[str, Any]:
     """Does the strategy's backtested edge survive the real round-trip cost?
 
     Reads ``max_survivable_bps`` from the strategy's stored metrics (the
     cost-sensitivity sweep added to :func:`jayu.performance.calc_metrics`). When
-    that metric is absent the gate is permissive (``survives=True``) so legacy
-    strategies without the new analytics are never blocked.
+    A missing metric is not sufficient evidence for operational approval.
     """
     metrics = data.get("metrics") if isinstance(data, dict) else None
     metrics = metrics if isinstance(metrics, dict) else {}
     max_survivable = metrics.get("max_survivable_bps")
     breakeven = metrics.get("breakeven_round_trip_bps")
     breakeven_value = float(breakeven) if isinstance(breakeven, (int, float)) else None
+    required_bps = round_trip_bps + buffer_bps
     if not isinstance(max_survivable, (int, float)):
         return {
             "checked": False,
             "round_trip_bps": round(round_trip_bps, 2),
+            "buffer_bps": round(buffer_bps, 2),
+            "required_round_trip_bps": round(required_bps, 2),
             "max_survivable_bps": None,
             "breakeven_round_trip_bps": breakeven_value,
-            "survives": True,
+            "survives": False,
+            "status": "not_evaluated",
         }
     return {
         "checked": True,
         "round_trip_bps": round(round_trip_bps, 2),
+        "buffer_bps": round(buffer_bps, 2),
+        "required_round_trip_bps": round(required_bps, 2),
         "max_survivable_bps": float(max_survivable),
         "breakeven_round_trip_bps": breakeven_value,
-        "survives": float(max_survivable) >= round_trip_bps,
+        "survives": float(max_survivable) >= required_bps,
+        "status": "approved" if float(max_survivable) >= required_bps else "rejected",
     }
 
 
@@ -86,6 +97,7 @@ def check_today_signals(
     require_selection_bias=True,
     require_cost_survival=False,
     round_trip_cost_bps_value=None,
+    cost_survival_buffer_bps=10.0,
 ):
     """현재 데이터 기준 진입 조건 충족 여부 (VIX, 시장 지수, 거래대금 필터 포함)"""
     best_all = migrate_json_structure(best_all)
@@ -143,10 +155,12 @@ def check_today_signals(
         p = fill_missing_params(data["params"])
 
         # ── 비용 생존 게이트: 백테스트 엣지가 실제 왕복비용을 견디는가 ──
-        cost_survival = cost_survival_gate(data, cost_bps)
-        cost_blocked = (
-            require_cost_survival and cost_survival["checked"] and not cost_survival["survives"]
+        cost_survival = cost_survival_gate(
+            data,
+            cost_bps,
+            buffer_bps=cost_survival_buffer_bps,
         )
+        cost_blocked = require_cost_survival and not cost_survival["survives"]
 
         # 시장 모멘텀 필터 검사
         market_ok = True
@@ -263,9 +277,14 @@ def check_today_signals(
                 f"{format_market_notional(ticker, float(row['dollar_volume_ma20']))})"
             )
         elif cost_blocked:
+            max_survivable = cost_survival["max_survivable_bps"]
             signal_desc = (
-                f"🔴 대기 (비용 미생존: 견딤 {cost_survival['max_survivable_bps']:.0f}bp "
-                f"< 왕복 {cost_survival['round_trip_bps']:.0f}bp)"
+                "🔴 대기 (비용 검증 없음)"
+                if max_survivable is None
+                else (
+                    f"🔴 대기 (비용 미생존: 견딤 {max_survivable:.0f}bp "
+                    f"< 승인 {cost_survival['required_round_trip_bps']:.0f}bp)"
+                )
             )
         else:
             signal_desc = "🟢 진입 검토" if all_ok else "🔴 대기"

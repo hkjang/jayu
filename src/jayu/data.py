@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -13,6 +13,8 @@ import requests
 import yfinance as yf
 
 from .artifacts import RunContext
+from .contracts import validate_ohlcv_contract
+from .failure_codes import FailureCode
 from .io import atomic_write_json, file_sha256, read_json, stable_hash
 from .provider_core import ProviderCategory
 from .yahoo import get_yahoo_session
@@ -64,6 +66,7 @@ class DataQualityReport:
     warnings: list[str]
     provider_disagreements: list[dict[str, Any]] = field(default_factory=list)
     provider_sources: list[dict[str, Any]] = field(default_factory=list)
+    contract_violations: list[dict[str, Any]] = field(default_factory=list)
     price_verified: bool = False
     price_usable: bool = False
 
@@ -89,7 +92,11 @@ class YahooProvider:
             "progress": False,
         }
         if request.start or request.end:
-            kwargs.update(start=request.start, end=request.end)
+            start, end = _request_date_range(request)
+            # yfinance treats ``end`` as exclusive while Jayu's DataRequest
+            # contract treats it as an inclusive as-of date.
+            yahoo_end = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
+            kwargs.update(start=start, end=yahoo_end)
         else:
             kwargs["period"] = request.period or "2y"
         frame = yf.download(
@@ -111,14 +118,7 @@ class MassiveProvider:
     def fetch(self, request: DataRequest) -> pd.DataFrame:
         if request.interval != "1d":
             raise ValueError("MassiveProvider currently supports daily data only")
-        end = request.end or date.today().isoformat()
-        start = request.start
-        if not start:
-            period = request.period or "2y"
-            quantity = int(period[:-1])
-            unit = period[-1]
-            days = quantity * 366 if unit == "y" else quantity * 31 if unit == "m" else quantity
-            start = (datetime.now().date() - timedelta(days=days)).isoformat()
+        start, end = _request_date_range(request)
         url = f"https://api.massive.com/v2/aggs/ticker/{request.ticker}/range/1/day/{start}/{end}"
         params: dict[str, str | int] = {
             "adjusted": str(request.adjusted).lower(),
@@ -200,7 +200,8 @@ def _request_date_range(request: DataRequest) -> tuple[str, str]:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"unsupported period: {period}") from exc
     days = quantity * 366 if unit == "y" else quantity * 31 if unit == "m" else quantity
-    return (datetime.now().date() - timedelta(days=days)).isoformat(), end
+    end_date = date.fromisoformat(end)
+    return (end_date - timedelta(days=days)).isoformat(), end
 
 
 def normalize_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
@@ -273,6 +274,9 @@ def build_quality_report(
         warnings.append("OHLCV index is not monotonic increasing")
     if invalid_volume_rows:
         warnings.append(f"{invalid_volume_rows} rows have negative volume")
+    contract_violations = validate_ohlcv_contract(usable)
+    if contract_violations:
+        warnings.append(FailureCode.DATA_CONTRACT_FAILED.value)
     valid = (
         not usable.empty
         and not missing_columns
@@ -282,6 +286,7 @@ def build_quality_report(
         and duplicate_index_count == 0
         and not non_monotonic_index
         and not any(null_counts.values())
+        and not contract_violations
     )
     return DataQualityReport(
         ticker=request.ticker,
@@ -299,6 +304,7 @@ def build_quality_report(
         adjusted=request.adjusted,
         valid=valid,
         warnings=warnings,
+        contract_violations=contract_violations,
     )
 
 
@@ -308,6 +314,7 @@ def compare_ohlcv_sources(
     max_row_count_delta: int = 2,
     max_index_mismatches: int = 2,
     max_relative_price_delta: float = 0.005,
+    max_relative_volume_delta: float = 0.05,
 ) -> dict[str, Any]:
     names = list(frames)
     sources = [
@@ -337,24 +344,36 @@ def compare_ohlcv_sources(
         row_count_delta = abs(len(baseline) - len(candidate))
         common = baseline.index.intersection(candidate.index)
         max_relative_delta = 0.0
+        max_relative_volume_delta_observed = 0.0
         if len(common):
             left = baseline.loc[common, ["Open", "High", "Low", "Close"]].astype(float)
             right = candidate.loc[common, ["Open", "High", "Low", "Close"]].astype(float)
             denominator = left.abs().clip(lower=1e-12)
             max_relative_delta = float(((left - right).abs() / denominator).max().max())
+            left_volume = baseline.loc[common, "Volume"].astype(float).abs().clip(lower=1.0)
+            right_volume = candidate.loc[common, "Volume"].astype(float)
+            max_relative_volume_delta_observed = float(
+                (
+                    (baseline.loc[common, "Volume"].astype(float) - right_volume).abs()
+                    / left_volume
+                ).max()
+            )
         hash_equal = dataframe_sha256(baseline) == dataframe_sha256(candidate)
         agreed = (
             row_count_delta <= max_row_count_delta
             and index_mismatches <= max_index_mismatches
             and max_relative_delta <= max_relative_price_delta
+            and max_relative_volume_delta_observed <= max_relative_volume_delta
         )
         comparison = {
             "baseline": baseline_name,
             "candidate": candidate_name,
+            "failure_code": FailureCode.DATA_DISAGREEMENT.value,
             "row_count_delta": row_count_delta,
             "index_mismatches": index_mismatches,
             "common_rows": len(common),
             "max_relative_price_delta": max_relative_delta,
+            "max_relative_volume_delta": max_relative_volume_delta_observed,
             "hash_equal": hash_equal,
             "agreed": agreed,
         }
@@ -384,6 +403,7 @@ class CachedMarketDataService:
         max_row_count_delta: int = 2,
         max_index_mismatches: int = 2,
         max_relative_price_delta: float = 0.005,
+        max_relative_volume_delta: float = 0.05,
         cache_ttl_seconds: int = 14_400,
         provider_retries: dict[str, int] | None = None,
         provider_rate_limits_per_minute: dict[str, int] | None = None,
@@ -399,6 +419,7 @@ class CachedMarketDataService:
         self.max_row_count_delta = max_row_count_delta
         self.max_index_mismatches = max_index_mismatches
         self.max_relative_price_delta = max_relative_price_delta
+        self.max_relative_volume_delta = max_relative_volume_delta
         self.cache_ttl_seconds = cache_ttl_seconds
         self.provider_retries = provider_retries or {}
         self.provider_rate_limits_per_minute = provider_rate_limits_per_minute or {}
@@ -477,6 +498,7 @@ class CachedMarketDataService:
             max_row_count_delta=self.max_row_count_delta,
             max_index_mismatches=self.max_index_mismatches,
             max_relative_price_delta=self.max_relative_price_delta,
+            max_relative_volume_delta=self.max_relative_volume_delta,
         )
         enough_sources = len(valid_frames) >= self.minimum_valid_sources
         price_verified = enough_sources and comparison["agreed"]
@@ -585,6 +607,7 @@ class CachedMarketDataService:
                 "max_row_count_delta": self.max_row_count_delta,
                 "max_index_mismatches": self.max_index_mismatches,
                 "max_relative_price_delta": self.max_relative_price_delta,
+                "max_relative_volume_delta": self.max_relative_volume_delta,
             }
         )
 

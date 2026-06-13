@@ -47,6 +47,10 @@ def test_sample_config_is_valid():
     assert settings.portfolio_mapping_file == Path("configs/portfolio_mapping.json")
     assert settings.risk.enforcement == "block"
     assert settings.data.api_key_env_names["tiingo"] == "JAYU_TIINGO_API_KEY"
+    assert settings.mode == "live"
+    assert settings.data.max_relative_volume_delta == 0.05
+    assert settings.research.cost_survival_enabled is True
+    assert settings.research.cost_survival_buffer_bps == 10.0
 
 
 def test_inconsistent_cash_limits_are_rejected(tmp_path):
