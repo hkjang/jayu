@@ -189,6 +189,9 @@ def _run_engine(
         )
         signals = _apply_risk(settings, paths, signals)
         atomic_write_json(paths.signal_file, signals)
+        risk_signal_path = context.run_dir / "signals_risk.json"
+        atomic_write_json(risk_signal_path, signals)
+        context.record_artifact(risk_signal_path)
         notification_result = None
         if notify_user:
             notification_result = KakaoNotifier(settings, paths).send(

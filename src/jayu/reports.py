@@ -169,6 +169,49 @@ def trade_cost_stats(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def risk_decision_rows(signals: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Flatten per-signal risk decisions for display (criterion #12, report side).
+
+    Prefers structured ``violation_details`` codes; falls back to the legacy
+    free-text ``violations`` when only those are present.
+    """
+    rows: list[dict[str, Any]] = []
+    for ticker, signal in signals.items():
+        if not isinstance(signal, Mapping):
+            continue
+        risk = signal.get("risk")
+        if not isinstance(risk, Mapping):
+            continue
+        details = risk.get("violation_details")
+        if isinstance(details, list) and details:
+            reasons = [str(item.get("code")) for item in details if isinstance(item, Mapping)]
+        else:
+            legacy = risk.get("violations")
+            reasons = [str(item) for item in legacy] if isinstance(legacy, list) else []
+        warnings = risk.get("warnings")
+        warning_codes = (
+            [str(item.get("code")) for item in warnings if isinstance(item, Mapping)]
+            if isinstance(warnings, list)
+            else []
+        )
+        rows.append(
+            {
+                "ticker": str(ticker),
+                "action": signal.get("action"),
+                "eligible": signal.get("eligible"),
+                "requested_pct": risk.get("requested_position_pct"),
+                "approved_pct": signal.get(
+                    "approved_position_pct", risk.get("approved_position_pct")
+                ),
+                "resized": risk.get("resized"),
+                "mapped": risk.get("mapped"),
+                "reasons": reasons,
+                "warnings": warning_codes,
+            }
+        )
+    return rows
+
+
 def train_oos_decay(results: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Per-strategy train→out-of-sample performance decay from a run's results.
 
@@ -403,6 +446,8 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
     decay_rows: list[dict[str, Any]] = []
     if isinstance(result_data, Mapping) and isinstance(result_data.get("results"), Mapping):
         decay_rows = train_oos_decay(result_data["results"])
+    risk_signals = read_json(run_dir / "signals_risk.json", default={})
+    risk_rows = risk_decision_rows(risk_signals) if isinstance(risk_signals, Mapping) else []
     rows = [
         ("run_id", manifest_data.get("run_id")),
         ("status", manifest_data.get("status")),
@@ -532,6 +577,31 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         if decay_rows
         else ""
     )
+    risk_table_rows = "\n".join(
+        "<tr>"
+        f"<td>{html.escape(row['ticker'])}</td>"
+        f"<td>{_cell(row['action'])}</td>"
+        f"<td>{'eligible' if row['eligible'] else 'blocked'}</td>"
+        f"<td>{_cell(row['requested_pct'])}</td>"
+        f"<td>{_cell(row['approved_pct'])}</td>"
+        f"<td>{'yes' if row['resized'] else 'no'}</td>"
+        f"<td>{_cell(', '.join(row['reasons']) or '—')}</td>"
+        f"<td>{_cell(', '.join(row['warnings']) or '—')}</td>"
+        "</tr>"
+        for row in risk_rows
+    )
+    risk_section = (
+        f"""<h2>Risk Decisions</h2>
+  <p>Per-signal portfolio-risk approval. Reasons are structured violation codes;
+  warnings (e.g. an unmapped ticker) do not block.</p>
+  <table>
+    <tr><th>Ticker</th><th>Action</th><th>Status</th><th>Requested</th><th>Approved</th>
+        <th>Resized</th><th>Block reasons</th><th>Warnings</th></tr>
+    {risk_table_rows}
+  </table>"""
+        if risk_rows
+        else ""
+    )
     content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -552,6 +622,7 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
   <h2>Equity Curves</h2>
   {graph_blocks or "<p>No equity curve artifacts found.</p>"}
   {validation_section}
+  {risk_section}
   {decay_section}
   {cost_section}
   <h2>Parameter Importance</h2>

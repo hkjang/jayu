@@ -8,6 +8,7 @@ from .execution import (
     FixedRateFeeModel,
 )
 from .markets import benchmark_for_ticker
+from .entries import evaluate_entry
 from .exits import resolve_trade_exit
 from .optimizer import fill_missing_params
 from .performance import calc_metrics
@@ -120,103 +121,21 @@ def backtest(
             if idx_name in market_trend_dict:
                 market_ok = market_trend_dict[idx_name].get(date_key, True)
 
-        # ── 앙상블 진입 조건 ──────────────────────────────────────
-        conds = {
-            "rsi": p["rsi_lo"] <= float(row["rsi"]) <= p["rsi_hi"],
-            "ema": close > ema,
-            "volume": float(row["vol_ratio"]) >= p["vol_mult"],
-            "gap": float(row["gap"]) >= p["gap_min"],
-            "macd": bool(row["macd_cross"]) if p["require_macd"] else True,
-            "bb": float(row["bb_pct"]) < 0.4 if p["require_bb"] else True,
-            "regime": row["regime"] != "bear" if p["regime_filter"] else True,
-            "obv": bool(row["obv_trend"]),
-            "stoch": float(row["stoch_rsi"]) < 0.8,
-        }
-
+        # ── 진입 조건 판정 (jayu.entries로 분리) ──────────────────
         strategy_mode = infer_strategy_mode(p)
-        use_connors = strategy_mode == "connors_rsi2"
-        use_williams = strategy_mode == "williams_breakout"
-        use_volume = strategy_mode == "volume_breakout"
-        mandatory = conds["volume"] and conds["gap"] and market_ok
-
-        if use_williams:
-            williams_target = float(row["Open"]) + float(row["prev_range"]) * float(
-                row["k_dynamic"]
-            ) * p.get("williams_k_multiplier", 1.0)
-            williams_ok = (close > williams_target) and (close > float(row["sma200"]))
-            if not (mandatory and williams_ok):
-                i += 1
-                continue
-            optionals = []
-            optional_met = 0
-        elif use_volume:
-            vol_mult = p.get("volume_spike_mult", 2.0)
-            vol_period = p.get("volume_breakout_period", 10)
-            high_col = f"high_max_{vol_period}"
-            volume_spike = float(row["Volume"]) > float(row["volume_ma20"]) * vol_mult
-            price_break = close > float(row[high_col]) if high_col in row else False
-            trend_ok = close > float(row["sma200"])
-            volume_ok = volume_spike and price_break and trend_ok
-            if not (mandatory and volume_ok):
-                i += 1
-                continue
-            optionals = []
-            optional_met = 0
-        elif use_connors:
-            connors_ok = (close > float(row["sma200"])) and (
-                float(row["rsi2"]) < p.get("connors_rsi2_limit", 10)
-            )
-            if not (mandatory and connors_ok):
-                i += 1
-                continue
-            optionals = []
-            optional_met = 0
-        else:
-            # ADX 필터 작동시 진입성격 스위칭
-            use_adx = p.get("use_adx_filter", False)
-            adx_val = float(row["adx"]) if "adx" in row else 0.0
-
-            # ADX 국면에 따른 필수 조건 분기
-            if use_adx and adx_val > p.get("adx_threshold", 25):
-                mandatory = mandatory and conds["ema"]
-                if p["require_macd"]:
-                    mandatory = mandatory and conds["macd"]
-                optionals = [
-                    conds["rsi"],
-                    conds["macd"] if not p["require_macd"] else True,
-                    conds["bb"],
-                    conds["regime"],
-                    conds["obv"],
-                    conds["stoch"],
-                ]
-            elif use_adx and adx_val < 20:
-                mandatory = mandatory and conds["rsi"]
-                if p["require_bb"]:
-                    mandatory = mandatory and conds["bb"]
-                optionals = [
-                    conds["ema"],
-                    conds["macd"],
-                    conds["bb"] if not p["require_bb"] else True,
-                    conds["regime"],
-                    conds["obv"],
-                    conds["stoch"],
-                ]
-            else:
-                # 기본 모드
-                mandatory = mandatory and conds["rsi"] and conds["ema"]
-                optionals = [
-                    conds["macd"],
-                    conds["bb"],
-                    conds["regime"],
-                    conds["obv"],
-                    conds["stoch"],
-                ]
-
-            optional_met = sum([bool(cond) for cond in optionals])
-
-            if not mandatory or optional_met < p["ensemble_min"]:
-                i += 1
-                continue
+        entry_decision = evaluate_entry(
+            row,
+            p,
+            close=close,
+            ema=ema,
+            strategy_mode=strategy_mode,
+            market_ok=market_ok,
+        )
+        if not entry_decision.entered:
+            i += 1
+            continue
+        optional_met = entry_decision.optional_met
+        optional_count = entry_decision.optional_count
 
         entry_raw = float(df.iloc[i + 1]["Open"])
         if entry_raw <= 0:
@@ -228,7 +147,7 @@ def backtest(
         actual_pos_size = resolve_position_fraction(
             p,
             optional_met=optional_met,
-            optional_count=len(optionals),
+            optional_count=optional_count,
             atr=atr,
             close=close,
             atr_pct=(float(row["atr_pct"]) if "atr_pct" in row and row["atr_pct"] > 0 else None),

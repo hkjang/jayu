@@ -9,12 +9,41 @@ from jayu.reports import (
     equity_curve_svg,
     parameter_importance,
     post_signal_performance,
+    risk_decision_rows,
     strategy_attribution,
     trade_cost_stats,
     train_oos_decay,
     write_html_report,
     write_signal_performance_report,
 )
+
+
+def test_risk_decision_rows_prefers_structured_codes():
+    signals = {
+        "SOXL": {
+            "action": "buy",
+            "eligible": False,
+            "approved_position_pct": 0.0,
+            "risk": {
+                "requested_position_pct": 0.10,
+                "violations": ["sector_exposure 65.0% > 50.0%"],
+                "violation_details": [{"code": "sector_exposure_exceeded", "message": "…"}],
+                "warnings": [{"code": "unmapped_ticker", "message": "…"}],
+                "resized": False,
+                "mapped": False,
+            },
+        },
+        "HOLD1": {"action": "hold"},  # no risk block -> skipped
+    }
+
+    rows = risk_decision_rows(signals)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["ticker"] == "SOXL"
+    assert row["reasons"] == ["sector_exposure_exceeded"]  # structured code preferred
+    assert row["warnings"] == ["unmapped_ticker"]
+    assert row["eligible"] is False
 
 
 def _net_trades():
@@ -218,6 +247,23 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
 
     atomic_write_json(run_dir / "trades" / "SOXL_bull.json", _net_trades())
     atomic_write_json(
+        run_dir / "signals_risk.json",
+        {
+            "SOXL": {
+                "action": "buy",
+                "eligible": False,
+                "approved_position_pct": 0.0,
+                "risk": {
+                    "requested_position_pct": 0.10,
+                    "violation_details": [{"code": "sector_exposure_exceeded", "message": "x"}],
+                    "warnings": [{"code": "unmapped_ticker", "message": "y"}],
+                    "resized": False,
+                    "mapped": False,
+                },
+            }
+        },
+    )
+    atomic_write_json(
         run_dir / "result.json",
         {
             "results": {
@@ -249,3 +295,7 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
     # The train->OOS decay section renders from result.json.
     assert "Train → OOS Decay" in content
     assert "Fitness retention" in content
+    # The risk-decisions section renders structured block reasons (criterion #12).
+    assert "Risk Decisions" in content
+    assert "sector_exposure_exceeded" in content
+    assert "unmapped_ticker" in content

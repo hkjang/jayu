@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .portfolio import PortfolioMapping, load_portfolio_mapping
@@ -15,6 +15,14 @@ class RiskDecision:
     approved_position_pct: float
     violations: list[str]
     projected: dict[str, float]
+    # Structured, machine-readable view of the same violations (criterion #12).
+    violation_details: list[dict[str, Any]] = field(default_factory=list)
+    # Non-blocking notes (e.g. an unmapped ticker that fell back to defaults).
+    warnings: list[dict[str, Any]] = field(default_factory=list)
+    # Whether the approved size was cut below the request by resize enforcement.
+    resized: bool = False
+    # Whether the ticker was found in the portfolio mapping.
+    mapped: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -30,7 +38,9 @@ def evaluate_signal_risk(
 ) -> RiskDecision:
     ticker = ticker.upper()
     portfolio_mapping = mapping or load_portfolio_mapping()
-    ticker_mapping = portfolio_mapping.lookup(ticker).mapping
+    lookup = portfolio_mapping.lookup(ticker)
+    ticker_mapping = lookup.mapping
+    mapped = bool(lookup.mapped)
     leverage = ticker_mapping.leverage_factor
     underlying = ticker_mapping.underlying_group or ticker
     sector = ticker_mapping.sector
@@ -64,34 +74,99 @@ def evaluate_signal_risk(
         "leveraged_etf_value": settings.max_leveraged_etf_value,
         "adjusted_gross_exposure": settings.max_adjusted_gross_exposure,
     }
-    violations = [
-        f"{name} {projected[name]:.1%} > {limit:.1%}"
-        for name, limit in limits.items()
-        if projected[name] > limit
-    ]
+    violations: list[str] = []
+    violation_details: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    def add_violation(
+        code: str, message: str, *, observed: float, limit: float, metric: str
+    ) -> None:
+        violations.append(message)
+        violation_details.append(
+            {
+                "code": code,
+                "message": message,
+                "metric": metric,
+                "observed": round(observed, 6),
+                "limit": round(limit, 6),
+            }
+        )
+
+    if not mapped:
+        warnings.append(
+            {
+                "code": "unmapped_ticker",
+                "message": (
+                    f"{ticker} not found in portfolio mapping; using default "
+                    f"leverage {leverage:g} and 'unmapped' factor"
+                ),
+            }
+        )
+
+    exposure_codes = {
+        "underlying_exposure": "underlying_exposure_exceeded",
+        "sector_exposure": "sector_exposure_exceeded",
+        "leveraged_etf_value": "leveraged_etf_value_exceeded",
+        "adjusted_gross_exposure": "adjusted_gross_exposure_exceeded",
+    }
+    for name, limit in limits.items():
+        if projected[name] > limit:
+            add_violation(
+                exposure_codes[name],
+                f"{name} {projected[name]:.1%} > {limit:.1%}",
+                observed=projected[name],
+                limit=limit,
+                metric=name,
+            )
     for factor in factors:
         key = f"factor:{factor}"
         if projected[key] > settings.max_factor_exposure:
-            violations.append(f"{key} {projected[key]:.1%} > {settings.max_factor_exposure:.1%}")
+            add_violation(
+                "factor_exposure_exceeded",
+                f"{key} {projected[key]:.1%} > {settings.max_factor_exposure:.1%}",
+                observed=projected[key],
+                limit=settings.max_factor_exposure,
+                metric=key,
+            )
     if cash_known and projected["cash_pct"] < settings.min_cash_pct:
-        violations.append(f"cash_pct {projected['cash_pct']:.1%} < {settings.min_cash_pct:.1%}")
+        add_violation(
+            "min_cash_breached",
+            f"cash_pct {projected['cash_pct']:.1%} < {settings.min_cash_pct:.1%}",
+            observed=projected["cash_pct"],
+            limit=settings.min_cash_pct,
+            metric="cash_pct",
+        )
     if cash_known and projected["invested_pct"] > settings.max_invested_pct:
-        violations.append(
-            f"invested_pct {projected['invested_pct']:.1%} > {settings.max_invested_pct:.1%}"
+        add_violation(
+            "max_invested_exceeded",
+            f"invested_pct {projected['invested_pct']:.1%} > {settings.max_invested_pct:.1%}",
+            observed=projected["invested_pct"],
+            limit=settings.max_invested_pct,
+            metric="invested_pct",
         )
     risk_status = portfolio.get("risk_status", {})
     loss_checks = (
-        ("daily_return", settings.daily_loss_limit),
-        ("weekly_return", settings.weekly_loss_limit),
+        ("daily_return", settings.daily_loss_limit, "daily_loss_limit_breached"),
+        ("weekly_return", settings.weekly_loss_limit, "weekly_loss_limit_breached"),
     )
-    for key, limit in loss_checks:
+    for key, limit, code in loss_checks:
         value = float(risk_status.get(key, 0.0))
         if value <= -limit:
-            violations.append(f"{key} {value:.1%} breached -{limit:.1%}")
+            add_violation(
+                code,
+                f"{key} {value:.1%} breached -{limit:.1%}",
+                observed=value,
+                limit=-limit,
+                metric=key,
+            )
     monthly_drawdown = float(risk_status.get("monthly_drawdown", 0.0))
     if monthly_drawdown >= settings.monthly_mdd_limit:
-        violations.append(
-            f"monthly_drawdown {monthly_drawdown:.1%} >= {settings.monthly_mdd_limit:.1%}"
+        add_violation(
+            "monthly_drawdown_breached",
+            f"monthly_drawdown {monthly_drawdown:.1%} >= {settings.monthly_mdd_limit:.1%}",
+            observed=monthly_drawdown,
+            limit=settings.monthly_mdd_limit,
+            metric="monthly_drawdown",
         )
     if not violations or settings.enforcement == "warn":
         approved = requested_position_pct
@@ -129,12 +204,17 @@ def evaluate_signal_risk(
     else:
         approved = 0.0
         eligible = False
+    resized = eligible and approved < requested_position_pct
     return RiskDecision(
         eligible=eligible,
         requested_position_pct=requested_position_pct,
         approved_position_pct=approved,
         violations=violations,
         projected=projected,
+        violation_details=violation_details,
+        warnings=warnings,
+        resized=resized,
+        mapped=mapped,
     )
 
 

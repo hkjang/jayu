@@ -51,7 +51,7 @@ def resolve_trade_exit(
     exit_price: float | None = None
     exit_reason = "time"
     exit_trigger = "time_limit"
-    exit_idx: int | None = None
+    exit_idx = -1
     peak = entry
     worst_lo = entry
     breakeven_activated = False
@@ -131,15 +131,15 @@ def resolve_trade_exit(
                 break
 
     if exit_price is None:
+        # No trigger fired within the hold window: close at the time barrier.
         fidx = min(i + 1 + params["hold_days"], len(df) - 1)
         exit_price = float(df.iloc[fidx]["Close"])
         exit_idx = fidx
 
-    assert exit_idx is not None  # set by either a trigger or the time-barrier fallback
     return ExitOutcome(
         exit_price=float(exit_price),
         exit_reason=exit_reason,
         exit_trigger=exit_trigger,
-        exit_idx=int(exit_idx),
+        exit_idx=exit_idx,
         worst_lo=worst_lo,
     )
