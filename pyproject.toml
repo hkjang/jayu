@@ -50,6 +50,17 @@ line-length = 100
 testpaths = ["tests", "."]
 python_files = ["test_*.py"]
 
+# Coverage is enforced via a dedicated CI step (`uv run pytest --cov=jayu`), not
+# the default `pytest -q` run, so subset/local runs are not blocked by the
+# package-wide gate.
+[tool.coverage.run]
+source = ["jayu"]
+branch = false
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
