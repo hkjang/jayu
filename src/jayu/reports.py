@@ -169,6 +169,58 @@ def trade_cost_stats(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def train_oos_decay(results: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Per-strategy train→out-of-sample performance decay from a run's results.
+
+    For each ticker/regime, compares the training ``metrics`` against the
+    walk-forward ``val_metrics`` already stored in ``result.json``. ``retention``
+    is OOS/train; ``degraded`` flags an OOS edge that turned non-positive or
+    retained below half — a fingerprint of overfitting (roadmap #118, #120).
+    """
+    rows: list[dict[str, Any]] = []
+    for ticker, regimes in results.items():
+        if not isinstance(regimes, Mapping):
+            continue
+        for regime, record in regimes.items():
+            if not isinstance(record, Mapping):
+                continue
+            train = record.get("metrics")
+            oos = record.get("val_metrics")
+            if not isinstance(train, Mapping) or not isinstance(oos, Mapping):
+                continue
+
+            def retention(key: str, train: Any = train, oos: Any = oos) -> float | None:
+                trained = train.get(key)
+                out = oos.get(key)
+                if (
+                    isinstance(trained, (int, float))
+                    and isinstance(out, (int, float))
+                    and trained != 0
+                ):
+                    return round(float(out) / float(trained), 4)
+                return None
+
+            oos_fitness = oos.get("fitness")
+            fitness_retention = retention("fitness")
+            degraded = (isinstance(oos_fitness, (int, float)) and oos_fitness <= 0) or (
+                fitness_retention is not None and fitness_retention < 0.5
+            )
+            rows.append(
+                {
+                    "ticker": str(ticker),
+                    "regime": str(regime),
+                    "train_fitness": train.get("fitness"),
+                    "oos_fitness": oos_fitness,
+                    "fitness_retention": fitness_retention,
+                    "train_return": train.get("total_return"),
+                    "oos_return": oos.get("total_return"),
+                    "return_retention": retention("total_return"),
+                    "degraded": bool(degraded),
+                }
+            )
+    return rows
+
+
 def post_signal_performance(
     signals: Mapping[str, Mapping[str, Any]],
     price_history: Mapping[str, Sequence[Mapping[str, Any]]],
@@ -347,6 +399,10 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         trades = read_json(path, default=[])
         if isinstance(trades, list) and trades:
             cost_rows.append((path.stem, trade_cost_stats(trades)))
+    result_data = read_json(run_dir / "result.json", default={})
+    decay_rows: list[dict[str, Any]] = []
+    if isinstance(result_data, Mapping) and isinstance(result_data.get("results"), Mapping):
+        decay_rows = train_oos_decay(result_data["results"])
     rows = [
         ("run_id", manifest_data.get("run_id")),
         ("status", manifest_data.get("status")),
@@ -449,6 +505,33 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         if validation_rows
         else ""
     )
+    decay_table_rows = "\n".join(
+        "<tr>"
+        f"<td>{html.escape(row['ticker'])}</td>"
+        f"<td>{html.escape(row['regime'])}</td>"
+        f"<td>{_cell(row['train_fitness'])}</td>"
+        f"<td>{_cell(row['oos_fitness'])}</td>"
+        f"<td>{_cell(row['fitness_retention'])}</td>"
+        f"<td>{_cell(row['train_return'])}</td>"
+        f"<td>{_cell(row['oos_return'])}</td>"
+        f"<td>{'⚠️ degraded' if row['degraded'] else 'ok'}</td>"
+        "</tr>"
+        for row in decay_rows
+    )
+    decay_section = (
+        f"""<h2>Train → OOS Decay</h2>
+  <p>How much of the in-sample edge survives out-of-sample. Retention is
+  OOS/train fitness; a degraded flag marks overfitting (OOS fitness non-positive
+  or under half retained).</p>
+  <table>
+    <tr><th>Ticker</th><th>Regime</th><th>Train fitness</th><th>OOS fitness</th>
+        <th>Fitness retention</th><th>Train return %</th><th>OOS return %</th>
+        <th>Health</th></tr>
+    {decay_table_rows}
+  </table>"""
+        if decay_rows
+        else ""
+    )
     content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -469,6 +552,7 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
   <h2>Equity Curves</h2>
   {graph_blocks or "<p>No equity curve artifacts found.</p>"}
   {validation_section}
+  {decay_section}
   {cost_section}
   <h2>Parameter Importance</h2>
   <table>

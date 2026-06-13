@@ -58,6 +58,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `research.final_lockbox_min_rows` | `integer` | `40` | `{"maximum": 504, "minimum": 20}` |
 | `research.final_lockbox_min_retention` | `number` | `0.5` | `{"maximum": 2, "minimum": 0}` |
 | `research.final_lockbox_require_positive_return` | `boolean` | `true` | `{}` |
+| `research.cost_survival_enabled` | `boolean` | `true` | `{}` |
 | `research.ga_min_runs` | `integer` | `100` | `{"maximum": 100000, "minimum": 1}` |
 | `research.ga_early_stop_patience` | `integer` | `150` | `{"maximum": 100000, "minimum": 10}` |
 | `research.fitness_version` | `string` | `"v2_daily_equity"` | `{}` |

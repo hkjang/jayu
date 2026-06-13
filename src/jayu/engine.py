@@ -852,6 +852,10 @@ def run(
             require_approved=require_approved,
             require_final_lockbox=settings.research.final_lockbox_enabled,
             require_selection_bias=settings.research.selection_bias_enabled,
+            require_cost_survival=settings.research.cost_survival_enabled,
+            round_trip_cost_bps_value=(settings.transaction_fee + settings.slippage)
+            * 2.0
+            * 10_000.0,
         )
         save_json(signals, SIGNAL_FILE)
     except Exception as e:

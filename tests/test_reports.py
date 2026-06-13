@@ -11,6 +11,7 @@ from jayu.reports import (
     post_signal_performance,
     strategy_attribution,
     trade_cost_stats,
+    train_oos_decay,
     write_html_report,
     write_signal_performance_report,
 )
@@ -38,6 +39,30 @@ def test_trade_cost_stats_summarizes_net_and_psr():
     # 3 trades with net_return_pct present -> PSR computed.
     assert stats["psr_vs_zero"] is not None
     assert 0.0 <= stats["psr_vs_zero"] <= 1.0
+
+
+def test_train_oos_decay_flags_overfitting():
+    results = {
+        "SOXL": {
+            "bull": {
+                "metrics": {"fitness": 2.0, "total_return": 30.0},
+                "val_metrics": {"fitness": 1.6, "total_return": 24.0},
+            },
+            "bear": {
+                "metrics": {"fitness": 2.0, "total_return": 40.0},
+                "val_metrics": {"fitness": -0.1, "total_return": -5.0},
+            },
+        }
+    }
+
+    rows = {(r["ticker"], r["regime"]): r for r in train_oos_decay(results)}
+
+    healthy = rows[("SOXL", "bull")]
+    assert healthy["fitness_retention"] == pytest.approx(0.8)
+    assert healthy["degraded"] is False
+
+    overfit = rows[("SOXL", "bear")]
+    assert overfit["degraded"] is True  # OOS fitness non-positive
 
 
 def test_parameter_importance_ranks_parameter_spread():
@@ -192,6 +217,19 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
     )
 
     atomic_write_json(run_dir / "trades" / "SOXL_bull.json", _net_trades())
+    atomic_write_json(
+        run_dir / "result.json",
+        {
+            "results": {
+                "SOXL": {
+                    "bull": {
+                        "metrics": {"fitness": 2.0, "total_return": 30.0},
+                        "val_metrics": {"fitness": 1.6, "total_return": 24.0},
+                    }
+                }
+            }
+        },
+    )
 
     output = write_html_report(run_dir)
 
@@ -208,3 +246,6 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
     assert "0.87" in content
     assert "0.25" in content
     assert "0.72" in content
+    # The train->OOS decay section renders from result.json.
+    assert "Train → OOS Decay" in content
+    assert "Fitness retention" in content

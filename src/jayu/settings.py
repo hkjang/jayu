@@ -69,6 +69,7 @@ class ResearchSettings(BaseModel):
     final_lockbox_min_rows: int = Field(default=40, ge=20, le=504)
     final_lockbox_min_retention: float = Field(default=0.50, ge=0, le=2)
     final_lockbox_require_positive_return: bool = True
+    cost_survival_enabled: bool = True
     ga_min_runs: int = Field(default=100, ge=1, le=100_000)
     ga_early_stop_patience: int = Field(default=150, ge=10, le=100_000)
     fitness_version: Literal["v2_daily_equity"] = "v2_daily_equity"
