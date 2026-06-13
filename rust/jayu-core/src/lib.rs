@@ -43,6 +43,94 @@ pub trait RiskModel {
     fn approved_position_pct(&self, requested: f64) -> f64;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PathMode {
+    WorstCase,
+    BestCase,
+    OpenHighLowClose,
+    Intraday,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DailyBar {
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExitDecision {
+    pub price: f64,
+    pub reason: &'static str,
+    pub trigger: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DailyExecutionModel {
+    pub path_mode: PathMode,
+}
+
+impl DailyExecutionModel {
+    pub fn resolve_daily_exit(
+        &self,
+        bar: DailyBar,
+        stop_price: f64,
+        target_price: f64,
+    ) -> Option<ExitDecision> {
+        if bar.open <= stop_price {
+            return Some(ExitDecision {
+                price: bar.open,
+                reason: "stop",
+                trigger: "gap_stop",
+            });
+        }
+        if bar.open >= target_price {
+            return Some(ExitDecision {
+                price: bar.open,
+                reason: "target",
+                trigger: "gap_target",
+            });
+        }
+
+        let stop_hit = bar.low <= stop_price;
+        let target_hit = bar.high >= target_price;
+        match (stop_hit, target_hit) {
+            (false, false) => None,
+            (true, false) => Some(ExitDecision {
+                price: stop_price,
+                reason: "stop",
+                trigger: "oco_stop",
+            }),
+            (false, true) => Some(ExitDecision {
+                price: target_price,
+                reason: "target",
+                trigger: "oco_target",
+            }),
+            (true, true) => match self.path_mode {
+                PathMode::BestCase => Some(ExitDecision {
+                    price: target_price,
+                    reason: "target",
+                    trigger: "both_best_case",
+                }),
+                PathMode::OpenHighLowClose => Some(ExitDecision {
+                    price: target_price,
+                    reason: "target",
+                    trigger: "both_ohlc_path",
+                }),
+                PathMode::Intraday => {
+                    panic!("intraday path mode requires intraday bars")
+                }
+                PathMode::WorstCase => Some(ExitDecision {
+                    price: stop_price,
+                    reason: "stop",
+                    trigger: "both_worst_case",
+                }),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ThresholdFillModel;
 
@@ -165,5 +253,51 @@ mod tests {
         assert_eq!(trades[0].exit_index, 1);
         assert!((metrics.total_return_pct - 0.10).abs() < 0.000_001);
         assert_eq!(metrics.win_rate, 1.0);
+    }
+
+    #[test]
+    fn daily_execution_matches_python_gap_stop() {
+        let decision = DailyExecutionModel {
+            path_mode: PathMode::WorstCase,
+        }
+        .resolve_daily_exit(
+            DailyBar {
+                open: 90.0,
+                high: 96.0,
+                low: 88.0,
+                close: 94.0,
+            },
+            95.0,
+            110.0,
+        )
+        .expect("gap stop");
+
+        assert_eq!(decision.price, 90.0);
+        assert_eq!(decision.trigger, "gap_stop");
+    }
+
+    #[test]
+    fn daily_execution_same_bar_path_modes_match_python() {
+        let bar = DailyBar {
+            open: 100.0,
+            high: 112.0,
+            low: 94.0,
+            close: 105.0,
+        };
+        let worst = DailyExecutionModel {
+            path_mode: PathMode::WorstCase,
+        }
+        .resolve_daily_exit(bar, 95.0, 110.0)
+        .expect("worst case decision");
+        let best = DailyExecutionModel {
+            path_mode: PathMode::BestCase,
+        }
+        .resolve_daily_exit(bar, 95.0, 110.0)
+        .expect("best case decision");
+
+        assert_eq!(worst.reason, "stop");
+        assert_eq!(worst.trigger, "both_worst_case");
+        assert_eq!(best.reason, "target");
+        assert_eq!(best.trigger, "both_best_case");
     }
 }

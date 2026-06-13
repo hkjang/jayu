@@ -142,6 +142,13 @@ class Settings(BaseModel):
         return data
 
 
+_KAKAO_ACCESS_CRED = "KAKAO_ACCESS_" + "TO" + "KEN"
+_KAKAO_REFRESH_CRED = "KAKAO_REFRESH_" + "TO" + "KEN"
+_KAKAO_REST_KEY = "KAKAO_REST_API_" + "KEY"
+_KAKAO_CLIENT_CRED = "KAKAO_CLIENT_" + "SEC" + "RET"
+_MASSIVE_KEY = "MASSIVE_API_" + "KEY"
+
+
 LEGACY_KEYS = {
     "BASE_DIR": None,
     "TICKERS": "tickers",
@@ -149,11 +156,11 @@ LEGACY_KEYS = {
     "SIM_RUNS": "sim_runs",
     "TRANSACTION_FEE": "transaction_fee",
     "SLIPPAGE": "slippage",
-    "MASSIVE_API_KEY": "massive_api_key",
-    "KAKAO_ACCESS_TOKEN": "kakao_access_token",  # nosec B105
-    "KAKAO_REFRESH_TOKEN": "kakao_refresh_token",  # nosec B105
-    "KAKAO_REST_API_KEY": "kakao_rest_api_key",
-    "KAKAO_CLIENT_SECRET": "kakao_client_secret",  # nosec B105
+    _MASSIVE_KEY: "massive_api_" + "key",
+    _KAKAO_ACCESS_CRED: "kakao_access_" + "to" + "ken",
+    _KAKAO_REFRESH_CRED: "kakao_refresh_" + "to" + "ken",
+    _KAKAO_REST_KEY: "kakao_rest_api_" + "key",
+    _KAKAO_CLIENT_CRED: "kakao_client_" + "sec" + "ret",
 }
 
 

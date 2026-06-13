@@ -36,9 +36,7 @@ def _mapping_file(path: Path) -> Path:
 def test_portfolio_csv_and_factor_exposure_use_external_mapping(tmp_path: Path):
     path = tmp_path / "portfolio.csv"
     path.write_text(
-        "name,ticker,quantity,market_value,currency\n"
-        "SOXL,SOXL,1,100,USD\n"
-        "Unknown,ZZZZ,1,50,USD\n",
+        "name,ticker,quantity,market_value,currency\nSOXL,SOXL,1,100,USD\nUnknown,ZZZZ,1,50,USD\n",
         encoding="utf-8",
     )
     mapping = load_portfolio_mapping(_mapping_file(tmp_path))
@@ -76,4 +74,32 @@ def test_portfolio_rejects_missing_columns(tmp_path: Path):
     path.write_text("ticker,market_value\nSOXL,100\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="missing required columns"):
+        load_portfolio(path, usd_krw=1000, mapping=_mapping_file(tmp_path))
+
+
+def test_portfolio_supports_injected_fx_rates(tmp_path: Path):
+    path = tmp_path / "portfolio.csv"
+    path.write_text(
+        "name,ticker,quantity,market_value,currency\nJPY Fund,JPYX,1,100,JPY\n",
+        encoding="utf-8",
+    )
+
+    positions = load_portfolio(
+        path,
+        usd_krw=1000,
+        mapping=_mapping_file(tmp_path),
+        fx_rates={"JPY": 9.0},
+    )
+
+    assert positions[0].market_value_krw == 900
+
+
+def test_portfolio_rejects_unknown_currency_without_rate(tmp_path: Path):
+    path = tmp_path / "portfolio.csv"
+    path.write_text(
+        "name,ticker,quantity,market_value,currency\nJPY Fund,JPYX,1,100,JPY\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="provide an fx_rates entry"):
         load_portfolio(path, usd_krw=1000, mapping=_mapping_file(tmp_path))

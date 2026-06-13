@@ -33,7 +33,7 @@ repos:
         pass_filenames: false
       - id: bandit
         name: bandit
-        entry: uv run bandit -q -r src/jayu -x src/jayu/engine.py
+        entry: uv run bandit -q -r src/jayu
         language: system
         pass_filenames: false
       - id: gofmt

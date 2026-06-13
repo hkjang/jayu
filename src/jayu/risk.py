@@ -5,6 +5,7 @@ from typing import Any
 
 from .portfolio import PortfolioMapping, load_portfolio_mapping
 from .settings import RiskSettings
+from .signals import SignalAction, normalize_today_signal
 
 
 @dataclass(frozen=True)
@@ -147,9 +148,8 @@ def apply_portfolio_risk(
     evaluated: dict[str, dict[str, Any]] = {}
     portfolio_mapping = mapping or load_portfolio_mapping()
     for ticker, signal in signals.items():
-        item = dict(signal)
-        signal_text = str(item.get("signal", ""))
-        is_buy = "\ub9e4\uc218" in signal_text or item.get("action") == "buy"
+        item = normalize_today_signal(dict(signal))
+        is_buy = item.get("action") == SignalAction.BUY.value
         if not is_buy:
             item["eligible"] = False
             item["risk"] = {"reason": "not_a_buy_signal"}

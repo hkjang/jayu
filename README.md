@@ -1,5 +1,7 @@
 # Jayu 주식 전략 연구 자동화
 
+[![ci](https://github.com/hkjang/jayu/actions/workflows/ci.yml/badge.svg)](https://github.com/hkjang/jayu/actions/workflows/ci.yml)
+
 미국 주식 전략 탐색, 당일 신호 생성, 포트폴리오 위험 심사, 카카오 알림을 분리된 CLI로 실행하는 Python 3.12 프로젝트입니다. 생성된 매수 신호는 보유 계좌의 레버리지, 기초자산, 섹터, 팩터, 현금 및 손실 한도를 통과해야 `eligible=true`가 됩니다.
 
 ## 설치
@@ -55,6 +57,10 @@ docker run --rm -v ${PWD}\state:/app/state -v ${PWD}\signals:/app/signals -v ${P
 | 경로 | Git 추적 | 용도 |
 |---|---:|---|
 | `src/jayu/` | 예 | 설정, 데이터, 백테스트, 위험, 알림, CLI |
+| `src/jayu/backtest_core.py` | 예 | 백테스트 체결/검증 핵심 |
+| `src/jayu/signal_generation.py` | 예 | 당일 신호 생성과 action schema 적용 |
+| `src/jayu/optimizer.py` | 예 | GA 파라미터 샘플링/변이/교차 |
+| `src/jayu/legacy_adapter.py` | 예 | 구버전 상태 JSON 마이그레이션 |
 | `configs/config.sample.json` | 예 | 설정 예시 |
 | `configs/portfolio_mapping.json` | 예 | 포트폴리오 티커, 통화, 섹터, 팩터, 레버리지 매핑 |
 | `configs/strategy_spaces/` | 예 | 전략 모드별 탐색 공간 |
@@ -120,6 +126,8 @@ docker run --rm -v ${PWD}\state:/app/state -v ${PWD}\signals:/app/signals -v ${P
 
 Rust 이전 작업은 `rust/jayu-core`에서 시작하며, `StrategyParams`, `Trade`, `Metrics`, `FillModel`, `SlippageModel`, `RiskModel` 타입을 먼저 고정했습니다. Python 기준 골든 fixture는 `tests/fixtures/rust_golden.json`입니다.
 
+레거시 루트 스크립트 제거 일정은 [MIGRATION.md](docs/MIGRATION.md), Go wrapper의 역할 경계는 [GO_CLI_DIRECTION.md](docs/GO_CLI_DIRECTION.md)에 정리되어 있습니다.
+
 ## 알림과 운영 상태
 
 카카오 액세스 토큰이 만료되면 refresh token으로 한 번 갱신합니다. 429와 5xx 응답은 지수 백오프로 재시도하고, 긴 메시지는 요약한 뒤 상세 신호 파일 경로를 포함합니다. 최종 실패는 본문 대신 메시지 해시와 오류를 `state/notification_failures.jsonl`에 기록합니다.
@@ -134,7 +142,7 @@ uv run python scripts/generate_docs.py --check
 uv run ruff format --check src tests scripts
 uv run ruff check src tests scripts danta_simulation.py stock_kakao.py
 uv run mypy src/jayu
-uv run bandit -q -r src/jayu -x src/jayu/engine.py
+uv run bandit -q -r src/jayu
 uv run pip-audit
 uv run pytest -q
 uv run pre-commit run --all-files

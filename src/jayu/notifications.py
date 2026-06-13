@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import stat
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -12,6 +13,7 @@ import requests
 from .io import atomic_write_json, read_json
 from .paths import RuntimePaths
 from .settings import Settings
+from .signals import SignalAction, normalize_today_signal
 
 
 def _secret(settings: Settings, field: str) -> str | None:
@@ -71,6 +73,7 @@ class KakaoNotifier:
                 "refresh_token_expires_in": body.get("refresh_token_expires_in"),
             },
         )
+        self._secure_token_file()
 
     def _request(self, message: str) -> requests.Response:
         if (
@@ -149,6 +152,12 @@ class KakaoNotifier:
         with self.failure_file.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+    def _secure_token_file(self) -> None:
+        try:
+            os.chmod(self.token_file, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+
 
 def _limit_message(message: str, max_chars: int) -> str:
     if len(message) <= max_chars:
@@ -181,7 +190,8 @@ def build_signal_message(
 ) -> str:
     lines = ["Jayu daily signals"]
     for ticker, signal in signals.items():
-        eligible = signal.get("eligible", False)
+        signal = normalize_today_signal(dict(signal))
+        eligible = signal.get("eligible", False) and signal.get("action") == SignalAction.BUY.value
         status = "ELIGIBLE" if eligible else "BLOCKED"
         reasons = signal.get("risk", {}).get("violations", [])
         suffix = f" | {'; '.join(reasons)}" if reasons else ""

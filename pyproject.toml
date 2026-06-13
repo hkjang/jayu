@@ -45,7 +45,6 @@ package = true
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-extend-exclude = ["src/jayu/engine.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "."]
@@ -56,7 +55,7 @@ python_version = "3.12"
 ignore_missing_imports = true
 warn_unused_configs = true
 show_error_codes = true
-exclude = ["src/jayu/engine.py", "danta_simulation.py", "test_simulation.py"]
+exclude = ["danta_simulation.py", "test_simulation.py"]
 
 [tool.bandit]
 exclude_dirs = [".venv", "tests"]

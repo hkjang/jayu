@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 import random
 
-# Only the repository's fixed portfolio helper is launched.
-import subprocess  # nosec B404
-import sys
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -24,12 +21,13 @@ from .io import atomic_write_json, read_json
 from .monitoring import classify_failure, prune_runs, update_health
 from .notifications import KakaoNotifier, build_signal_message
 from .portfolio import (
-    get_usd_krw,
+    get_fx_rates,
     load_portfolio,
     load_portfolio_mapping,
     portfolio_summary,
     unmapped_ticker_report,
 )
+from .portfolio_build import build_portfolio_csv
 from .paths import RuntimePaths
 from .registry import ExperimentRegistry
 from .reports import (
@@ -108,8 +106,14 @@ def _apply_risk(
                 }
         return signals
     mapping = load_portfolio_mapping(paths.portfolio_mapping_file)
+    fx_rates = get_fx_rates(["USD", "EUR", "JPY", "HKD"])
     portfolio = portfolio_summary(
-        load_portfolio(paths.portfolio_file, get_usd_krw(), mapping=mapping),
+        load_portfolio(
+            paths.portfolio_file,
+            fx_rates["USD"],
+            mapping=mapping,
+            fx_rates=fx_rates,
+        ),
         account_value_krw=settings.account_value_krw,
         cash_balance_krw=settings.cash_balance_krw,
     )
@@ -342,12 +346,16 @@ def notify(
 
 
 @portfolio_app.command("build")
-def portfolio_build() -> None:
-    script = _project_root() / "build_portfolio.py"
-    completed = subprocess.run(  # nosec B603
-        [sys.executable, str(script)], cwd=_project_root()
+def portfolio_build(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    report = build_portfolio_csv(
+        paths.portfolio_file,
+        ticker_map_file=paths.project_root / "configs" / "portfolio_ticker_map.json",
+        mapping_file=paths.portfolio_mapping_file,
     )
-    raise typer.Exit(code=completed.returncode)
+    typer.echo(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
 
 
 @portfolio_app.command("analyze")
@@ -360,8 +368,14 @@ def portfolio_analyze(
     if not paths.portfolio_file.exists():
         raise typer.BadParameter(f"portfolio file not found: {paths.portfolio_file}")
     mapping = load_portfolio_mapping(paths.portfolio_mapping_file)
+    fx_rates = get_fx_rates(["USD", "EUR", "JPY", "HKD"])
     summary = portfolio_summary(
-        load_portfolio(paths.portfolio_file, get_usd_krw(), mapping=mapping),
+        load_portfolio(
+            paths.portfolio_file,
+            fx_rates["USD"],
+            mapping=mapping,
+            fx_rates=fx_rates,
+        ),
         account_value_krw=settings.account_value_krw,
         cash_balance_krw=settings.cash_balance_krw,
     )

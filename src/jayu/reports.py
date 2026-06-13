@@ -102,11 +102,7 @@ def parameter_importance(results: Mapping[str, Any]) -> list[dict[str, Any]]:
             buckets[str(name)][key].append(float(fitness))
     rows: list[dict[str, Any]] = []
     for name, values in buckets.items():
-        averages = {
-            value: sum(scores) / len(scores)
-            for value, scores in values.items()
-            if scores
-        }
+        averages = {value: sum(scores) / len(scores) for value, scores in values.items() if scores}
         if not averages:
             continue
         rows.append(
@@ -170,23 +166,23 @@ def post_signal_performance(
                 0,
             )
         start_price = float(prices[start_index].get("close", 0.0))
-        returns: dict[str, float | None] = {}
+        horizon_returns: dict[str, float | None] = {}
         for horizon in horizons:
             end_index = start_index + horizon
             if start_price <= 0 or end_index >= len(prices):
-                returns[f"{horizon}d"] = None
+                horizon_returns[f"{horizon}d"] = None
             else:
                 end_price = float(prices[end_index].get("close", 0.0))
-                returns[f"{horizon}d"] = end_price / start_price - 1
-        rows.append({"ticker": ticker, "signal_date": signal_date, "returns": returns})
+                horizon_returns[f"{horizon}d"] = end_price / start_price - 1
+        rows.append({"ticker": ticker, "signal_date": signal_date, "returns": horizon_returns})
     aggregate: dict[str, float] = {}
     for horizon in horizons:
         key = f"{horizon}d"
         values: list[float] = []
         for row in rows:
-            returns = row.get("returns")
-            if isinstance(returns, Mapping) and returns.get(key) is not None:
-                values.append(float(returns[key]))
+            row_returns = row.get("returns")
+            if isinstance(row_returns, Mapping) and row_returns.get(key) is not None:
+                values.append(float(row_returns[key]))
         if values:
             aggregate[key] = sum(values) / len(values)
     return {"signals_evaluated": len(rows), "aggregate": aggregate, "rows": rows}
@@ -257,7 +253,7 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
   <h2>Summary</h2>
   <table>{html_rows}</table>
   <h2>Equity Curves</h2>
-  {graph_blocks or '<p>No equity curve artifacts found.</p>'}
+  {graph_blocks or "<p>No equity curve artifacts found.</p>"}
   <h2>Parameter Importance</h2>
   <table>
     <tr><th>Parameter</th><th>Importance</th><th>Best Value</th><th>Samples</th></tr>

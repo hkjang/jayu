@@ -168,8 +168,14 @@ def load_portfolio(
     usd_krw: float,
     *,
     mapping: PortfolioMapping | Path | None = None,
+    fx_rates: Mapping[str, float] | None = None,
 ) -> list[Position]:
     portfolio_mapping = _coerce_mapping(mapping)
+    rates = {
+        "KRW": 1.0,
+        "USD": usd_krw,
+        **{k.upper(): float(v) for k, v in (fx_rates or {}).items()},
+    }
     positions: list[Position] = []
     with path.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
@@ -189,11 +195,12 @@ def load_portfolio(
                     f"portfolio CSV row {line_number} has a non-numeric value"
                 ) from exc
             currency = (row.get(headers["currency"]) or "USD").strip().upper()
-            if currency not in {"USD", "KRW"}:
+            if currency not in rates:
                 raise ValueError(
-                    f"portfolio CSV row {line_number} has unsupported currency {currency}"
+                    f"portfolio CSV row {line_number} has unsupported currency {currency}; "
+                    "provide an fx_rates entry"
                 )
-            value_krw = value * usd_krw if currency == "USD" else value
+            value_krw = value * rates[currency]
             name = (row.get(headers["name"]) or ticker).strip()
             lookup = portfolio_mapping.lookup(ticker, name=name)
             mapped = lookup.mapping
@@ -230,6 +237,34 @@ def get_usd_krw(default: float = 1380.0) -> float:
         return float(close.iloc[-1]) if not close.empty else default
     except Exception:
         return default
+
+
+def get_fx_rates(
+    currencies: Iterable[str],
+    *,
+    defaults: Mapping[str, float] | None = None,
+) -> dict[str, float]:
+    rates = {"KRW": 1.0, **{key.upper(): float(value) for key, value in (defaults or {}).items()}}
+    for currency in {item.upper() for item in currencies}:
+        if currency in rates:
+            continue
+        ticker = f"{currency}KRW=X"
+        fallback = 1380.0 if currency == "USD" else 1.0
+        try:
+            frame = yf.download(
+                ticker,
+                period="5d",
+                auto_adjust=True,
+                progress=False,
+                session=get_yahoo_session(),
+            )
+            close = frame["Close"].dropna()
+            if hasattr(close, "columns"):
+                close = close.iloc[:, 0]
+            rates[currency] = float(close.iloc[-1]) if not close.empty else fallback
+        except Exception:
+            rates[currency] = fallback
+    return rates
 
 
 def portfolio_summary(

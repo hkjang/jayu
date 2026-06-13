@@ -137,6 +137,7 @@ cython_debug/
 # ─── Stock Automation Local Configuration & State ───
 # API Keys and Token configurations
 config.json
+configs/portfolio_ticker_map.json
 
 # Portfolio data (financial position privacy)
 toss_portfolio.csv

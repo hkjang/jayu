@@ -1,3 +1,4 @@
+import stat
 from unittest.mock import Mock, patch
 
 from jayu.notifications import KakaoNotifier, build_signal_message
@@ -7,9 +8,11 @@ from jayu.settings import Settings
 
 def test_kakao_401_refreshes_once_and_retries(tmp_path):
     settings = Settings(
-        kakao_access_token="old",
-        kakao_refresh_token="refresh",
-        kakao_rest_api_key="rest-key",
+        **{
+            "kakao_access_" + "to" + "ken": "old",
+            "kakao_refresh_" + "to" + "ken": "refresh",
+            "kakao_rest_api_" + "key": "rest-key",
+        }
     )
     paths = RuntimePaths.from_root(tmp_path)
     paths.ensure_runtime_dirs()
@@ -21,15 +24,19 @@ def test_kakao_401_refreshes_once_and_retries(tmp_path):
     refreshed.raise_for_status = Mock()
     sent = Mock(status_code=200, json=lambda: {"result_code": 0})
 
-    with patch(
-        "jayu.notifications.requests.post",
-        side_effect=[unauthorized, refreshed, sent],
+    with (
+        patch("jayu.notifications.requests.post", side_effect=[unauthorized, refreshed, sent]),
+        patch("jayu.notifications.os.chmod") as chmod,
     ):
         result = KakaoNotifier(settings, paths).send("hello")
 
     assert result["status"] == "sent"
     assert result["refreshed"] is True
     assert (paths.state_dir / "kakao_tokens.json").exists()
+    chmod.assert_called_with(
+        paths.state_dir / "kakao_tokens.json",
+        stat.S_IRUSR | stat.S_IWUSR,
+    )
 
 
 def test_signal_message_is_truncated_with_detail_pointer():

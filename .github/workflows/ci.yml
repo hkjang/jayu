@@ -17,7 +17,7 @@ jobs:
       - run: uv run ruff format --check src tests scripts
       - run: uv run ruff check src tests scripts danta_simulation.py stock_kakao.py
       - run: uv run mypy src/jayu
-      - run: uv run bandit -q -r src/jayu -x src/jayu/engine.py
+      - run: uv run bandit -q -r src/jayu
       - run: uv run python scripts/generate_docs.py --check
       - run: uv run pytest -q
       - run: uv run pip-audit
