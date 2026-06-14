@@ -16,6 +16,7 @@ from jayu.reports import (
     train_oos_decay,
     write_cost_sensitivity_report,
     write_html_report,
+    write_markdown_report,
     write_shadow_performance_report,
     write_signal_performance_report,
 )
@@ -458,6 +459,19 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
         },
     )
     atomic_write_json(
+        run_dir / "safety_verdict.json",
+        {
+            "overall": "blocked",
+            "components": {
+                "data": {"status": "pass", "reasons": []},
+                "risk": {
+                    "status": "fail",
+                    "reasons": [{"code": "SECTOR_EXPOSURE_EXCEEDED"}],
+                },
+            },
+        },
+    )
+    atomic_write_json(
         run_dir / "result.json",
         {
             "results": {
@@ -498,3 +512,12 @@ def test_write_html_report_includes_equity_svg(tmp_path: Path):
     assert "1 provider disagreement reports" in content
     assert "Cost Sensitivity" in content
     assert "Risk Explanation" in content
+    assert "Safety Verdict" in content
+    assert "blocked" in content
+
+    markdown = write_markdown_report(run_dir)
+    markdown_content = markdown.read_text(encoding="utf-8")
+    assert "# Jayu Run Summary" in markdown_content
+    assert "Safety verdict: `blocked`" in markdown_content
+    assert "## Safety Verdict" in markdown_content
+    assert "Provider disagreement reports: 1" in markdown_content

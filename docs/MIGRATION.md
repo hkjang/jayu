@@ -7,12 +7,16 @@ migration. New automation should use the `jayu` CLI or `src/jayu` modules.
 
 Target removal date: 2026-09-30
 
-| Legacy entrypoint | Replacement |
-|---|---|
-| `python danta_simulation.py` | `jayu simulate` or `jayu signal --date today` |
-| `python stock_kakao.py` | `jayu notify --channel kakao` |
-| `python build_portfolio.py` | `jayu portfolio build` |
-| imports from `danta_simulation` | imports from `jayu.engine` or smaller `jayu.*` modules |
+| Legacy entrypoint | Replacement | Example | Removal date |
+|---|---|---|---|
+| `python danta_simulation.py` | `jayu simulate` | `uv run jayu simulate --mode research --runs 500` | 2026-09-30 |
+| `python stock_kakao.py` | `jayu notify --channel kakao` | `uv run jayu notify --channel kakao` | 2026-09-30 |
+| `python build_portfolio.py` | `jayu portfolio build` | `uv run jayu portfolio build` | 2026-09-30 |
+| `python analyze_portfolio.py` | `jayu portfolio analyze` | `uv run jayu portfolio analyze --details` | 2026-09-30 |
+| imports from `danta_simulation` | `jayu.engine` or smaller `jayu.*` modules | `from jayu import engine` | 2026-09-30 |
+
+All four executable wrappers delegate to the packaged CLI and emit a visible
+`FutureWarning` when run directly. No new behavior should be added to them.
 
 ## Strategy State Migration
 

@@ -37,6 +37,8 @@ def evaluate_signal_risk(
     settings: RiskSettings,
     *,
     mapping: PortfolioMapping | None = None,
+    dollar_volume: float | None = None,
+    minimum_dollar_volume: float | None = None,
 ) -> RiskDecision:
     ticker = ticker.upper()
     portfolio_mapping = mapping or load_portfolio_mapping()
@@ -56,8 +58,20 @@ def evaluate_signal_risk(
     cash_known = bool(portfolio.get("cash_known", False))
     factor_exposure = portfolio.get("factor_exposure_pct", {})
     factors = ticker_mapping.factors
+    positions = [item for item in portfolio.get("positions", []) if isinstance(item, dict)]
+    existing_tickers = {str(item.get("ticker", "")).upper() for item in positions}
+    account_value = float(portfolio.get("account_value_krw", 0.0) or 0.0)
+    current_ticker_value = sum(
+        float(item.get("market_value_krw", 0.0) or 0.0)
+        for item in positions
+        if str(item.get("ticker", "")).upper() == ticker
+    )
+    current_ticker_pct = current_ticker_value / account_value if account_value > 0 else 0.0
+    projected_position_count = len(existing_tickers) + int(ticker not in existing_tickers)
 
     projected = {
+        "position_count": float(projected_position_count),
+        "single_position_pct": current_ticker_pct + requested_position_pct,
         "underlying_exposure": current_underlying + requested_position_pct * leverage,
         "sector_exposure": current_sector + requested_position_pct * leverage,
         "leveraged_etf_value": current_leveraged
@@ -106,14 +120,67 @@ def evaluate_signal_risk(
         )
 
     if not mapped:
-        warnings.append(
-            {
-                "code": FailureCode.UNMAPPED_TICKER.value,
-                "message": (
-                    f"{ticker} not found in portfolio mapping; using default "
-                    f"leverage {leverage:g} and 'unmapped' factor"
-                ),
-            }
+        message = (
+            f"{ticker} not found in portfolio mapping; using default "
+            f"leverage {leverage:g} and 'unmapped' factor"
+        )
+        warnings.append({"code": FailureCode.UNMAPPED_TICKER.value, "message": message})
+        if settings.block_unmapped_tickers:
+            add_violation(
+                FailureCode.UNMAPPED_TICKER.value,
+                message,
+                observed=1,
+                limit=0,
+                metric="unmapped_ticker",
+            )
+
+    if projected_position_count > settings.max_positions:
+        add_violation(
+            FailureCode.MAX_POSITION_COUNT_EXCEEDED.value,
+            f"position_count {projected_position_count} > {settings.max_positions}",
+            observed=float(projected_position_count),
+            limit=float(settings.max_positions),
+            metric="position_count",
+        )
+    else:
+        add_pass(
+            metric="position_count",
+            observed=float(projected_position_count),
+            limit=float(settings.max_positions),
+        )
+    if projected["single_position_pct"] > settings.max_single_position_pct:
+        add_violation(
+            FailureCode.SINGLE_POSITION_EXCEEDED.value,
+            "single_position_pct "
+            f"{projected['single_position_pct']:.1%} > {settings.max_single_position_pct:.1%}",
+            observed=projected["single_position_pct"],
+            limit=settings.max_single_position_pct,
+            metric="single_position_pct",
+        )
+    else:
+        add_pass(
+            metric="single_position_pct",
+            observed=projected["single_position_pct"],
+            limit=settings.max_single_position_pct,
+        )
+    liquidity_limit = max(
+        settings.min_dollar_volume,
+        float(minimum_dollar_volume or 0.0),
+    )
+    if dollar_volume is not None and dollar_volume < liquidity_limit:
+        add_violation(
+            FailureCode.LIQUIDITY_INSUFFICIENT.value,
+            f"dollar_volume {dollar_volume:.0f} < {liquidity_limit:.0f}",
+            observed=dollar_volume,
+            limit=liquidity_limit,
+            metric="dollar_volume_ma20",
+        )
+    elif dollar_volume is not None:
+        add_pass(
+            metric="dollar_volume_ma20",
+            observed=dollar_volume,
+            limit=liquidity_limit,
+            direction=">=",
         )
 
     exposure_codes = {
@@ -216,6 +283,7 @@ def evaluate_signal_risk(
         eligible = True
     elif settings.enforcement == "resize":
         capacities = [
+            max(0.0, settings.max_single_position_pct - current_ticker_pct),
             max(0.0, (limits["underlying_exposure"] - current_underlying) / leverage),
             max(0.0, (limits["sector_exposure"] - current_sector) / leverage),
             max(
@@ -240,7 +308,15 @@ def evaluate_signal_risk(
                     max(0.0, settings.max_invested_pct - current_invested),
                 ]
             )
-        if any("breached" in item or "monthly_drawdown" in item for item in violations):
+        hard_block_codes = {
+            FailureCode.MAX_POSITION_COUNT_EXCEEDED.value,
+            FailureCode.UNMAPPED_TICKER.value,
+            FailureCode.LIQUIDITY_INSUFFICIENT.value,
+            FailureCode.DAILY_LOSS_LIMIT_BREACHED.value,
+            FailureCode.WEEKLY_LOSS_LIMIT_BREACHED.value,
+            FailureCode.MONTHLY_DRAWDOWN_BREACHED.value,
+        }
+        if any(item.get("code") in hard_block_codes for item in violation_details):
             capacities.append(0.0)
         approved = min(requested_position_pct, *capacities)
         eligible = approved >= 0.01
@@ -306,10 +382,13 @@ def apply_portfolio_risk(
                 portfolio,
                 settings,
                 mapping=portfolio_mapping,
+                dollar_volume=_optional_float(item.get("dollar_volume_ma20")),
+                minimum_dollar_volume=_optional_float(item.get("minimum_dollar_volume")),
             )
             item["eligible"] = decision.eligible
             item["approved_position_pct"] = decision.approved_position_pct
             item["risk"] = decision.to_dict()
+        _set_signal_status(item)
         evaluated[ticker] = item
     return evaluated
 
@@ -408,7 +487,31 @@ def apply_data_trust(
             "reference": reference,
             "event_note_count": len(notes),
         }
+        _set_signal_status(item)
     return signals
+
+
+def _optional_float(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _set_signal_status(item: dict[str, Any]) -> None:
+    risk = item.get("risk")
+    details = risk.get("violation_details", []) if isinstance(risk, dict) else []
+    reason_codes = sorted(
+        {
+            str(detail.get("code"))
+            for detail in details
+            if isinstance(detail, dict) and detail.get("code")
+        }
+    )
+    if isinstance(risk, dict):
+        risk["reason_codes"] = reason_codes
+    is_buy = item.get("action") == SignalAction.BUY.value
+    blocked = bool(is_buy and not item.get("eligible"))
+    item["blocked"] = blocked
+    item["status"] = "blocked" if blocked else "eligible" if is_buy else "hold"
+    item["reason_codes"] = reason_codes
 
 
 def risk_explanation(signals: dict[str, dict[str, Any]]) -> dict[str, Any]:

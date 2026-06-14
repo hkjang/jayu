@@ -301,6 +301,10 @@ def check_today_signals(
             else "hold",
             "conditions": conds_str,
             "price": round(float(row["Close"]), 2),
+            "dollar_volume_ma20": float(row["dollar_volume_ma20"])
+            if "dollar_volume_ma20" in row
+            else None,
+            "minimum_dollar_volume": float(min_vol),
             "regime": today_regime,
             "suggested_position_pct": float(p.get("pos_size", 0.10)),
             "cost_survival": cost_survival,

@@ -6,6 +6,7 @@
   "slippage": 0.0005,
   "random_seed": 42,
   "mode": "shadow",
+  "safety_profile": "safe",
   "account_value_krw": null,
   "cash_balance_krw": null,
   "notification_message_limit": 900,
@@ -13,10 +14,11 @@
   "run_retention_days": 30,
   "run_retention_count": 100,
   "data_provider": "yahoo",
-  "data_fallback_provider": "massive",
+  "data_fallback_provider": "none",
   "data": {
-    "cross_validation_providers": [],
-    "minimum_valid_price_sources": 1,
+    "cross_validation_providers": ["tiingo"],
+    "cross_validation_mode": "strict",
+    "minimum_valid_price_sources": 2,
     "price_disagreement_policy": "block",
     "max_row_count_delta": 2,
     "max_index_mismatches": 2,
@@ -89,7 +91,8 @@
     "as_of": null,
     "source": "manual_current_universe",
     "includes_delisted": false,
-    "policy": "warn"
+    "policy": "warn",
+    "exception_reason": null
   },
   "promotion": {
     "enabled": true,
@@ -97,10 +100,16 @@
     "min_completed_signals": 1,
     "min_mature_completion_ratio": 0.9,
     "min_health_score": 80,
-    "maturity_horizon_days": 20
+    "maturity_horizon_days": 20,
+    "min_data_validation_success_rate": 0.95,
+    "max_provider_disagreement_rate": 0.01,
+    "min_risk_gate_pass_rate": 0.5,
+    "max_signal_count_change_ratio": 1.0
   },
   "risk": {
     "profile": "balanced",
+    "max_positions": 20,
+    "max_single_position_pct": 0.1,
     "max_underlying_exposure": 0.3,
     "max_sector_exposure": 0.5,
     "max_leveraged_etf_value": 0.3,
@@ -111,6 +120,8 @@
     "daily_loss_limit": 0.03,
     "weekly_loss_limit": 0.06,
     "monthly_mdd_limit": 0.12,
+    "min_dollar_volume": 10000000,
+    "block_unmapped_tickers": true,
     "enforcement": "block"
   }
 }

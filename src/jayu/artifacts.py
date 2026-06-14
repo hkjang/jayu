@@ -204,6 +204,7 @@ class RunContext:
         payload = {
             "run_id": self.run_id,
             "command": self.command,
+            "execution_mode": self.settings.mode,
             "status": status,
             "started_at": self.started_at.isoformat(),
             "finished_at": datetime.now(UTC).isoformat() if status != "running" else None,

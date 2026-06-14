@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 from jayu.artifacts import RunContext
@@ -15,13 +18,52 @@ from jayu.paths import RuntimePaths
 from jayu.settings import Settings
 
 
-def test_validate_config_includes_strategy_space_audit():
-    result = CliRunner().invoke(app, ["validate-config"])
+def test_validate_config_includes_strategy_space_audit(monkeypatch):
+    monkeypatch.setenv("JAYU_TIINGO_API_KEY", "fixture-key")
+    result = CliRunner().invoke(
+        app,
+        [
+            "validate-config",
+            "--config",
+            "configs/config.sample.json",
+            "--mode",
+            "shadow",
+        ],
+    )
 
     assert result.exit_code == 0, result.output
     assert '"strategy_space_audit"' in result.output
     assert '"valid": true' in result.output
     assert "configuration is valid" in result.output
+
+
+def test_validate_config_blocks_paper_without_shadow_promotion(monkeypatch, tmp_path):
+    monkeypatch.setenv("JAYU_TIINGO_API_KEY", "fixture-key")
+    config = json.loads(Path("configs/config.sample.json").read_text(encoding="utf-8"))
+    config.update(
+        {
+            "state_dir": str(tmp_path / "state"),
+            "signals_dir": str(tmp_path / "signals"),
+            "runs_dir": str(tmp_path / "runs"),
+            "cache_dir": str(tmp_path / "cache"),
+        }
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "validate-config",
+            "--config",
+            str(config_path),
+            "--mode",
+            "paper",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "eligible shadow promotion" in str(result.exception)
 
 
 def test_missing_verified_price_is_reported_as_market_data_failure():
@@ -92,6 +134,7 @@ def test_signal_replay_forces_notification_off(monkeypatch):
 def test_replay_and_shadow_do_not_write_primary_signal():
     replay = _output_policy(replay=True, shadow_mode=False)
     shadow = _output_policy(replay=False, shadow_mode=True)
+    paper = _output_policy(replay=False, shadow_mode=False, paper_mode=True)
 
     assert replay == {
         "persist_state": False,
@@ -104,6 +147,8 @@ def test_replay_and_shadow_do_not_write_primary_signal():
     assert shadow["persist_signal"] is False
     assert shadow["write_primary_signal"] is False
     assert shadow["update_health"] is True
+    assert paper["persist_signal"] is False
+    assert paper["write_primary_signal"] is False
 
 
 def test_signal_input_hashes_include_strategy_and_mapping(tmp_path):
@@ -130,6 +175,38 @@ def test_signal_input_hashes_include_strategy_and_mapping(tmp_path):
     assert context.records["best_strategy_state"]["data_hash"]
 
 
+def test_status_command_writes_operational_snapshot(monkeypatch, tmp_path):
+    paths = RuntimePaths.from_root(tmp_path)
+    paths.ensure_runtime_dirs()
+
+    def fake_load(config):
+        return Settings(), paths
+
+    monkeypatch.setattr("jayu.cli._load", fake_load)
+
+    result = CliRunner().invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert '"live_ready": false' in result.output
+    assert (paths.state_dir / "operational_status.json").exists()
+
+
+def test_status_command_can_fail_when_not_ready(monkeypatch, tmp_path):
+    paths = RuntimePaths.from_root(tmp_path)
+    paths.ensure_runtime_dirs()
+
+    def fake_load(config):
+        return Settings(), paths
+
+    monkeypatch.setattr("jayu.cli._load", fake_load)
+
+    result = CliRunner().invoke(app, ["status", "--fail-on-not-ready"])
+
+    assert result.exit_code == 1
+    assert '"live_ready": false' in result.output
+    assert "NO_RUN_HISTORY" in result.output
+
+
 def test_historical_signal_date_requires_replay():
     result = CliRunner().invoke(app, ["signal", "--date", "2026-01-02"])
 
@@ -142,6 +219,8 @@ def test_experiment_compare_reads_hashes_and_statuses(tmp_path):
     right_dir = tmp_path / "right"
     atomic_write_json(left_dir / "cost_sensitivity.json", {"cost_survival_status": "approved"})
     atomic_write_json(right_dir / "cost_sensitivity.json", {"cost_survival_status": "rejected"})
+    atomic_write_json(left_dir / "safety_verdict.json", {"overall": "approved"})
+    atomic_write_json(right_dir / "safety_verdict.json", {"overall": "blocked"})
 
     comparison = _compare_experiment_rows(
         {
@@ -170,3 +249,6 @@ def test_experiment_compare_reads_hashes_and_statuses(tmp_path):
     assert comparison["data_hash"]["changed"] is True
     assert comparison["signal_hash"]["changed"] is True
     assert comparison["cost_survival"]["right"] == "rejected"
+    assert comparison["safety_verdict"]["left"] == "approved"
+    assert comparison["safety_verdict"]["right"] == "blocked"
+    assert comparison["safety_verdict"]["changed"] is True

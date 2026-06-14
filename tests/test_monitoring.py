@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 
+from jayu.data import DataFailureError
 from jayu.failure_codes import FailureCode
 from jayu.monitoring import classify_failure, compute_health_score, prune_runs, update_health
 from jayu.safety import SafetyGateError
@@ -53,6 +54,15 @@ def test_health_tracks_last_success_and_failure(tmp_path):
             )
         )
         == "SHADOW_PROMOTION_FAILED"
+    )
+    assert (
+        classify_failure(
+            DataFailureError(
+                "provider values disagree",
+                reason_code=FailureCode.DATA_DISAGREEMENT,
+            )
+        )
+        == "DATA_FAILURE"
     )
 
 

@@ -2,7 +2,8 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:${PATH}"
 
 WORKDIR /app
 
@@ -19,7 +20,14 @@ RUN pip install --no-cache-dir uv \
 
 COPY . .
 
-RUN mkdir -p state signals runs data/cache
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home app \
+    && mkdir -p state signals runs data/cache \
+    && chown -R app:app state signals runs data
 
-ENTRYPOINT ["uv", "run", "jayu"]
-CMD ["simulate"]
+USER app
+
+VOLUME ["/app/data", "/app/runs", "/app/state", "/app/signals"]
+
+ENTRYPOINT ["jayu"]
+CMD ["--help"]

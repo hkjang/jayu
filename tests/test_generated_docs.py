@@ -53,6 +53,7 @@ def test_documented_cli_commands_have_help():
         ["simulate", "--help"],
         ["signal", "--help"],
         ["notify", "--help"],
+        ["status", "--help"],
         ["portfolio", "analyze", "--help"],
         ["validate-config", "--help"],
     ):

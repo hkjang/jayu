@@ -151,18 +151,30 @@ def provider_configuration_audit(
     warnings: list[str] = []
     if settings.data_provider not in available_prices:
         errors.append(f"primary price provider unavailable: {settings.data_provider}")
-    requested_prices = {
+    validation_prices = {
         settings.data_provider,
         *settings.data.cross_validation_providers,
     }
+    requested_prices = set(validation_prices)
     if settings.data_fallback_provider != "none":
         requested_prices.add(settings.data_fallback_provider)
     missing_prices = sorted(requested_prices - available_prices)
     if missing_prices:
-        warnings.append(
-            "price providers unavailable due to credentials or policy: " + ", ".join(missing_prices)
+        message = "price providers unavailable due to credentials or policy: " + ", ".join(
+            missing_prices
         )
-    usable_requested = len(requested_prices & available_prices)
+        missing_validation_prices = set(missing_prices) & validation_prices
+        if settings.data.cross_validation_mode == "strict" and missing_validation_prices:
+            errors.append(message)
+        else:
+            warnings.append(message)
+    if (
+        settings.mode in {"signal", "shadow", "paper", "live"}
+        and settings.data.cross_validation_mode == "strict"
+        and not settings.data.cross_validation_providers
+    ):
+        errors.append("strict operational mode requires cross_validation_providers")
+    usable_requested = len(validation_prices & available_prices)
     if usable_requested < settings.data.minimum_valid_price_sources:
         errors.append(
             "minimum_valid_price_sources exceeds configured available price providers "
@@ -181,6 +193,7 @@ def provider_configuration_audit(
         "inventory": inventory,
         "errors": errors,
         "warnings": warnings,
+        "cross_validation_mode": settings.data.cross_validation_mode,
         "api_key_env_names": settings.data.api_key_env_names,
     }
 

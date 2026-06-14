@@ -11,6 +11,11 @@ runs
 data/cache
 simulation_logs
 config.json
+.env
+.env.*
+*.secret
+*.secrets
+secrets
 toss_portfolio.csv
 bin
 target

@@ -1,17 +1,12 @@
 """Compatibility entry point for Kakao notifications."""
 
 from pathlib import Path
+import sys
 import warnings
 
+from jayu.cli import app
 from jayu.notifications import KakaoNotifier
 from jayu.settings import load_settings
-
-warnings.warn(
-    "stock_kakao.py is deprecated; use `jayu notify --channel kakao` instead. "
-    "This wrapper will be removed after 2026-09-30.",
-    DeprecationWarning,
-    stacklevel=2,
-)
 
 
 def send_kakao(message: str):
@@ -22,4 +17,10 @@ def send_kakao(message: str):
 
 
 if __name__ == "__main__":
-    raise SystemExit("Use: jayu notify --channel kakao")
+    warnings.warn(
+        "stock_kakao.py is deprecated; use `jayu notify --channel kakao`. "
+        "Removal date: 2026-09-30.",
+        FutureWarning,
+        stacklevel=1,
+    )
+    app(args=["notify", "--channel", "kakao", *sys.argv[1:]], prog_name="jayu")

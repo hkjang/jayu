@@ -4,7 +4,7 @@ import json
 import os
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import (
     BaseModel,
@@ -18,8 +18,20 @@ from pydantic import (
 from .paths import RuntimePaths
 
 
+ExecutionMode: TypeAlias = Literal[
+    "research",
+    "backtest",
+    "signal",
+    "shadow",
+    "paper",
+    "live",
+]
+
+
 class RiskSettings(BaseModel):
-    profile: Literal["balanced", "conservative", "warning"] = "balanced"
+    profile: Literal["balanced", "conservative", "warning", "unsafe"] = "balanced"
+    max_positions: int = Field(default=20, ge=1, le=500)
+    max_single_position_pct: float = Field(default=0.10, gt=0, le=1)
     max_underlying_exposure: float = Field(default=0.30, ge=0, le=1)
     max_sector_exposure: float = Field(default=0.50, ge=0, le=1)
     max_leveraged_etf_value: float = Field(default=0.30, ge=0, le=1)
@@ -30,6 +42,8 @@ class RiskSettings(BaseModel):
     daily_loss_limit: float = Field(default=0.03, ge=0, le=1)
     weekly_loss_limit: float = Field(default=0.06, ge=0, le=1)
     monthly_mdd_limit: float = Field(default=0.12, ge=0, le=1)
+    min_dollar_volume: float = Field(default=10_000_000, ge=0)
+    block_unmapped_tickers: bool = True
     enforcement: Literal["block", "resize", "warn"] = "block"
 
     @model_validator(mode="after")
@@ -94,6 +108,15 @@ class UniverseSettings(BaseModel):
     source: str = "manual_current_universe"
     includes_delisted: bool = False
     policy: Literal["warn", "strict"] = "warn"
+    exception_reason: str | None = None
+
+    @field_validator("exception_reason")
+    @classmethod
+    def normalize_exception_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class PromotionSettings(BaseModel):
@@ -103,6 +126,10 @@ class PromotionSettings(BaseModel):
     min_mature_completion_ratio: float = Field(default=0.90, ge=0, le=1)
     min_health_score: int = Field(default=80, ge=0, le=100)
     maturity_horizon_days: int = Field(default=20, ge=1, le=252)
+    min_data_validation_success_rate: float = Field(default=0.95, ge=0, le=1)
+    max_provider_disagreement_rate: float = Field(default=0.01, ge=0, le=1)
+    min_risk_gate_pass_rate: float = Field(default=0.50, ge=0, le=1)
+    max_signal_count_change_ratio: float = Field(default=1.0, ge=0, le=100)
 
 
 class ProviderPolicySettings(BaseModel):
@@ -137,6 +164,7 @@ def _default_provider_policies() -> dict[str, ProviderPolicySettings]:
 
 class DataSettings(BaseModel):
     cross_validation_providers: list[Literal["yahoo", "massive", "tiingo"]] = []
+    cross_validation_mode: Literal["off", "warn", "strict"] = "strict"
     minimum_valid_price_sources: int = Field(default=1, ge=1, le=3)
     price_disagreement_policy: Literal["warn", "block"] = "block"
     max_row_count_delta: int = Field(default=2, ge=0, le=100)
@@ -191,7 +219,8 @@ class DataSettings(BaseModel):
 
 class Settings(BaseModel):
     tickers: list[str] = ["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"]
-    mode: Literal["live", "shadow"] = "shadow"
+    mode: ExecutionMode = "research"
+    safety_profile: Literal["safe", "unsafe"] = "safe"
     initial_capital: float = Field(default=10_000_000, gt=0)
     sim_runs: int = Field(default=500, ge=1, le=100_000)
     transaction_fee: float = Field(default=0.0015, ge=0, le=0.02)
@@ -241,23 +270,34 @@ class Settings(BaseModel):
         return cleaned
 
     @model_validator(mode="after")
-    def validate_live_safety(self) -> "Settings":
-        if self.mode != "live":
+    def validate_execution_safety(self) -> "Settings":
+        operational_modes = {"signal", "shadow", "paper", "live"}
+        if self.mode not in operational_modes:
             return self
         price_sources = {
             self.data_provider,
             *self.data.cross_validation_providers,
         }
+        if self.data.cross_validation_mode != "strict":
+            raise ValueError(f"{self.mode} mode requires data.cross_validation_mode=strict")
         if self.data.minimum_valid_price_sources < 2:
-            raise ValueError("live mode requires minimum_valid_price_sources >= 2")
+            raise ValueError(f"{self.mode} mode requires minimum_valid_price_sources >= 2")
         if len(price_sources) < 2:
-            raise ValueError("live mode requires a distinct cross_validation_providers entry")
+            raise ValueError(
+                f"{self.mode} mode requires a distinct cross_validation_providers entry"
+            )
         if self.data.price_disagreement_policy != "block":
-            raise ValueError("live mode requires price_disagreement_policy=block")
+            raise ValueError(f"{self.mode} mode requires price_disagreement_policy=block")
         if not self.data.require_verified_price_for_eligibility:
-            raise ValueError("live mode requires verified price data for eligibility")
-        if not self.promotion.enabled:
-            raise ValueError("live mode requires the shadow promotion gate")
+            raise ValueError(f"{self.mode} mode requires verified price data for eligibility")
+        if self.mode in {"paper", "live"} and not self.promotion.enabled:
+            raise ValueError(f"{self.mode} mode requires the shadow promotion gate")
+        if self.mode in {"paper", "live"} and self.safety_profile != "safe":
+            raise ValueError(f"{self.mode} mode does not allow safety_profile=unsafe")
+        if self.mode in {"paper", "live"} and self.risk.enforcement != "block":
+            raise ValueError(f"{self.mode} mode requires risk.enforcement=block")
+        if self.mode in {"paper", "live"} and not self.risk.block_unmapped_tickers:
+            raise ValueError(f"{self.mode} mode requires risk.block_unmapped_tickers=true")
         return self
 
     def runtime_paths(self, project_root: Path) -> RuntimePaths:

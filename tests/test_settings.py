@@ -48,6 +48,10 @@ def test_sample_config_is_valid():
     assert settings.risk.enforcement == "block"
     assert settings.data.api_key_env_names["tiingo"] == "JAYU_TIINGO_API_KEY"
     assert settings.mode == "shadow"
+    assert settings.safety_profile == "safe"
+    assert settings.data.cross_validation_mode == "strict"
+    assert settings.data.cross_validation_providers == ["tiingo"]
+    assert settings.data.minimum_valid_price_sources == 2
     assert settings.data.max_relative_volume_delta == 0.05
     assert settings.research.cost_survival_enabled is True
     assert settings.research.cost_survival_buffer_bps == 10.0
@@ -97,8 +101,8 @@ def test_cross_validation_provider_requires_enough_available_sources(tmp_path):
     audit = provider_configuration_audit(settings, registry)
 
     assert audit["valid"] is False
-    assert "tiingo" in audit["warnings"][0]
-    assert "minimum_valid_price_sources" in audit["errors"][0]
+    assert any("tiingo" in error for error in audit["errors"])
+    assert any("minimum_valid_price_sources" in error for error in audit["errors"])
 
 
 def test_live_mode_requires_two_source_price_verification():
@@ -133,3 +137,32 @@ def test_live_mode_cannot_disable_promotion_gate():
                 "promotion": {"enabled": False},
             }
         )
+
+
+def test_signal_mode_rejects_empty_cross_validation_providers():
+    with pytest.raises(ValueError, match="cross_validation_providers"):
+        Settings.model_validate(
+            {
+                "mode": "signal",
+                "data": {
+                    "cross_validation_providers": [],
+                    "cross_validation_mode": "strict",
+                    "minimum_valid_price_sources": 2,
+                },
+            }
+        )
+
+
+def test_paper_and_live_reject_unsafe_profile():
+    for mode in ("paper", "live"):
+        with pytest.raises(ValueError, match="safety_profile=unsafe"):
+            Settings.model_validate(
+                {
+                    "mode": mode,
+                    "safety_profile": "unsafe",
+                    "data": {
+                        "cross_validation_providers": ["tiingo"],
+                        "minimum_valid_price_sources": 2,
+                    },
+                }
+            )

@@ -12,8 +12,8 @@ the maintained surface or CI gates.
 | --- | --- | --- |
 | `danta_simulation.py` | **Compatibility shim** | Thin delegator to `jayu.engine`. Kept so older invocations keep working. Prefer `jayu simulate`. Linted; mypy-excluded. |
 | `stock_kakao.py` | **Compatibility shim** | Thin delegator to `jayu.notifications`. Prefer `jayu notify`. Linted. |
-| `analyze_portfolio.py` | **Superseded (duplicate)** | Overlaps `jayu.portfolio` / `jayu portfolio analyze`. Use the package path; this script is not covered by CI. |
-| `build_portfolio.py` | **Superseded (duplicate)** | Delegates to `jayu.portfolio_build`. Prefer `jayu portfolio build`. |
+| `analyze_portfolio.py` | **Compatibility shim** | Delegates to `jayu portfolio analyze` and emits a deprecation warning. |
+| `build_portfolio.py` | **Compatibility shim** | Delegates to `jayu portfolio build` and emits a deprecation warning. |
 | `fix_tickers.py`, `fix_remaining.py` | **One-off maintenance** | Ad-hoc CSV/ticker repair via `yfinance` (network). Not tested, not in the lint/CI scope. Run manually if ever needed. |
 | `check_csv.py`, `debug_sim.py` | **One-off / debug** | Throwaway inspection helpers. Not maintained. |
 | `test_simulation.py` | **Legacy test island** | `unittest`-style suite collected by pytest (`testpaths = ["tests", "."]`) but outside the `ruff`/`mypy` scope. New tests should live under `tests/`. |

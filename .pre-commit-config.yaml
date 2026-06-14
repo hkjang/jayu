@@ -4,9 +4,9 @@ repos:
     hooks:
       - id: ruff-check
         args: [--fix]
-        files: ^(src/|tests/|scripts/|danta_simulation\.py$|stock_kakao\.py$)
+        files: ^(src/|tests/|scripts/|danta_simulation\.py$|stock_kakao\.py$|build_portfolio\.py$|analyze_portfolio\.py$)
       - id: ruff-format
-        files: ^(src/|tests/|scripts/|danta_simulation\.py$|stock_kakao\.py$)
+        files: ^(src/|tests/|scripts/|danta_simulation\.py$|stock_kakao\.py$|build_portfolio\.py$|analyze_portfolio\.py$)
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:

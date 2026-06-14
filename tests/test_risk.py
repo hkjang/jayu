@@ -198,3 +198,76 @@ def test_risk_explanation_does_not_count_hold_as_failed_review():
     assert report["approved_count"] == 1
     assert report["blocked_count"] == 0
     assert report["hold_count"] == 1
+
+
+def test_operational_risk_failures_are_exposed_as_reason_codes():
+    signals = {
+        "TSLA": {
+            "signal": "entry",
+            "action": "buy",
+            "suggested_position_pct": 0.15,
+            "dollar_volume_ma20": 1_000,
+            "minimum_dollar_volume": 10_000_000,
+        }
+    }
+    portfolio = {
+        "account_value_krw": 100_000_000,
+        "cash_known": True,
+        "cash_pct": 0.10,
+        "invested_pct": 0.90,
+        "adjusted_gross_exposure": 0.90,
+        "leveraged_etf_value_pct": 0.0,
+        "underlying_exposure_pct": {},
+        "sector_exposure_pct": {},
+        "factor_exposure_pct": {},
+        "positions": [
+            {
+                "ticker": "NVDA",
+                "market_value_krw": 90_000_000,
+            }
+        ],
+        "risk_status": {"daily_return": -0.04},
+    }
+
+    result = apply_portfolio_risk(
+        signals,
+        portfolio,
+        RiskSettings(max_positions=1),
+    )
+
+    signal = result["TSLA"]
+    assert signal["blocked"] is True
+    assert signal["status"] == "blocked"
+    assert {
+        "MAX_POSITION_COUNT_EXCEEDED",
+        "SINGLE_POSITION_EXCEEDED",
+        "LIQUIDITY_INSUFFICIENT",
+        "MIN_CASH_BREACHED",
+        "DAILY_LOSS_LIMIT_BREACHED",
+    } <= set(signal["reason_codes"])
+
+
+def test_unmapped_ticker_is_a_blocking_reason_by_default():
+    result = apply_portfolio_risk(
+        {
+            "ZZZZ": {
+                "signal": "entry",
+                "action": "buy",
+                "suggested_position_pct": 0.05,
+                "dollar_volume_ma20": 20_000_000,
+            }
+        },
+        {
+            "account_value_krw": 100_000_000,
+            "adjusted_gross_exposure": 0.0,
+            "leveraged_etf_value_pct": 0.0,
+            "underlying_exposure_pct": {},
+            "sector_exposure_pct": {},
+            "factor_exposure_pct": {},
+            "positions": [],
+        },
+        RiskSettings(),
+    )
+
+    assert result["ZZZZ"]["blocked"] is True
+    assert "UNMAPPED_TICKER" in result["ZZZZ"]["reason_codes"]

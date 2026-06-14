@@ -629,7 +629,8 @@ def write_shadow_performance_report(
 
 def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) -> Path:
     manifest_data = dict(manifest or read_json(run_dir / "manifest.json", default={}) or {})
-    result = manifest_data.get("result") if isinstance(manifest_data.get("result"), Mapping) else {}
+    result_value = manifest_data.get("result")
+    result: Mapping[str, Any] = result_value if isinstance(result_value, Mapping) else {}
     equity_svgs: list[tuple[str, str]] = []
     for path in sorted((run_dir / "equity").glob("*.json"))[:8]:
         records = read_json(path, default=[])
@@ -691,11 +692,24 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         and isinstance(disagreement_payload.get("disagreements"), list)
         else []
     )
+    survivorship_value = manifest_data.get("survivorship_audit")
+    survivorship: Mapping[str, Any] = (
+        survivorship_value if isinstance(survivorship_value, Mapping) else {}
+    )
+    promotion_value = read_json(run_dir / "promotion.json", default={})
+    promotion: Mapping[str, Any] = promotion_value if isinstance(promotion_value, Mapping) else {}
+    verdict_value = read_json(run_dir / "safety_verdict.json", default={})
+    verdict: Mapping[str, Any] = verdict_value if isinstance(verdict_value, Mapping) else {}
     quality_reports = manifest_data.get("data_reports", {})
+    data_hashes = manifest_data.get("data_hashes", {})
     rows = [
         ("run_id", manifest_data.get("run_id")),
         ("status", manifest_data.get("status")),
         ("command", manifest_data.get("command")),
+        ("mode", result.get("mode") if isinstance(result, Mapping) else None),
+        ("safety_verdict", verdict.get("overall") or result.get("safety_verdict")),
+        ("config_hash", manifest_data.get("config_hash")),
+        ("data_hash", stable_hash(data_hashes) if isinstance(data_hashes, Mapping) else None),
         ("git_revision", manifest_data.get("git_revision")),
         ("random_seed", manifest_data.get("random_seed")),
         ("signal_count", result.get("signal_count") if isinstance(result, Mapping) else None),
@@ -921,6 +935,46 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
         if data_sources or quality_total
         else ""
     )
+    disagreement_rows = "\n".join(
+        "<tr>"
+        f"<td>{_cell(row.get('ticker'))}</td>"
+        f"<td>{_cell(_disagreement_pairs(row))}</td>"
+        f"<td>{_cell(_disagreement_causes(row))}</td>"
+        f"<td>{_cell(_disagreement_detail_count(row, 'date_mismatches'))}</td>"
+        f"<td>{_cell(_disagreement_detail_count(row, 'value_mismatches'))}</td>"
+        "</tr>"
+        for row in disagreements
+        if isinstance(row, Mapping)
+    )
+    disagreement_section = (
+        f"""<h2>Provider Disagreements</h2>
+  <table>
+    <tr><th>Ticker</th><th>Providers</th><th>Causes</th>
+        <th>Date mismatches</th><th>Value mismatches</th></tr>
+    {disagreement_rows}
+  </table>"""
+        if disagreements
+        else "<h2>Provider Disagreements</h2><p>No threshold violations recorded.</p>"
+    )
+    survivorship_section = f"""<h2>Survivorship Policy</h2>
+  <table>
+    <tr><th>Policy</th><th>Valid</th><th>As of</th><th>Includes delisted</th>
+        <th>Source</th><th>Exception</th></tr>
+    <tr><td>{_cell(survivorship.get("policy"))}</td>
+        <td>{_cell(survivorship.get("valid"))}</td>
+        <td>{_cell(survivorship.get("universe_as_of"))}</td>
+        <td>{_cell(survivorship.get("includes_delisted"))}</td>
+        <td>{_cell(survivorship.get("universe_source"))}</td>
+        <td>{_cell(survivorship.get("exception_reason"))}</td></tr>
+  </table>"""
+    promotion_section = (
+        f"""<h2>Shadow Promotion</h2>
+  <p>Status: <strong>{_cell("eligible" if promotion.get("eligible") else "blocked")}</strong></p>
+  <pre>{html.escape(json.dumps(promotion.get("metrics", {}), ensure_ascii=False, indent=2))}</pre>"""
+        if promotion
+        else "<h2>Shadow Promotion</h2><p>Not evaluated for this run.</p>"
+    )
+    verdict_section = _safety_verdict_html(verdict) if verdict else ""
     content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -936,11 +990,15 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
 </head>
 <body>
   <h1>Jayu Run Report</h1>
+  {verdict_section}
   <h2>Summary</h2>
   <table>{html_rows}</table>
   <h2>Equity Curves</h2>
   {graph_blocks or "<p>No equity curve artifacts found.</p>"}
   {data_section}
+  {disagreement_section}
+  {survivorship_section}
+  {promotion_section}
   {validation_section}
   {risk_section}
   {explanation_section}
@@ -958,3 +1016,150 @@ def write_html_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) 
     output = run_dir / "report.html"
     _atomic_write_text(output, content)
     return output
+
+
+def write_markdown_report(run_dir: Path, manifest: Mapping[str, Any] | None = None) -> Path:
+    manifest_data = dict(manifest or read_json(run_dir / "manifest.json", default={}) or {})
+    result_value = manifest_data.get("result")
+    result: Mapping[str, Any] = result_value if isinstance(result_value, Mapping) else {}
+    survivorship_value = manifest_data.get("survivorship_audit")
+    survivorship: Mapping[str, Any] = (
+        survivorship_value if isinstance(survivorship_value, Mapping) else {}
+    )
+    disagreement_payload = read_json(run_dir / "provider_disagreement_report.json", default={})
+    disagreements = (
+        disagreement_payload.get("disagreements", [])
+        if isinstance(disagreement_payload, Mapping)
+        else []
+    )
+    promotion_value = read_json(run_dir / "promotion.json", default={})
+    promotion: Mapping[str, Any] = promotion_value if isinstance(promotion_value, Mapping) else {}
+    risk_value = read_json(run_dir / "risk_explanation.json", default={})
+    risk: Mapping[str, Any] = risk_value if isinstance(risk_value, Mapping) else {}
+    verdict_value = read_json(run_dir / "safety_verdict.json", default={})
+    verdict: Mapping[str, Any] = verdict_value if isinstance(verdict_value, Mapping) else {}
+    data_hashes = manifest_data.get("data_hashes", {})
+    lines = [
+        "# Jayu Run Summary",
+        "",
+        f"- Run: `{manifest_data.get('run_id', 'unknown')}`",
+        f"- Status: `{manifest_data.get('status', 'unknown')}`",
+        f"- Mode: `{result.get('mode', 'unknown')}`",
+        f"- Safety verdict: `{verdict.get('overall', result.get('safety_verdict', 'unknown'))}`",
+        f"- Config hash: `{manifest_data.get('config_hash', 'unknown')}`",
+        f"- Data hash: `{stable_hash(data_hashes) if isinstance(data_hashes, Mapping) else 'unknown'}`",
+        "",
+        "## Data Quality",
+        "",
+        f"- Provider disagreement reports: {len(disagreements) if isinstance(disagreements, list) else 0}",
+    ]
+    if verdict:
+        lines.extend(["", "## Safety Verdict", ""])
+        components = verdict.get("components", {})
+        if isinstance(components, Mapping):
+            for name, component in components.items():
+                if isinstance(component, Mapping):
+                    lines.append(f"- `{name}`: `{component.get('status')}`")
+    if isinstance(disagreements, list):
+        for row in disagreements[:20]:
+            if isinstance(row, Mapping):
+                lines.append(
+                    f"- `{row.get('ticker', '?')}`: {_disagreement_causes(row)} "
+                    f"({_disagreement_pairs(row)})"
+                )
+    lines.extend(
+        [
+            "",
+            "## Survivorship",
+            "",
+            f"- Policy: `{survivorship.get('policy', 'unknown')}`",
+            f"- Valid: `{survivorship.get('valid', False)}`",
+            f"- Includes delisted: `{survivorship.get('includes_delisted', False)}`",
+            f"- Exception: {survivorship.get('exception_reason') or 'none'}",
+            "",
+            "## Promotion",
+            "",
+            f"- Eligible: `{promotion.get('eligible', False)}`",
+            f"- Failure code: `{promotion.get('failure_code')}`",
+            "",
+            "## Risk",
+            "",
+            f"- Approved: {risk.get('approved_count', 0)}",
+            f"- Blocked: {risk.get('blocked_count', 0)}",
+        ]
+    )
+    top_reasons = risk.get("top_block_reasons", [])
+    for item in top_reasons if isinstance(top_reasons, list) else []:
+        if isinstance(item, Mapping):
+            lines.append(f"- `{item.get('code')}`: {item.get('count')}")
+    output = run_dir / "report.md"
+    _atomic_write_text(output, "\n".join(lines) + "\n")
+    return output
+
+
+def _disagreement_pairs(report: Mapping[str, Any]) -> str:
+    comparisons = report.get("disagreements")
+    if not isinstance(comparisons, list):
+        return ""
+    return ", ".join(
+        f"{item.get('baseline')} vs {item.get('candidate')}"
+        for item in comparisons
+        if isinstance(item, Mapping)
+    )
+
+
+def _safety_verdict_html(verdict: Mapping[str, Any]) -> str:
+    components = verdict.get("components", {})
+    rows = ""
+    if isinstance(components, Mapping):
+        rows = "\n".join(
+            "<tr>"
+            f"<td>{html.escape(str(name))}</td>"
+            f"<td>{html.escape(str(component.get('status')))}</td>"
+            f"<td>{html.escape(_verdict_component_reasons(component))}</td>"
+            "</tr>"
+            for name, component in components.items()
+            if isinstance(component, Mapping)
+        )
+    return f"""<h2>Safety Verdict</h2>
+  <p>Overall: <strong>{html.escape(str(verdict.get("overall", "unknown")))}</strong></p>
+  <table>
+    <tr><th>Component</th><th>Status</th><th>Reasons</th></tr>
+    {rows}
+  </table>"""
+
+
+def _verdict_component_reasons(component: Mapping[str, Any]) -> str:
+    reasons = component.get("reasons", [])
+    if not isinstance(reasons, list):
+        return ""
+    return ", ".join(
+        str(reason.get("code"))
+        for reason in reasons
+        if isinstance(reason, Mapping) and reason.get("code")
+    )
+
+
+def _disagreement_causes(report: Mapping[str, Any]) -> str:
+    comparisons = report.get("disagreements")
+    if not isinstance(comparisons, list):
+        return ""
+    causes = {
+        str(reason.get("cause"))
+        for item in comparisons
+        if isinstance(item, Mapping)
+        for reason in item.get("reasons", [])
+        if isinstance(reason, Mapping) and reason.get("cause")
+    }
+    return ", ".join(sorted(causes))
+
+
+def _disagreement_detail_count(report: Mapping[str, Any], key: str) -> int:
+    comparisons = report.get("disagreements")
+    if not isinstance(comparisons, list):
+        return 0
+    return sum(
+        len(item.get(key, []))
+        for item in comparisons
+        if isinstance(item, Mapping) and isinstance(item.get(key), list)
+    )

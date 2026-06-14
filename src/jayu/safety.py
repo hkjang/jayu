@@ -41,6 +41,12 @@ def enforce_live_price_safety(settings: Settings, registry: ProviderRegistry) ->
     available = set(registry.inventory()[ProviderCategory.PRICE.value])
     criteria = [
         SafetyCriterion(
+            "cross_validation_mode",
+            settings.data.cross_validation_mode == "strict",
+            settings.data.cross_validation_mode,
+            "strict",
+        ),
+        SafetyCriterion(
             "minimum_valid_price_sources",
             settings.data.minimum_valid_price_sources >= 2,
             settings.data.minimum_valid_price_sources,
@@ -71,7 +77,8 @@ def enforce_live_price_safety(settings: Settings, registry: ProviderRegistry) ->
             True,
         ),
     ]
-    report = {
+    report: dict[str, Any] = {
+        "mode": settings.mode,
         "eligible": all(item.passed for item in criteria),
         "requested_sources": sorted(requested),
         "available_sources": sorted(available),
@@ -112,6 +119,12 @@ def evaluate_shadow_promotion(
     shadow_dates: set[date] = set()
     buy_signals: list[dict[str, Any]] = []
     critical_failures: list[dict[str, str]] = []
+    data_validation_checks = 0
+    data_validation_successes = 0
+    provider_disagreement_count = 0
+    risk_gate_checks = 0
+    risk_gate_passes = 0
+    daily_signal_counts: dict[date, int] = {}
     critical_codes = {
         FailureCode.DATA_CONTRACT_FAILED.value,
         FailureCode.DATA_DISAGREEMENT.value,
@@ -125,16 +138,34 @@ def evaluate_shadow_promotion(
         payload = read_json(path, default={})
         if not isinstance(payload, Mapping):
             continue
+        daily_signal_counts.setdefault(date.fromisoformat(path.stem), 0)
         for ticker, raw_signal in payload.items():
             if not isinstance(raw_signal, Mapping):
                 continue
             risk = raw_signal.get("risk")
             details = risk.get("violation_details", []) if isinstance(risk, Mapping) else []
+            detail_codes = {
+                str(detail.get("code"))
+                for detail in details
+                if isinstance(detail, Mapping) and detail.get("code")
+            }
             for detail in details if isinstance(details, list) else []:
                 if isinstance(detail, Mapping) and detail.get("code") in critical_codes:
                     critical_failures.append({"ticker": str(ticker), "code": str(detail["code"])})
+            data_trust = risk.get("data_trust") if isinstance(risk, Mapping) else None
+            price_trust = data_trust.get("price") if isinstance(data_trust, Mapping) else None
+            if isinstance(price_trust, Mapping) and "verified" in price_trust:
+                data_validation_checks += 1
+                data_validation_successes += int(price_trust.get("verified") is True)
+                if price_trust.get("provider_disagreements"):
+                    provider_disagreement_count += 1
+            elif FailureCode.DATA_DISAGREEMENT.value in detail_codes:
+                provider_disagreement_count += 1
             if raw_signal.get("action") == "buy":
                 buy_signals.append(dict(raw_signal))
+                daily_signal_counts[date.fromisoformat(path.stem)] += 1
+                risk_gate_checks += 1
+                risk_gate_passes += int(raw_signal.get("eligible") is True)
 
     mature_signals = []
     for signal in buy_signals:
@@ -149,6 +180,21 @@ def evaluate_shadow_promotion(
         signal for signal in mature_signals if signal.get("shadow_status") == "completed"
     ]
     completion_ratio = len(completed_signals) / len(mature_signals) if mature_signals else 0.0
+    data_validation_success_rate = (
+        data_validation_successes / data_validation_checks if data_validation_checks else 0.0
+    )
+    provider_disagreement_rate = (
+        provider_disagreement_count / data_validation_checks if data_validation_checks else 1.0
+    )
+    risk_gate_pass_rate = risk_gate_passes / risk_gate_checks if risk_gate_checks else 0.0
+    signal_count_changes: list[float] = []
+    ordered_daily_counts = [daily_signal_counts[item] for item in sorted(daily_signal_counts)]
+    for previous, current in zip(ordered_daily_counts, ordered_daily_counts[1:], strict=False):
+        if previous == 0:
+            signal_count_changes.append(float(current))
+        else:
+            signal_count_changes.append(abs(current - previous) / previous)
+    max_signal_count_change_ratio = max(signal_count_changes, default=0.0)
     health = read_json(health_path, default={})
     health_score = health.get("health_score") if isinstance(health, Mapping) else None
     criteria = [
@@ -182,6 +228,30 @@ def evaluate_shadow_promotion(
             len(critical_failures),
             0,
         ),
+        SafetyCriterion(
+            "data_validation_success_rate",
+            data_validation_success_rate >= settings.min_data_validation_success_rate,
+            round(data_validation_success_rate, 4),
+            settings.min_data_validation_success_rate,
+        ),
+        SafetyCriterion(
+            "provider_disagreement_rate",
+            provider_disagreement_rate <= settings.max_provider_disagreement_rate,
+            round(provider_disagreement_rate, 4),
+            settings.max_provider_disagreement_rate,
+        ),
+        SafetyCriterion(
+            "risk_gate_pass_rate",
+            risk_gate_pass_rate >= settings.min_risk_gate_pass_rate,
+            round(risk_gate_pass_rate, 4),
+            settings.min_risk_gate_pass_rate,
+        ),
+        SafetyCriterion(
+            "signal_count_change_ratio",
+            max_signal_count_change_ratio <= settings.max_signal_count_change_ratio,
+            round(max_signal_count_change_ratio, 4),
+            settings.max_signal_count_change_ratio,
+        ),
     ]
     report = {
         "generated_at": reference.isoformat(),
@@ -191,6 +261,18 @@ def evaluate_shadow_promotion(
         "mature_signal_count": len(mature_signals),
         "completed_signal_count": len(completed_signals),
         "critical_failures": critical_failures,
+        "metrics": {
+            "data_validation_checks": data_validation_checks,
+            "data_validation_success_rate": round(data_validation_success_rate, 4),
+            "provider_disagreement_count": provider_disagreement_count,
+            "provider_disagreement_rate": round(provider_disagreement_rate, 4),
+            "risk_gate_checks": risk_gate_checks,
+            "risk_gate_pass_rate": round(risk_gate_pass_rate, 4),
+            "daily_signal_counts": {
+                item.isoformat(): daily_signal_counts[item] for item in sorted(daily_signal_counts)
+            },
+            "max_signal_count_change_ratio": round(max_signal_count_change_ratio, 4),
+        },
         "criteria": [item.to_dict() for item in criteria],
     }
     report["failure_code"] = (

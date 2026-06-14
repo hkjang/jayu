@@ -25,6 +25,7 @@ from .failure_codes import FailureCode
 from .io import atomic_write_json, file_sha256, read_json, stable_hash
 from .monitoring import classify_failure, compute_health_score, prune_runs, update_health
 from .notifications import KakaoNotifier, build_signal_message
+from .operational_status import write_operational_status, build_operational_status
 from .portfolio import (
     get_fx_rates,
     load_portfolio,
@@ -47,6 +48,7 @@ from .reports import (
     parameter_importance,
     write_cost_sensitivity_report,
     write_html_report,
+    write_markdown_report,
     write_shadow_performance_report,
     write_signal_performance_report,
 )
@@ -56,9 +58,11 @@ from .safety import (
     enforce_live_price_safety,
     enforce_research_universe,
     enforce_shadow_promotion,
+    evaluate_shadow_promotion,
     write_promotion_report,
 )
-from .settings import Settings, load_settings
+from .settings import ExecutionMode, Settings, load_settings
+from .safety_verdict import write_safety_verdict
 from .signal_replay import write_signal_replay_artifact
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
 from .survivorship import audit_survivorship
@@ -115,7 +119,10 @@ def _data_service(
         run_context=context,
         retries=primary_policy.retries,
         refresh_all=refresh,
-        cross_validate=bool(settings.data.cross_validation_providers),
+        cross_validate=(
+            settings.data.cross_validation_mode != "off"
+            and bool(settings.data.cross_validation_providers)
+        ),
         minimum_valid_sources=settings.data.minimum_valid_price_sources,
         disagreement_policy=settings.data.price_disagreement_policy,
         max_row_count_delta=settings.data.max_row_count_delta,
@@ -319,11 +326,17 @@ def _record_signal_inputs(context: RunContext, paths: RuntimePaths) -> None:
         )
 
 
-def _output_policy(*, replay: bool, shadow_mode: bool) -> dict[str, bool]:
+def _output_policy(
+    *,
+    replay: bool,
+    shadow_mode: bool,
+    paper_mode: bool = False,
+) -> dict[str, bool]:
+    non_operational = shadow_mode or paper_mode
     return {
         "persist_state": not replay,
-        "persist_signal": not replay and not shadow_mode,
-        "write_primary_signal": not replay and not shadow_mode,
+        "persist_signal": not replay and not non_operational,
+        "write_primary_signal": not replay and not non_operational,
         "update_health": not replay,
         "prune_runs": not replay,
     }
@@ -342,6 +355,7 @@ def _run_engine(
     seed: int | None,
     replay_date: str | None = None,
     replay: bool = False,
+    execution_mode: ExecutionMode | None = None,
 ) -> None:
     settings, paths = _load(config)
     overrides: dict[str, Any] = {}
@@ -351,12 +365,21 @@ def _run_engine(
         overrides["sim_runs"] = runs
     if seed is not None:
         overrides["random_seed"] = seed
+    if execution_mode is not None:
+        overrides["mode"] = execution_mode
+    elif not optimize and settings.mode not in {"signal", "shadow", "paper", "live"}:
+        overrides["mode"] = "signal"
     if overrides:
         settings = Settings.model_validate({**settings.model_dump(), **overrides})
     shadow_mode = settings.mode == "shadow"
-    output_policy = _output_policy(replay=replay, shadow_mode=shadow_mode)
+    paper_mode = settings.mode == "paper"
+    output_policy = _output_policy(
+        replay=replay,
+        shadow_mode=shadow_mode,
+        paper_mode=paper_mode,
+    )
     signal_date = replay_date or date_type.today().isoformat()
-    effective_notify = bool(notify_user and not shadow_mode and not replay)
+    effective_notify = bool(notify_user and settings.mode == "live" and not replay)
     if output_policy["prune_runs"]:
         prune_runs(
             paths.runs_dir,
@@ -376,11 +399,12 @@ def _run_engine(
             research_safety_path = context.run_dir / "research_universe_safety.json"
             atomic_write_json(research_safety_path, research_safety)
             context.record_artifact(research_safety_path)
-        if settings.mode == "live" and not replay and not optimize:
+        if settings.mode in {"signal", "shadow", "paper", "live"} and not replay:
             live_price_safety = enforce_live_price_safety(settings, provider_registry)
-            live_price_path = context.run_dir / "live_price_safety.json"
+            live_price_path = context.run_dir / "price_safety.json"
             atomic_write_json(live_price_path, live_price_safety)
             context.record_artifact(live_price_path)
+        if settings.mode in {"paper", "live"} and not replay and not optimize:
             promotion = enforce_shadow_promotion(
                 paths.state_dir / "promotion.json",
                 paths.signals_dir / "shadow",
@@ -416,14 +440,17 @@ def _run_engine(
                 + ", ".join(failed_market_tickers)
             )
         signals = _apply_risk(settings, paths, signals, context)
-        if shadow_mode:
-            signals = _annotate_shadow_signals(signals, reason="mode=shadow")
+        if shadow_mode or paper_mode:
+            signals = _annotate_shadow_signals(signals, reason=f"mode={settings.mode}")
         ensure_contract("signal_dataframe", validate_signal_contract(signals))
         if output_policy["write_primary_signal"]:
             atomic_write_json(paths.signal_file, signals)
         if shadow_mode:
             shadow_path = paths.signals_dir / "shadow" / f"{signal_date}.json"
             atomic_write_json(shadow_path, signals)
+        if paper_mode:
+            paper_path = paths.signals_dir / "paper" / f"{signal_date}.json"
+            atomic_write_json(paper_path, signals)
         risk_signal_path = context.run_dir / "signals_risk.json"
         atomic_write_json(risk_signal_path, signals)
         context.record_artifact(risk_signal_path)
@@ -494,10 +521,26 @@ def _run_engine(
         atomic_write_json(importance_path, parameter_importance(best_all))
         context.record_artifact(importance_path)
         context.write_manifest(status="success", result=summary)
+        if shadow_mode:
+            promotion = write_promotion_report(
+                paths.state_dir / "promotion.json",
+                paths.signals_dir / "shadow",
+                paths.state_dir / "health.json",
+                settings.promotion,
+            )
+            promotion_path = context.run_dir / "promotion.json"
+            atomic_write_json(promotion_path, promotion)
+            context.record_artifact(promotion_path)
+        verdict = write_safety_verdict(context.run_dir)
+        summary["safety_verdict"] = verdict["overall"]
+        safety_path = context.run_dir / "safety_verdict.json"
+        context.record_artifact(safety_path)
+        context.write_manifest(status="success", result=summary)
         report_path = write_html_report(context.run_dir)
         context.record_artifact(report_path)
+        markdown_path = write_markdown_report(context.run_dir)
+        context.record_artifact(markdown_path)
         context.write_manifest(status="success", result=summary)
-        registry.finish(context, status="success", result=summary)
         if output_policy["update_health"]:
             update_health(
                 paths.state_dir / "health.json",
@@ -505,13 +548,7 @@ def _run_engine(
                 status="success",
                 summary=summary,
             )
-            if shadow_mode:
-                write_promotion_report(
-                    paths.state_dir / "promotion.json",
-                    paths.signals_dir / "shadow",
-                    paths.state_dir / "health.json",
-                    settings.promotion,
-                )
+        registry.finish(context, status="success", result=summary)
         typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
     except Exception as exc:
         failure_code = classify_failure(exc)
@@ -528,6 +565,16 @@ def _run_engine(
             error=str(exc),
             failure_code=failure_code,
         )
+        try:
+            write_safety_verdict(context.run_dir)
+            context.record_artifact(context.run_dir / "safety_verdict.json")
+            context.write_manifest(
+                status="failed",
+                error=str(exc),
+                failure_code=failure_code,
+            )
+        except Exception:
+            pass
         registry.finish(
             context,
             status="failed",
@@ -549,23 +596,50 @@ def _run_engine(
 @app.command("validate-config")
 def validate_config(
     config: Annotated[Path | None, typer.Option("--config")] = None,
+    mode: Annotated[str | None, typer.Option("--mode")] = None,
 ) -> None:
     settings, paths = _load(config)
+    if mode is not None:
+        settings = Settings.model_validate({**settings.model_dump(), "mode": mode})
     strategy_space_audit = validate_strategy_spaces(load_strategy_spaces())
     provider_registry = build_provider_registry(settings, paths.cache_dir)
     provider_audit = provider_configuration_audit(settings, provider_registry)
-    if not provider_audit["valid"]:
-        raise ValueError(
-            "provider configuration is invalid: "
-            + "; ".join(str(error) for error in provider_audit["errors"])
+    mode_errors: list[str] = []
+    survivorship_audit: dict[str, Any]
+    try:
+        survivorship_audit = audit_survivorship(settings).to_dict()
+    except ValueError as exc:
+        survivorship_audit = {
+            "policy": settings.universe.policy,
+            "valid": False,
+            "error": str(exc),
+        }
+    if settings.mode in {"research", "backtest"}:
+        if settings.universe.policy != "strict":
+            mode_errors.append(f"{settings.mode} mode requires universe.policy=strict")
+        if survivorship_audit.get("valid") is not True:
+            mode_errors.append("research universe failed survivorship validation")
+    promotion_audit: dict[str, Any] | None = None
+    if settings.mode in {"shadow", "paper", "live"}:
+        promotion_audit = evaluate_shadow_promotion(
+            paths.signals_dir / "shadow",
+            paths.state_dir / "health.json",
+            settings.promotion,
         )
+        if settings.mode in {"paper", "live"} and promotion_audit.get("eligible") is not True:
+            mode_errors.append(f"{settings.mode} mode requires an eligible shadow promotion")
+    if not provider_audit["valid"] or mode_errors:
+        errors = [str(error) for error in provider_audit["errors"]] + mode_errors
+        raise ValueError("configuration is invalid: " + "; ".join(errors))
     typer.echo(json.dumps(settings.public_dict(), ensure_ascii=False, indent=2))
     typer.echo(
         json.dumps(
             {
                 "strategy_space_audit": strategy_space_audit,
                 "provider_audit": provider_audit,
-                "survivorship_audit": audit_survivorship(settings).to_dict(),
+                "survivorship_audit": survivorship_audit,
+                "promotion_audit": promotion_audit,
+                "execution_mode": settings.mode,
             },
             ensure_ascii=False,
             indent=2,
@@ -573,6 +647,26 @@ def validate_config(
     )
     typer.echo(f"state_dir={paths.state_dir}")
     typer.echo("configuration is valid")
+
+
+@app.command("status")
+def status(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+    write: Annotated[bool, typer.Option("--write/--no-write")] = True,
+    fail_on_not_ready: Annotated[
+        bool,
+        typer.Option("--fail-on-not-ready/--no-fail-on-not-ready"),
+    ] = False,
+) -> None:
+    settings, paths = _load(config)
+    report = (
+        write_operational_status(paths, settings)
+        if write
+        else build_operational_status(paths, settings)
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+    if fail_on_not_ready and report.get("live_ready") is not True:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -584,7 +678,10 @@ def simulate(
     config: Annotated[Path | None, typer.Option("--config")] = None,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
     seed: Annotated[int | None, typer.Option("--seed", min=0)] = None,
+    mode: Annotated[str, typer.Option("--mode")] = "research",
 ) -> None:
+    if mode not in {"research", "backtest"}:
+        raise typer.BadParameter("simulate --mode must be research or backtest")
     _run_engine(
         "simulate",
         config=config,
@@ -595,6 +692,7 @@ def simulate(
         refresh_data=refresh_data,
         verbose=verbose,
         seed=seed,
+        execution_mode=cast(ExecutionMode, mode),
     )
 
 
@@ -607,7 +705,10 @@ def signal(
     refresh_data: Annotated[bool, typer.Option("--refresh-data")] = False,
     config: Annotated[Path | None, typer.Option("--config")] = None,
     seed: Annotated[int | None, typer.Option("--seed", min=0)] = None,
+    mode: Annotated[str | None, typer.Option("--mode")] = None,
 ) -> None:
+    if mode is not None and mode not in {"signal", "shadow", "paper", "live"}:
+        raise typer.BadParameter("signal --mode must be signal, shadow, paper, or live")
     replay_date = _resolve_signal_date(date, replay=replay)
     _run_engine(
         "signal_replay" if replay else "signal",
@@ -621,6 +722,7 @@ def signal(
         seed=seed,
         replay_date=replay_date,
         replay=replay,
+        execution_mode=cast(ExecutionMode, mode) if mode is not None else None,
     )
 
 
@@ -632,6 +734,14 @@ def notify(
     if channel != "kakao":
         raise typer.BadParameter("supported channel: kakao")
     settings, paths = _load(config)
+    if settings.mode != "live":
+        raise typer.BadParameter("notify requires mode=live")
+    enforce_shadow_promotion(
+        paths.state_dir / "promotion.json",
+        paths.signals_dir / "shadow",
+        paths.state_dir / "health.json",
+        settings.promotion,
+    )
     signals = read_json(paths.signal_file, default={})
     health = read_json(paths.state_dir / "health.json", default={})
     score = health.get("health_score") if isinstance(health, dict) else None
@@ -755,6 +865,8 @@ def _compare_experiment_rows(left: dict[str, Any], right: dict[str, Any]) -> dic
     right_artifact = Path(str(right.get("artifact_dir")))
     left_cost = read_json(left_artifact / "cost_sensitivity.json", default={})
     right_cost = read_json(right_artifact / "cost_sensitivity.json", default={})
+    left_verdict = read_json(left_artifact / "safety_verdict.json", default={})
+    right_verdict = read_json(right_artifact / "safety_verdict.json", default={})
     return {
         "left": left.get("run_id"),
         "right": right.get("run_id"),
@@ -783,6 +895,10 @@ def _compare_experiment_rows(left: dict[str, Any], right: dict[str, Any]) -> dic
             _cost_status(right_cost, right_result),
         ),
         "risk_status": _pair(left_result.get("risk_status"), right_result.get("risk_status")),
+        "safety_verdict": _pair(
+            _safety_verdict_status(left_verdict, left_result),
+            _safety_verdict_status(right_verdict, right_result),
+        ),
     }
 
 
@@ -796,6 +912,12 @@ def _cost_status(cost_payload: Any, result: dict[str, Any]) -> Any:
     return result.get("cost_survival")
 
 
+def _safety_verdict_status(verdict_payload: Any, result: dict[str, Any]) -> Any:
+    if isinstance(verdict_payload, dict) and verdict_payload.get("overall"):
+        return verdict_payload.get("overall")
+    return result.get("safety_verdict")
+
+
 def _comparison_table(comparison: dict[str, Any]) -> str:
     rows = ["field | left | right | changed", "--- | --- | --- | ---"]
     for field in (
@@ -805,6 +927,7 @@ def _comparison_table(comparison: dict[str, Any]) -> str:
         "validation_status",
         "cost_survival",
         "risk_status",
+        "safety_verdict",
     ):
         item = comparison[field]
         rows.append(f"{field} | {item.get('left')} | {item.get('right')} | {item.get('changed')}")
@@ -822,9 +945,12 @@ def _comparison_table(comparison: dict[str, Any]) -> str:
 @report_app.command("build")
 def report_build(
     run: Annotated[Path, typer.Option("--run", exists=True, file_okay=False)],
+    markdown: Annotated[bool, typer.Option("--markdown/--no-markdown")] = True,
 ) -> None:
     output = write_html_report(run)
     typer.echo(str(output))
+    if markdown:
+        typer.echo(str(write_markdown_report(run)))
 
 
 @report_app.command("signal-performance")
@@ -873,6 +999,7 @@ def report_shadow_performance(
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+@promotion_app.command("check")
 @promotion_app.command("status")
 def promotion_status(
     config: Annotated[Path | None, typer.Option("--config")] = None,

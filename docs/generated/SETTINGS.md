@@ -5,7 +5,8 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | Field | Type | Default | Constraints |
 |---|---|---|---|
 | `tickers` | `array` | `["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"]` | `{}` |
-| `mode` | `string` | `"shadow"` | `{"enum": ["live", "shadow"]}` |
+| `mode` | `string` | `"research"` | `{"enum": ["research", "backtest", "signal", "shadow", "paper", "live"]}` |
+| `safety_profile` | `string` | `"safe"` | `{"enum": ["safe", "unsafe"]}` |
 | `initial_capital` | `number` | `10000000` | `{"exclusiveMinimum": 0}` |
 | `sim_runs` | `integer` | `500` | `{"maximum": 100000, "minimum": 1}` |
 | `transaction_fee` | `number` | `0.0015` | `{"maximum": 0.02, "minimum": 0}` |
@@ -48,6 +49,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `execution.quoted_spread_bps` | `number` | `0.0` | `{"maximum": 100, "minimum": 0}` |
 | `data` | `DataSettings` | `null` | `{}` |
 | `data.cross_validation_providers` | `array` | `[]` | `{}` |
+| `data.cross_validation_mode` | `string` | `"strict"` | `{"enum": ["off", "warn", "strict"]}` |
 | `data.minimum_valid_price_sources` | `integer` | `1` | `{"maximum": 3, "minimum": 1}` |
 | `data.price_disagreement_policy` | `string` | `"block"` | `{"enum": ["warn", "block"]}` |
 | `data.max_row_count_delta` | `integer` | `2` | `{"maximum": 100, "minimum": 0}` |
@@ -93,6 +95,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `universe.source` | `string` | `"manual_current_universe"` | `{}` |
 | `universe.includes_delisted` | `boolean` | `false` | `{}` |
 | `universe.policy` | `string` | `"warn"` | `{"enum": ["warn", "strict"]}` |
+| `universe.exception_reason` | `string | null` | `null` | `{}` |
 | `promotion` | `PromotionSettings` | `null` | `{}` |
 | `promotion.enabled` | `boolean` | `true` | `{}` |
 | `promotion.min_shadow_days` | `integer` | `20` | `{"maximum": 365, "minimum": 1}` |
@@ -100,8 +103,14 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `promotion.min_mature_completion_ratio` | `number` | `0.9` | `{"maximum": 1, "minimum": 0}` |
 | `promotion.min_health_score` | `integer` | `80` | `{"maximum": 100, "minimum": 0}` |
 | `promotion.maturity_horizon_days` | `integer` | `20` | `{"maximum": 252, "minimum": 1}` |
+| `promotion.min_data_validation_success_rate` | `number` | `0.95` | `{"maximum": 1, "minimum": 0}` |
+| `promotion.max_provider_disagreement_rate` | `number` | `0.01` | `{"maximum": 1, "minimum": 0}` |
+| `promotion.min_risk_gate_pass_rate` | `number` | `0.5` | `{"maximum": 1, "minimum": 0}` |
+| `promotion.max_signal_count_change_ratio` | `number` | `1.0` | `{"maximum": 100, "minimum": 0}` |
 | `risk` | `RiskSettings` | `null` | `{}` |
-| `risk.profile` | `string` | `"balanced"` | `{"enum": ["balanced", "conservative", "warning"]}` |
+| `risk.profile` | `string` | `"balanced"` | `{"enum": ["balanced", "conservative", "warning", "unsafe"]}` |
+| `risk.max_positions` | `integer` | `20` | `{"maximum": 500, "minimum": 1}` |
+| `risk.max_single_position_pct` | `number` | `0.1` | `{"exclusiveMinimum": 0, "maximum": 1}` |
 | `risk.max_underlying_exposure` | `number` | `0.3` | `{"maximum": 1, "minimum": 0}` |
 | `risk.max_sector_exposure` | `number` | `0.5` | `{"maximum": 1, "minimum": 0}` |
 | `risk.max_leveraged_etf_value` | `number` | `0.3` | `{"maximum": 1, "minimum": 0}` |
@@ -112,4 +121,6 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `risk.daily_loss_limit` | `number` | `0.03` | `{"maximum": 1, "minimum": 0}` |
 | `risk.weekly_loss_limit` | `number` | `0.06` | `{"maximum": 1, "minimum": 0}` |
 | `risk.monthly_mdd_limit` | `number` | `0.12` | `{"maximum": 1, "minimum": 0}` |
+| `risk.min_dollar_volume` | `number` | `10000000` | `{"minimum": 0}` |
+| `risk.block_unmapped_tickers` | `boolean` | `true` | `{}` |
 | `risk.enforcement` | `string` | `"block"` | `{"enum": ["block", "resize", "warn"]}` |

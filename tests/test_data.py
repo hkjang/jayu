@@ -241,3 +241,33 @@ def test_provider_disagreement_is_recorded_in_quality_report(tmp_path):
     assert context.disagreements[0]["ticker"] == "TEST"
     assert {source["provider"] for source in context.sources} == {"yahoo", "tiingo"}
     assert context.price_trust["TEST"]["verified"] is False
+
+
+def test_provider_disagreement_reports_dates_fields_and_provider_values():
+    baseline = _price_frame()
+    candidate = baseline.drop(baseline.index[0]).copy()
+    candidate.loc[candidate.index[-1], "Close"] *= 1.2
+    candidate.loc[candidate.index[-1], "Volume"] *= 2
+
+    report = compare_ohlcv_sources(
+        {"yahoo": baseline, "tiingo": candidate},
+        max_row_count_delta=0,
+        max_index_mismatches=0,
+        max_relative_price_delta=0.01,
+        max_relative_volume_delta=0.05,
+    )
+
+    assert report["agreed"] is False
+    disagreement = report["disagreements"][0]
+    assert {item["cause"] for item in disagreement["reasons"]} == {
+        "row_count",
+        "date_index",
+        "price",
+        "volume",
+    }
+    assert disagreement["date_mismatches"][0]["missing_in"] == ["tiingo"]
+    close_mismatch = next(
+        item for item in disagreement["value_mismatches"] if item["field"] == "Close"
+    )
+    assert close_mismatch["date"]
+    assert set(close_mismatch["values"]) == {"yahoo", "tiingo"}

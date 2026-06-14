@@ -81,6 +81,16 @@ class MarketDataProvider(Protocol):
     def fetch(self, request: DataRequest) -> pd.DataFrame: ...
 
 
+class DataFailureError(RuntimeError):
+    """Market-data failure with a stable command-level failure code."""
+
+    code = FailureCode.DATA_FAILURE
+
+    def __init__(self, message: str, *, reason_code: FailureCode = FailureCode.DATA_FAILURE):
+        self.reason_code = reason_code
+        super().__init__(message)
+
+
 class YahooProvider:
     name = "yahoo"
     category = ProviderCategory.PRICE
@@ -340,40 +350,126 @@ def compare_ohlcv_sources(
     baseline = normalize_ohlcv(frames[baseline_name]).sort_index()
     for candidate_name in names[1:]:
         candidate = normalize_ohlcv(frames[candidate_name]).sort_index()
-        index_mismatches = len(baseline.index.symmetric_difference(candidate.index))
+        mismatched_index = baseline.index.symmetric_difference(candidate.index)
+        index_mismatches = len(mismatched_index)
         row_count_delta = abs(len(baseline) - len(candidate))
         common = baseline.index.intersection(candidate.index)
         max_relative_delta = 0.0
         max_relative_volume_delta_observed = 0.0
+        value_mismatches: list[dict[str, Any]] = []
         if len(common):
             left = baseline.loc[common, ["Open", "High", "Low", "Close"]].astype(float)
             right = candidate.loc[common, ["Open", "High", "Low", "Close"]].astype(float)
             denominator = left.abs().clip(lower=1e-12)
-            max_relative_delta = float(((left - right).abs() / denominator).max().max())
+            price_deltas = (left - right).abs() / denominator
+            max_relative_delta = float(price_deltas.max().max())
             left_volume = baseline.loc[common, "Volume"].astype(float).abs().clip(lower=1.0)
             right_volume = candidate.loc[common, "Volume"].astype(float)
-            max_relative_volume_delta_observed = float(
-                (
-                    (baseline.loc[common, "Volume"].astype(float) - right_volume).abs()
-                    / left_volume
-                ).max()
+            volume_deltas = (
+                baseline.loc[common, "Volume"].astype(float) - right_volume
+            ).abs() / left_volume
+            max_relative_volume_delta_observed = float(volume_deltas.max())
+            for timestamp, row in price_deltas.iterrows():
+                for column, relative_delta in row.items():
+                    if float(relative_delta) > max_relative_price_delta:
+                        value_mismatches.append(
+                            {
+                                "date": _timestamp_label(timestamp),
+                                "field": str(column),
+                                "relative_delta": round(float(relative_delta), 8),
+                                "threshold": max_relative_price_delta,
+                                "values": {
+                                    baseline_name: float(left.at[timestamp, column]),
+                                    candidate_name: float(right.at[timestamp, column]),
+                                },
+                            }
+                        )
+            for timestamp, relative_delta in volume_deltas.items():
+                if float(relative_delta) > max_relative_volume_delta:
+                    value_mismatches.append(
+                        {
+                            "date": _timestamp_label(timestamp),
+                            "field": "Volume",
+                            "relative_delta": round(float(relative_delta), 8),
+                            "threshold": max_relative_volume_delta,
+                            "values": {
+                                baseline_name: float(baseline.at[timestamp, "Volume"]),
+                                candidate_name: float(candidate.at[timestamp, "Volume"]),
+                            },
+                        }
+                    )
+        value_mismatches.sort(key=lambda item: float(item["relative_delta"]), reverse=True)
+        date_mismatches = [
+            {
+                "date": _timestamp_label(timestamp),
+                "present_in": [
+                    name
+                    for name, frame in (
+                        (baseline_name, baseline),
+                        (candidate_name, candidate),
+                    )
+                    if timestamp in frame.index
+                ],
+                "missing_in": [
+                    name
+                    for name, frame in (
+                        (baseline_name, baseline),
+                        (candidate_name, candidate),
+                    )
+                    if timestamp not in frame.index
+                ],
+            }
+            for timestamp in mismatched_index[:100]
+        ]
+        reasons = []
+        if row_count_delta > max_row_count_delta:
+            reasons.append(
+                {
+                    "cause": "row_count",
+                    "observed": row_count_delta,
+                    "threshold": max_row_count_delta,
+                }
+            )
+        if index_mismatches > max_index_mismatches:
+            reasons.append(
+                {
+                    "cause": "date_index",
+                    "observed": index_mismatches,
+                    "threshold": max_index_mismatches,
+                }
+            )
+        if max_relative_delta > max_relative_price_delta:
+            reasons.append(
+                {
+                    "cause": "price",
+                    "observed": max_relative_delta,
+                    "threshold": max_relative_price_delta,
+                }
+            )
+        if max_relative_volume_delta_observed > max_relative_volume_delta:
+            reasons.append(
+                {
+                    "cause": "volume",
+                    "observed": max_relative_volume_delta_observed,
+                    "threshold": max_relative_volume_delta,
+                }
             )
         hash_equal = dataframe_sha256(baseline) == dataframe_sha256(candidate)
-        agreed = (
-            row_count_delta <= max_row_count_delta
-            and index_mismatches <= max_index_mismatches
-            and max_relative_delta <= max_relative_price_delta
-            and max_relative_volume_delta_observed <= max_relative_volume_delta
-        )
+        agreed = not reasons
         comparison = {
             "baseline": baseline_name,
             "candidate": candidate_name,
             "failure_code": FailureCode.DATA_DISAGREEMENT.value,
+            "reasons": reasons,
             "row_count_delta": row_count_delta,
             "index_mismatches": index_mismatches,
+            "date_mismatches": date_mismatches,
+            "date_mismatches_truncated": max(0, index_mismatches - len(date_mismatches)),
             "common_rows": len(common),
             "max_relative_price_delta": max_relative_delta,
             "max_relative_volume_delta": max_relative_volume_delta_observed,
+            "value_mismatches": value_mismatches[:100],
+            "value_mismatches_truncated": max(0, len(value_mismatches) - 100),
             "hash_equal": hash_equal,
             "agreed": agreed,
         }
@@ -386,6 +482,13 @@ def compare_ohlcv_sources(
         "disagreements": disagreements,
         "agreed": not disagreements,
     }
+
+
+def _timestamp_label(value: Any) -> str:
+    timestamp = pd.Timestamp(value)
+    if timestamp == timestamp.normalize():
+        return timestamp.date().isoformat()
+    return timestamp.isoformat()
 
 
 class CachedMarketDataService:
@@ -491,7 +594,9 @@ class CachedMarketDataService:
                 break
         if not valid_frames:
             self._record_source_records(source_records)
-            raise RuntimeError(f"all providers failed for {request.ticker}: {' | '.join(failures)}")
+            raise DataFailureError(
+                f"all providers failed for {request.ticker}: {' | '.join(failures)}"
+            )
 
         comparison = compare_ohlcv_sources(
             valid_frames,
@@ -517,10 +622,16 @@ class CachedMarketDataService:
         self._record_source_records(source_records)
         self._record_disagreement(request, comparison)
         if not price_usable:
-            raise RuntimeError(
+            reason_code = (
+                FailureCode.DATA_DISAGREEMENT
+                if comparison["disagreements"]
+                else FailureCode.DATA_FAILURE
+            )
+            raise DataFailureError(
                 f"price verification failed for {request.ticker}: "
                 f"{len(valid_frames)} valid sources, "
-                f"{len(comparison['disagreements'])} disagreements"
+                f"{len(comparison['disagreements'])} disagreements",
+                reason_code=reason_code,
             )
         selected_name, selected = next(iter(valid_frames.items()))
         selected.to_parquet(parquet_path)
