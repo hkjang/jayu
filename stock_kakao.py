@@ -2,9 +2,8 @@
 
 from pathlib import Path
 import sys
-import warnings
 
-from jayu.cli import app
+from jayu.legacy_cli import run_legacy_command
 from jayu.notifications import KakaoNotifier
 from jayu.settings import load_settings
 
@@ -17,10 +16,11 @@ def send_kakao(message: str):
 
 
 if __name__ == "__main__":
-    warnings.warn(
-        "stock_kakao.py is deprecated; use `jayu notify --channel kakao`. "
-        "Removal date: 2026-09-30.",
-        FutureWarning,
-        stacklevel=1,
+    raise SystemExit(
+        run_legacy_command(
+            ("notify", "--channel", "kakao"),
+            sys.argv[1:],
+            script_name="stock_kakao.py",
+            replacement="jayu notify --channel kakao",
+        )
     )
-    app(args=["notify", "--channel", "kakao", *sys.argv[1:]], prog_name="jayu")

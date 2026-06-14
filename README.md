@@ -49,9 +49,41 @@ uv run jayu experiments --limit 20
 uv run jayu experiments compare --left <RUN_ID> --right <RUN_ID> --output comparison.json
 uv run jayu promotion check
 uv run jayu status
+uv run jayu status --brief
+uv run jayu status --output state/operational_status.json --markdown-output state/operational_status.md
 uv run jayu status --fail-on-not-ready
 uv run jayu validate-config --mode shadow
+uv run jayu dashboard --host 127.0.0.1 --port 8765
 ```
+
+## Read-only operations dashboard
+
+`jayu dashboard` serves a local, read-only operations console for run status,
+provider disagreement, signals, risk-gate evidence, shadow promotion, and
+settings validation. It does not expose order creation or execution controls.
+
+```powershell
+uv run jayu dashboard --host 127.0.0.1 --port 8765
+```
+
+Open `http://127.0.0.1:8765`. The current implementation covers Overview,
+Data Quality, Signal, Risk Gate, Shadow Promotion, and Settings Validation.
+The complete screen and API design is documented in [UX_UI_SPEC.md](docs/UX_UI_SPEC.md).
+
+## 프로세스 종료 코드
+
+배치 작업과 스케줄러는 failure taxonomy와 함께 다음 종료 코드를 사용할 수 있습니다.
+
+| 종료 코드 | 범주 | 대표 failure code |
+|---:|---|---|
+| `0` | 성공 | 없음 |
+| `2` | CLI 사용 오류 | 잘못된 옵션 또는 인자 |
+| `10` | 설정 오류 | `CONFIG_FAILURE` |
+| `20` | 데이터 오류 | `DATA_FAILURE`, `DATA_CONTRACT_FAILED`, `DATA_DISAGREEMENT` |
+| `30` | 백테스트 오류 | `BACKTEST_FAILURE` |
+| `40` | 안전·승격 게이트 차단 | `SAFETY_VERDICT_BLOCKED`, `SHADOW_PROMOTION_FAILED` |
+| `50` | 알림 오류 | `NOTIFICATION_FAILURE` |
+| `70` | 내부 오류 | `INTERNAL_FAILURE`, 분류되지 않은 오류 |
 
 sample config의 기본 실행 모드는 `shadow`이며 안전 프로필은 `safe`입니다.
 `signal`, `shadow`, `paper`, `live`는 서로 다른 가격 provider 2개 이상,
@@ -87,10 +119,13 @@ go build -o bin\jayu.exe .\cmd\jayu
 Docker 이미지는 UID/GID `10001`의 비루트 `app` 사용자로 실행됩니다. API key와
 토큰은 이미지에 복사하지 말고 런타임 환경변수 또는 외부 secrets file로만 주입합니다.
 `data`, `runs`, `state`, `signals`는 쓰기 가능한 volume으로 마운트합니다.
+컨테이너 루트 파일시스템은 read-only로 실행할 수 있으며 임시 파일만 `/tmp` tmpfs에
+기록합니다.
 
 ```powershell
 docker build -t jayu-stock .
 docker run --rm jayu-stock --help
+docker run --rm --read-only --tmpfs /tmp jayu-stock --help
 docker run --rm `
   --env-file .env `
   -v ${PWD}\data:/app/data `
@@ -99,6 +134,9 @@ docker run --rm `
   -v ${PWD}\runs:/app/runs `
   jayu-stock signal --mode shadow --date today
 ```
+
+`live`는 엄격한 데이터·승격·위험 심사를 거친 운영 신호와 알림 모드일 뿐입니다.
+Jayu는 브로커 주문 제출 API를 포함하지 않으며 실제 주문을 생성하거나 전송하지 않습니다.
 
 ## 실행 산출물
 
@@ -151,6 +189,12 @@ docker run --rm `
 - FRED는 initial-release vintage를 발표 가능일 기준으로 거래일에 forward fill하고, 거시 regime은 별도 OOS gate를 통과해야 전략 조건으로 승격할 수 있습니다.
 - OpenFIGI 충돌은 기본적으로 신호를 차단하며, Alpha Vantage·Finnhub 뉴스·내부자·실적 이벤트는 매수 조건이 아니라 `risk_notes`로만 첨부합니다.
 - 요청 티커 중 검증된 가격 데이터가 하나라도 없으면 CLI 실행은 `DATA_FAILURE`로 종료됩니다.
+- `signals/today_signals.json`은 run artifact와 safety verdict가 완성된 뒤에만 원자적으로
+  출판됩니다. `signals/today_signals.status.json`의 상태가 오늘 날짜의 `published`가
+  아니거나 내용 hash가 다르면 standalone 알림은 차단됩니다.
+- signal/shadow/paper/live 실행은 `state/operational_run.lock` 단일 실행 잠금을 사용합니다.
+  중복 실행은 종료 코드 `40`으로 차단되며, 중단된 잠금은
+  `operational_lock_timeout_minutes` 이후에만 회수됩니다.
 
 Tiingo 교차검증을 활성화하려면 환경변수를 설정한 뒤 다음 값을 사용합니다.
 

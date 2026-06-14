@@ -17,6 +17,8 @@ Target removal date: 2026-09-30
 
 All four executable wrappers delegate to the packaged CLI and emit a visible
 `FutureWarning` when run directly. No new behavior should be added to them.
+The shared delegation path is `jayu.legacy_cli.run_legacy_command`; direct
+broker, provider, portfolio, or strategy logic in a root wrapper is unsupported.
 
 ## Strategy State Migration
 

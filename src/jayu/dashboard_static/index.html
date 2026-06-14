@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Jayu Operations</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="주요 화면">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">J</div>
+          <div>
+            <strong>Jayu</strong>
+            <span>Operations</span>
+          </div>
+        </div>
+        <nav class="nav-list">
+          <button class="nav-item is-active" data-page="overview" type="button">
+            <span class="nav-index">01</span><span>Overview</span>
+          </button>
+          <button class="nav-item" data-page="data-quality" type="button">
+            <span class="nav-index">02</span><span>Data Quality</span>
+          </button>
+          <button class="nav-item" data-page="risk" type="button">
+            <span class="nav-index">03</span><span>Risk Gate</span>
+          </button>
+          <button class="nav-item" data-page="signals" type="button">
+            <span class="nav-index">04</span><span>Signal</span>
+          </button>
+          <button class="nav-item" data-page="promotion" type="button">
+            <span class="nav-index">05</span><span>Shadow Promotion</span>
+          </button>
+          <button class="nav-item" data-page="settings" type="button">
+            <span class="nav-index">06</span><span>Settings</span>
+          </button>
+        </nav>
+        <div class="sidebar-note">
+          <span>Read-only console</span>
+          <strong>주문 기능 없음</strong>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="context-bar">
+          <div class="context-run">
+            <span id="mode-badge" class="mode-badge">UNKNOWN</span>
+            <label for="run-selector">Run</label>
+            <select id="run-selector" aria-label="실행 선택"></select>
+          </div>
+          <div class="context-meta">
+            <div>
+              <span>마지막 완료</span>
+              <strong id="run-time">-</strong>
+            </div>
+            <div>
+              <span>Config / Data</span>
+              <strong id="hash-summary">-</strong>
+            </div>
+            <button id="refresh-button" class="button button-secondary" type="button">
+              새로고침
+            </button>
+          </div>
+        </header>
+
+        <main id="main" tabindex="-1">
+          <div id="live-region" class="sr-only" aria-live="polite"></div>
+          <section id="loading-state" class="state-panel">
+            <div class="loading-line"></div>
+            <div class="loading-line short"></div>
+          </section>
+          <section id="error-state" class="state-panel state-error" hidden>
+            <span class="status-label status-failed">오류</span>
+            <h1>운영 데이터를 불러오지 못했습니다.</h1>
+            <p id="error-message">잠시 후 다시 시도하세요.</p>
+            <button class="button button-primary" id="retry-button" type="button">다시 시도</button>
+          </section>
+          <div id="page-root" hidden></div>
+        </main>
+      </div>
+    </div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

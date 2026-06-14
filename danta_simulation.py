@@ -4,14 +4,16 @@ import sys
 import warnings
 
 if __name__ == "__main__":
-    from jayu.cli import app
+    from jayu.legacy_cli import run_legacy_command
 
-    warnings.warn(
-        "danta_simulation.py is deprecated; use `jayu simulate`. Removal date: 2026-09-30.",
-        FutureWarning,
-        stacklevel=1,
+    raise SystemExit(
+        run_legacy_command(
+            ("simulate",),
+            sys.argv[1:],
+            script_name="danta_simulation.py",
+            replacement="jayu simulate",
+        )
     )
-    app(args=["simulate", *sys.argv[1:]], prog_name="jayu")
 else:
     from jayu import engine as _engine
 

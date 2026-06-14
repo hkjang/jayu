@@ -37,3 +37,7 @@ jobs:
         run: docker build -t jayu-ci .
       - name: docker runtime smoke
         run: docker run --rm jayu-ci --help
+      - name: docker non-root identity
+        run: docker run --rm --entrypoint sh jayu-ci -c 'test "$(id -u)" = "10001"'
+      - name: docker read-only runtime smoke
+        run: docker run --rm --read-only --tmpfs /tmp jayu-ci --help

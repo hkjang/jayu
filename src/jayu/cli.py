@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import random
 
-from datetime import date as date_type
+from collections.abc import Mapping
+from datetime import UTC, date as date_type, datetime
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -21,11 +22,16 @@ from .data import (
     CachedMarketDataService,
     MarketDataProvider,
 )
-from .failure_codes import FailureCode
+from .dashboard import serve_dashboard
+from .failure_codes import FailureCode, ProcessExitCode, process_exit_code
 from .io import atomic_write_json, file_sha256, read_json, stable_hash
 from .monitoring import classify_failure, compute_health_score, prune_runs, update_health
 from .notifications import KakaoNotifier, build_signal_message
-from .operational_status import write_operational_status, build_operational_status
+from .operational_status import (
+    build_operational_status,
+    write_operational_status,
+    write_operational_status_bundle,
+)
 from .portfolio import (
     get_fx_rates,
     load_portfolio,
@@ -54,7 +60,9 @@ from .reports import (
 )
 from .risk import apply_data_trust, apply_portfolio_risk, risk_explanation
 from .risk_ledger import record_portfolio_snapshot
+from .runtime_lock import OperationalRunConflict, OperationalRunLock
 from .safety import (
+    SafetyGateError,
     enforce_live_price_safety,
     enforce_research_universe,
     enforce_shadow_promotion,
@@ -77,6 +85,18 @@ app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(report_app, name="report")
 app.add_typer(experiments_app, name="experiments")
 app.add_typer(promotion_app, name="promotion")
+
+
+@app.command()
+def dashboard(
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
+    open_browser: Annotated[bool, typer.Option("--open/--no-open")] = False,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Serve the read-only Jayu operations console."""
+    _, paths = _load(config)
+    serve_dashboard(paths, host=host, port=port, open_browser=open_browser)
 
 
 def _project_root() -> Path:
@@ -335,11 +355,147 @@ def _output_policy(
     non_operational = shadow_mode or paper_mode
     return {
         "persist_state": not replay,
-        "persist_signal": not replay and not non_operational,
+        "persist_signal": False,
         "write_primary_signal": not replay and not non_operational,
         "update_health": not replay,
         "prune_runs": not replay,
     }
+
+
+def _enforce_inline_notification_readiness(
+    verdict: Mapping[str, Any],
+    *,
+    health_score: int,
+    min_health_score: int,
+) -> None:
+    if verdict.get("overall") != "approved":
+        raise SafetyGateError(
+            FailureCode.SAFETY_VERDICT_BLOCKED,
+            [f"safety verdict must be approved, got {verdict.get('overall', 'unknown')}"],
+        )
+    if health_score < min_health_score:
+        raise SafetyGateError(
+            FailureCode.HEALTH_SCORE_LOW,
+            [f"health score {health_score} is below required {min_health_score}"],
+        )
+
+
+def _update_health_and_operational_status(
+    paths: RuntimePaths,
+    settings: Settings,
+    *,
+    run_id: str,
+    status: str,
+    summary: dict[str, Any] | None = None,
+    error: str | None = None,
+    failure_code: str | None = None,
+) -> dict[str, Any]:
+    update_health(
+        paths.state_dir / "health.json",
+        run_id=run_id,
+        status=status,
+        summary=summary,
+        error=error,
+        failure_code=failure_code,
+    )
+    return write_operational_status_bundle(paths, settings)
+
+
+def _write_signal_publication_status(
+    paths: RuntimePaths,
+    *,
+    run_id: str,
+    signal_date: str,
+    mode: str,
+    status: str,
+    signal_hash: str | None = None,
+    content_hash: str | None = None,
+    safety_verdict: str | None = None,
+    failure_code: str | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "updated_at": datetime.now(UTC).isoformat(),
+        "run_id": run_id,
+        "signal_date": signal_date,
+        "mode": mode,
+        "status": status,
+        "signal_hash": signal_hash,
+        "content_hash": content_hash,
+        "safety_verdict": safety_verdict,
+        "failure_code": failure_code,
+    }
+    atomic_write_json(paths.signal_status_file, payload)
+    return payload
+
+
+def _publish_primary_signal(
+    paths: RuntimePaths,
+    signals: dict[str, Any],
+    *,
+    run_id: str,
+    signal_date: str,
+    mode: str,
+    signal_hash: str,
+    verdict: Mapping[str, Any],
+    health_score: int,
+    min_health_score: int,
+) -> dict[str, Any]:
+    overall = verdict.get("overall")
+    if overall == "blocked":
+        raise SafetyGateError(
+            FailureCode.SAFETY_VERDICT_BLOCKED,
+            ["blocked safety verdict prevents primary signal publication"],
+        )
+    if mode == "live":
+        _enforce_inline_notification_readiness(
+            verdict,
+            health_score=health_score,
+            min_health_score=min_health_score,
+        )
+    atomic_write_json(paths.signal_file, signals)
+    content_hash = stable_hash(signals)
+    return _write_signal_publication_status(
+        paths,
+        run_id=run_id,
+        signal_date=signal_date,
+        mode=mode,
+        status="published",
+        signal_hash=signal_hash,
+        content_hash=content_hash,
+        safety_verdict=str(overall or "unknown"),
+    )
+
+
+def _load_published_signal(
+    paths: RuntimePaths,
+    *,
+    signal_date: str,
+) -> dict[str, Any]:
+    before = read_json(paths.signal_status_file, default={})
+    before_map = before if isinstance(before, dict) else {}
+    if before_map.get("status") != "published" or before_map.get("signal_date") != signal_date:
+        raise SafetyGateError(
+            FailureCode.SIGNAL_PUBLICATION_MISSING,
+            ["primary signal publication is not approved for the requested date"],
+        )
+    signals = read_json(paths.signal_file, default={})
+    if not isinstance(signals, dict):
+        raise SafetyGateError(
+            FailureCode.SIGNAL_PUBLICATION_INVALID,
+            ["primary signal payload is not a JSON object"],
+        )
+    after = read_json(paths.signal_status_file, default={})
+    if before != after:
+        raise SafetyGateError(
+            FailureCode.SIGNAL_PUBLICATION_INVALID,
+            ["primary signal publication changed while it was being read"],
+        )
+    if before_map.get("content_hash") != stable_hash(signals):
+        raise SafetyGateError(
+            FailureCode.SIGNAL_PUBLICATION_INVALID,
+            ["primary signal content hash does not match its publication record"],
+        )
+    return signals
 
 
 def _run_engine(
@@ -380,6 +536,19 @@ def _run_engine(
     )
     signal_date = replay_date or date_type.today().isoformat()
     effective_notify = bool(notify_user and settings.mode == "live" and not replay)
+    runtime_lock: OperationalRunLock | None = None
+    if settings.mode in {"signal", "shadow", "paper", "live"} and not replay:
+        runtime_lock = OperationalRunLock(
+            paths.operational_lock_file,
+            command=command,
+            mode=settings.mode,
+            timeout_minutes=settings.operational_lock_timeout_minutes,
+        )
+        try:
+            runtime_lock.acquire()
+        except OperationalRunConflict as exc:
+            typer.echo(f"error: {exc.code.value}: {exc}", err=True)
+            raise typer.Exit(code=process_exit_code(exc.code)) from exc
     if output_policy["prune_runs"]:
         prune_runs(
             paths.runs_dir,
@@ -388,9 +557,23 @@ def _run_engine(
         )
     random.seed(settings.random_seed)
     np.random.seed(settings.random_seed)
-    context = RunContext.create(paths, settings, command, verbose=verbose)
-    registry = ExperimentRegistry(paths.state_dir / "experiments.sqlite")
-    registry.start(context)
+    try:
+        context = RunContext.create(paths, settings, command, verbose=verbose)
+        registry = ExperimentRegistry(paths.state_dir / "experiments.sqlite")
+        registry.start(context)
+    except Exception:
+        if runtime_lock is not None:
+            runtime_lock.release()
+        raise
+    if output_policy["write_primary_signal"] and settings.mode in {"signal", "live"}:
+        _write_signal_publication_status(
+            paths,
+            run_id=context.run_id,
+            signal_date=signal_date,
+            mode=settings.mode,
+            status="pending",
+        )
+        paths.signal_file.unlink(missing_ok=True)
     try:
         _record_signal_inputs(context, paths)
         provider_registry = build_provider_registry(settings, paths.cache_dir)
@@ -443,8 +626,6 @@ def _run_engine(
         if shadow_mode or paper_mode:
             signals = _annotate_shadow_signals(signals, reason=f"mode={settings.mode}")
         ensure_contract("signal_dataframe", validate_signal_contract(signals))
-        if output_policy["write_primary_signal"]:
-            atomic_write_json(paths.signal_file, signals)
         if shadow_mode:
             shadow_path = paths.signals_dir / "shadow" / f"{signal_date}.json"
             atomic_write_json(shadow_path, signals)
@@ -507,16 +688,6 @@ def _run_engine(
             failure_code=None,
             previous_failure=previous_failure,
         )
-        if effective_notify:
-            notification_result = KakaoNotifier(settings, paths).send(
-                build_signal_message(
-                    signals,
-                    max_chars=settings.notification_message_limit,
-                    health_score=health_score,
-                )
-            )
-            summary["notification"] = notification_result
-            atomic_write_json(context.run_dir / "notification.json", notification_result)
         importance_path = context.run_dir / "parameter_importance.json"
         atomic_write_json(importance_path, parameter_importance(best_all))
         context.record_artifact(importance_path)
@@ -536,14 +707,50 @@ def _run_engine(
         safety_path = context.run_dir / "safety_verdict.json"
         context.record_artifact(safety_path)
         context.write_manifest(status="success", result=summary)
+        if output_policy["write_primary_signal"]:
+            publication = _publish_primary_signal(
+                paths,
+                signals,
+                run_id=context.run_id,
+                signal_date=signal_date,
+                mode=settings.mode,
+                signal_hash=signal_replay["signal_hash"],
+                verdict=verdict,
+                health_score=health_score,
+                min_health_score=settings.promotion.min_health_score,
+            )
+            summary["signal_publication"] = publication["status"]
+            publication_path = context.run_dir / "signal_publication.json"
+            atomic_write_json(publication_path, publication)
+            context.record_artifact(publication_path)
+            context.write_manifest(status="success", result=summary)
+        if effective_notify:
+            _enforce_inline_notification_readiness(
+                verdict,
+                health_score=health_score,
+                min_health_score=settings.promotion.min_health_score,
+            )
+            notification_result = KakaoNotifier(settings, paths).send(
+                build_signal_message(
+                    signals,
+                    max_chars=settings.notification_message_limit,
+                    health_score=health_score,
+                )
+            )
+            summary["notification"] = notification_result
+            notification_path = context.run_dir / "notification.json"
+            atomic_write_json(notification_path, notification_result)
+            context.record_artifact(notification_path)
+            context.write_manifest(status="success", result=summary)
         report_path = write_html_report(context.run_dir)
         context.record_artifact(report_path)
         markdown_path = write_markdown_report(context.run_dir)
         context.record_artifact(markdown_path)
         context.write_manifest(status="success", result=summary)
         if output_policy["update_health"]:
-            update_health(
-                paths.state_dir / "health.json",
+            _update_health_and_operational_status(
+                paths,
+                settings,
                 run_id=context.run_id,
                 status="success",
                 summary=summary,
@@ -574,7 +781,14 @@ def _run_engine(
                 failure_code=failure_code,
             )
         except Exception:
-            pass
+            context.logger.exception(
+                "failed to write safety verdict after command failure",
+                extra={
+                    "run_id": context.run_id,
+                    "event": "safety_verdict_refresh_failure",
+                    "error_code": failure_code,
+                },
+            )
         registry.finish(
             context,
             status="failed",
@@ -582,15 +796,56 @@ def _run_engine(
             failure_code=failure_code,
         )
         if output_policy["update_health"]:
-            update_health(
-                paths.state_dir / "health.json",
-                run_id=context.run_id,
-                status="failed",
-                error=str(exc),
-                failure_code=failure_code,
-            )
+            try:
+                _update_health_and_operational_status(
+                    paths,
+                    settings,
+                    run_id=context.run_id,
+                    status="failed",
+                    error=str(exc),
+                    failure_code=failure_code,
+                )
+            except Exception:
+                context.logger.exception(
+                    "failed to refresh operational status after command failure",
+                    extra={
+                        "run_id": context.run_id,
+                        "event": "operational_status_refresh_failure",
+                        "error_code": failure_code,
+                    },
+                )
+        if output_policy["write_primary_signal"] and settings.mode in {"signal", "live"}:
+            try:
+                publication = _write_signal_publication_status(
+                    paths,
+                    run_id=context.run_id,
+                    signal_date=signal_date,
+                    mode=settings.mode,
+                    status="blocked",
+                    failure_code=failure_code,
+                )
+                publication_path = context.run_dir / "signal_publication.json"
+                atomic_write_json(publication_path, publication)
+                context.record_artifact(publication_path)
+                context.write_manifest(
+                    status="failed",
+                    error=str(exc),
+                    failure_code=failure_code,
+                )
+            except Exception:
+                context.logger.exception(
+                    "failed to mark primary signal publication as blocked",
+                    extra={
+                        "run_id": context.run_id,
+                        "event": "signal_publication_status_failure",
+                        "error_code": failure_code,
+                    },
+                )
         typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+        raise typer.Exit(code=process_exit_code(failure_code)) from exc
+    finally:
+        if runtime_lock is not None:
+            runtime_lock.release()
 
 
 @app.command("validate-config")
@@ -653,20 +908,62 @@ def validate_config(
 def status(
     config: Annotated[Path | None, typer.Option("--config")] = None,
     write: Annotated[bool, typer.Option("--write/--no-write")] = True,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    markdown: Annotated[bool, typer.Option("--markdown/--no-markdown")] = True,
+    markdown_output: Annotated[Path | None, typer.Option("--markdown-output")] = None,
+    brief: Annotated[bool, typer.Option("--brief/--json")] = False,
     fail_on_not_ready: Annotated[
         bool,
         typer.Option("--fail-on-not-ready/--no-fail-on-not-ready"),
     ] = False,
 ) -> None:
     settings, paths = _load(config)
-    report = (
-        write_operational_status(paths, settings)
-        if write
-        else build_operational_status(paths, settings)
-    )
-    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+    if write and markdown:
+        report = write_operational_status_bundle(
+            paths,
+            settings,
+            output=output,
+            markdown_output=markdown_output,
+        )
+    elif write:
+        report = write_operational_status(paths, settings, output=output)
+    else:
+        report = build_operational_status(paths, settings)
+    if brief:
+        typer.echo(_format_status_brief(report))
+    else:
+        typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
     if fail_on_not_ready and report.get("live_ready") is not True:
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=ProcessExitCode.SAFETY_GATE_FAILED)
+
+
+def _format_status_brief(report: dict[str, Any]) -> str:
+    summary = report.get("readiness_summary") if isinstance(report, dict) else None
+    summary_map = summary if isinstance(summary, dict) else {}
+    latest = report.get("latest_run") if isinstance(report, dict) else None
+    latest_map = latest if isinstance(latest, dict) else {}
+    promotion = report.get("promotion") if isinstance(report, dict) else None
+    promotion_map = promotion if isinstance(promotion, dict) else {}
+    reason_codes = summary_map.get("reason_codes", [])
+    actions = summary_map.get("next_actions", [])
+    lines = [
+        f"status: {summary_map.get('overall', 'unknown')}",
+        f"message: {summary_map.get('message', 'not evaluated')}",
+        f"health: {report.get('health_score')} ({report.get('health_status')})",
+        (
+            "latest_run: "
+            f"{latest_map.get('run_id', 'none')} "
+            f"safety={latest_map.get('safety_verdict')} "
+            f"age_hours={latest_map.get('run_age_hours')}"
+        ),
+        f"promotion: {'eligible' if promotion_map.get('eligible') is True else 'blocked'}",
+    ]
+    if isinstance(reason_codes, list) and reason_codes:
+        lines.append("reason_codes: " + ", ".join(str(code) for code in reason_codes))
+    if isinstance(actions, list) and actions:
+        lines.append("next_actions:")
+        lines.extend(f"- {action}" for action in actions)
+    return "\n".join(lines)
 
 
 @app.command()
@@ -736,13 +1033,19 @@ def notify(
     settings, paths = _load(config)
     if settings.mode != "live":
         raise typer.BadParameter("notify requires mode=live")
-    enforce_shadow_promotion(
-        paths.state_dir / "promotion.json",
-        paths.signals_dir / "shadow",
-        paths.state_dir / "health.json",
-        settings.promotion,
-    )
-    signals = read_json(paths.signal_file, default={})
+    readiness = write_operational_status_bundle(paths, settings)
+    if readiness.get("live_ready") is not True:
+        typer.echo("error: operational readiness check failed", err=True)
+        typer.echo(_format_status_brief(readiness), err=True)
+        raise typer.Exit(code=ProcessExitCode.SAFETY_GATE_FAILED)
+    try:
+        signals = _load_published_signal(
+            paths,
+            signal_date=date_type.today().isoformat(),
+        )
+    except SafetyGateError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=process_exit_code(exc.code)) from exc
     health = read_json(paths.state_dir / "health.json", default={})
     score = health.get("health_score") if isinstance(health, dict) else None
     result = KakaoNotifier(settings, paths).send(

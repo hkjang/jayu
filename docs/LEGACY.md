@@ -23,8 +23,9 @@ the maintained surface or CI gates.
 - **Logic**: `src/jayu/*` only.
 - **CLI**: `jayu` (`simulate`, `signal`, `notify`, `portfolio`, `report`,
   `experiments`, `validate-config`).
-- **CI-gated**: `src`, `tests`, `scripts`, plus `danta_simulation.py` and
-  `stock_kakao.py` (the two shims) for lint.
+- **CI-gated**: `src`, `tests`, `scripts`, and all four executable wrappers for lint.
+- **Delegation**: executable wrappers use `jayu.legacy_cli.run_legacy_command`;
+  wrapper-specific business logic is not permitted.
 
 ## Migration intent
 

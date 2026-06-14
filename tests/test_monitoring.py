@@ -4,9 +4,13 @@ import os
 from datetime import UTC, datetime, timedelta
 
 from jayu.data import DataFailureError
-from jayu.failure_codes import FailureCode
+from jayu.failure_codes import FailureCode, ProcessExitCode, process_exit_code
 from jayu.monitoring import classify_failure, compute_health_score, prune_runs, update_health
 from jayu.safety import SafetyGateError
+
+
+class StringCodedError(RuntimeError):
+    code = "DATA_DISAGREEMENT"
 
 
 def test_prune_runs_keeps_newest_count(tmp_path):
@@ -64,6 +68,7 @@ def test_health_tracks_last_success_and_failure(tmp_path):
         )
         == "DATA_FAILURE"
     )
+    assert classify_failure(StringCodedError("provider mismatch")) == "DATA_DISAGREEMENT"
 
 
 def test_health_score_penalizes_recent_failure_after_recovery():
@@ -94,3 +99,16 @@ def test_health_score_penalizes_recent_failure_after_recovery():
 
     assert recent_score == 90
     assert old_score == 100
+
+
+def test_process_exit_code_groups_failure_taxonomy_for_operators():
+    assert process_exit_code(FailureCode.CONFIG_FAILURE) == ProcessExitCode.CONFIG_FAILURE
+    assert process_exit_code(FailureCode.DATA_DISAGREEMENT) == ProcessExitCode.DATA_FAILURE
+    assert process_exit_code(FailureCode.BACKTEST_FAILURE) == ProcessExitCode.BACKTEST_FAILURE
+    assert (
+        process_exit_code(FailureCode.SHADOW_PROMOTION_FAILED) == ProcessExitCode.SAFETY_GATE_FAILED
+    )
+    assert (
+        process_exit_code(FailureCode.NOTIFICATION_FAILURE) == ProcessExitCode.NOTIFICATION_FAILURE
+    )
+    assert process_exit_code("unknown") == ProcessExitCode.INTERNAL_FAILURE

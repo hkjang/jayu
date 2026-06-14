@@ -13,6 +13,7 @@
   "notification_retries": 3,
   "run_retention_days": 30,
   "run_retention_count": 100,
+  "operational_lock_timeout_minutes": 180,
   "data_provider": "yahoo",
   "data_fallback_provider": "none",
   "data": {
@@ -88,11 +89,11 @@
     "fitness_version": "v2_daily_equity"
   },
   "universe": {
-    "as_of": null,
+    "as_of": "2026-06-14",
     "source": "manual_current_universe",
     "includes_delisted": false,
-    "policy": "warn",
-    "exception_reason": null
+    "policy": "strict",
+    "exception_reason": "Sample uses current constituents only; replace it with a point-in-time universe including delisted symbols before production research."
   },
   "promotion": {
     "enabled": true,

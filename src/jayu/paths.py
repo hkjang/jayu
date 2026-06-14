@@ -92,3 +92,11 @@ class RuntimePaths:
     @property
     def signal_file(self) -> Path:
         return self.signals_dir / "today_signals.json"
+
+    @property
+    def signal_status_file(self) -> Path:
+        return self.signals_dir / "today_signals.status.json"
+
+    @property
+    def operational_lock_file(self) -> Path:
+        return self.state_dir / "operational_run.lock"

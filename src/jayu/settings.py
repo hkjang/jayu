@@ -233,6 +233,7 @@ class Settings(BaseModel):
     notification_retries: int = Field(default=3, ge=1, le=10)
     run_retention_days: int = Field(default=30, ge=1, le=3650)
     run_retention_count: int = Field(default=100, ge=1, le=10_000)
+    operational_lock_timeout_minutes: int = Field(default=180, ge=5, le=1440)
     data_provider: Literal["yahoo", "massive", "tiingo"] = "yahoo"
     data_fallback_provider: Literal["none", "yahoo", "massive", "tiingo"] = "massive"
     config_file: Path | None = None

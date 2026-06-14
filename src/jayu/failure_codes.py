@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import TypeAlias
 
 
@@ -19,6 +19,9 @@ class FailureCode(StrEnum):
     HEALTH_SCORE_LOW = "HEALTH_SCORE_LOW"
     SAFETY_VERDICT_BLOCKED = "SAFETY_VERDICT_BLOCKED"
     OPERATIONAL_RUN_STALE = "OPERATIONAL_RUN_STALE"
+    OPERATIONAL_RUN_ACTIVE = "OPERATIONAL_RUN_ACTIVE"
+    SIGNAL_PUBLICATION_MISSING = "SIGNAL_PUBLICATION_MISSING"
+    SIGNAL_PUBLICATION_INVALID = "SIGNAL_PUBLICATION_INVALID"
     COST_FRAGILE = "COST_FRAGILE"
     COST_NOT_EVALUATED = "COST_NOT_EVALUATED"
     LIVE_PRICE_SAFETY_FAILED = "LIVE_PRICE_SAFETY_FAILED"
@@ -51,6 +54,56 @@ class FailureCode(StrEnum):
 FailureCodeValue: TypeAlias = str
 
 
+class ProcessExitCode(IntEnum):
+    GENERAL_FAILURE = 1
+    CONFIG_FAILURE = 10
+    DATA_FAILURE = 20
+    BACKTEST_FAILURE = 30
+    SAFETY_GATE_FAILED = 40
+    NOTIFICATION_FAILURE = 50
+    INTERNAL_FAILURE = 70
+
+
+_DATA_FAILURE_CODES = {
+    FailureCode.DATA_FAILURE,
+    FailureCode.DATA_CONTRACT_FAILED,
+    FailureCode.DATA_DISAGREEMENT,
+    FailureCode.LIVE_PRICE_SAFETY_FAILED,
+    FailureCode.UNVERIFIED_PRICE_DATA,
+    FailureCode.REFERENCE_DATA_CONFLICT,
+    FailureCode.OPENFIGI_UNMAPPED,
+    FailureCode.UNMAPPED_TICKER,
+    FailureCode.SIGNAL_PUBLICATION_INVALID,
+}
+
+_SAFETY_FAILURE_CODES = {
+    FailureCode.NO_RUN_HISTORY,
+    FailureCode.HEALTH_SCORE_LOW,
+    FailureCode.SAFETY_VERDICT_BLOCKED,
+    FailureCode.OPERATIONAL_RUN_STALE,
+    FailureCode.OPERATIONAL_RUN_ACTIVE,
+    FailureCode.SIGNAL_PUBLICATION_MISSING,
+    FailureCode.COST_FRAGILE,
+    FailureCode.COST_NOT_EVALUATED,
+    FailureCode.SURVIVORSHIP_GATE_FAILED,
+    FailureCode.SHADOW_PROMOTION_FAILED,
+    FailureCode.PORTFOLIO_FILE_UNAVAILABLE,
+    FailureCode.MAX_POSITION_COUNT_EXCEEDED,
+    FailureCode.SINGLE_POSITION_EXCEEDED,
+    FailureCode.LIQUIDITY_INSUFFICIENT,
+    FailureCode.UNDERLYING_EXPOSURE_EXCEEDED,
+    FailureCode.SECTOR_EXPOSURE_EXCEEDED,
+    FailureCode.LEVERAGED_ETF_VALUE_EXCEEDED,
+    FailureCode.ADJUSTED_GROSS_EXPOSURE_EXCEEDED,
+    FailureCode.FACTOR_EXPOSURE_EXCEEDED,
+    FailureCode.MIN_CASH_BREACHED,
+    FailureCode.MAX_INVESTED_EXCEEDED,
+    FailureCode.DAILY_LOSS_LIMIT_BREACHED,
+    FailureCode.WEEKLY_LOSS_LIMIT_BREACHED,
+    FailureCode.MONTHLY_DRAWDOWN_BREACHED,
+}
+
+
 def normalize_failure_code(
     value: object, default: FailureCode = FailureCode.INTERNAL_FAILURE
 ) -> str:
@@ -64,3 +117,19 @@ def normalize_failure_code(
         except ValueError:
             return default.value
     return default.value
+
+
+def process_exit_code(value: object) -> int:
+    """Map a persisted failure code to a stable process exit code."""
+    failure_code = FailureCode(normalize_failure_code(value))
+    if failure_code == FailureCode.CONFIG_FAILURE:
+        return ProcessExitCode.CONFIG_FAILURE
+    if failure_code in _DATA_FAILURE_CODES:
+        return ProcessExitCode.DATA_FAILURE
+    if failure_code == FailureCode.BACKTEST_FAILURE:
+        return ProcessExitCode.BACKTEST_FAILURE
+    if failure_code == FailureCode.NOTIFICATION_FAILURE:
+        return ProcessExitCode.NOTIFICATION_FAILURE
+    if failure_code in _SAFETY_FAILURE_CODES:
+        return ProcessExitCode.SAFETY_GATE_FAILED
+    return ProcessExitCode.INTERNAL_FAILURE

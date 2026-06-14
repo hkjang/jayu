@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import sys
-import warnings
 
-from jayu.cli import app
+from jayu.legacy_cli import run_legacy_command
 
 
 def main() -> int:
-    warnings.warn(
-        "build_portfolio.py is deprecated; use `jayu portfolio build`. Removal date: 2026-09-30.",
-        FutureWarning,
-        stacklevel=1,
+    return run_legacy_command(
+        ("portfolio", "build"),
+        sys.argv[1:],
+        script_name="build_portfolio.py",
+        replacement="jayu portfolio build",
     )
-    app(args=["portfolio", "build", *sys.argv[1:]], prog_name="jayu", standalone_mode=False)
-    return 0
 
 
 if __name__ == "__main__":

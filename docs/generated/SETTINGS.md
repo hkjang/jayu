@@ -18,6 +18,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `notification_retries` | `integer` | `3` | `{"maximum": 10, "minimum": 1}` |
 | `run_retention_days` | `integer` | `30` | `{"maximum": 3650, "minimum": 1}` |
 | `run_retention_count` | `integer` | `100` | `{"maximum": 10000, "minimum": 1}` |
+| `operational_lock_timeout_minutes` | `integer` | `180` | `{"maximum": 1440, "minimum": 5}` |
 | `data_provider` | `string` | `"yahoo"` | `{"enum": ["yahoo", "massive", "tiingo"]}` |
 | `data_fallback_provider` | `string` | `"massive"` | `{"enum": ["none", "yahoo", "massive", "tiingo"]}` |
 | `config_file` | `string | null` | `null` | `{}` |

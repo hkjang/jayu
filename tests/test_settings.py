@@ -56,6 +56,10 @@ def test_sample_config_is_valid():
     assert settings.research.cost_survival_enabled is True
     assert settings.research.cost_survival_buffer_bps == 10.0
     assert settings.promotion.min_shadow_days == 20
+    assert settings.operational_lock_timeout_minutes == 180
+    assert settings.universe.policy == "strict"
+    assert settings.universe.as_of is not None
+    assert settings.universe.exception_reason
 
 
 def test_inconsistent_cash_limits_are_rejected(tmp_path):
