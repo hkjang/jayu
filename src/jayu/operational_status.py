@@ -32,7 +32,7 @@ def build_operational_status(
     reference = now or datetime.now(UTC)
     health = _mapping(read_json(paths.state_dir / "health.json", default={}))
     latest_dir = latest_run_dir(paths.runs_dir)
-    latest_run = _latest_run_summary(latest_dir) if latest_dir else None
+    latest_run = _latest_run_summary(latest_dir, now=reference) if latest_dir else None
     promotion = (
         evaluate_shadow_promotion(
             paths.signals_dir / "shadow",
@@ -53,6 +53,12 @@ def build_operational_status(
         promotion=promotion,
         health_score=health_score,
         min_health_score=settings.promotion.min_health_score,
+        max_ready_run_age_hours=settings.promotion.max_ready_run_age_hours,
+    )
+    run_fresh = (
+        isinstance(latest_run, Mapping)
+        and isinstance(latest_run.get("run_age_hours"), (int, float))
+        and latest_run["run_age_hours"] <= settings.promotion.max_ready_run_age_hours
     )
     ready = not reasons
     report = {
@@ -60,6 +66,7 @@ def build_operational_status(
         "mode": settings.mode,
         "health_score": health_score,
         "health_status": _health_status(health_score, settings.promotion.min_health_score),
+        "max_ready_run_age_hours": settings.promotion.max_ready_run_age_hours,
         "latest_run": latest_run,
         "promotion": promotion,
         "paper_ready": ready,
@@ -69,6 +76,7 @@ def build_operational_status(
             "latest_safety_verdict": latest_run.get("safety_verdict")
             if isinstance(latest_run, Mapping)
             else None,
+            "latest_run_fresh": run_fresh,
             "promotion_eligible": promotion.get("eligible") is True,
             "health_score_ok": health_ok,
         },
@@ -88,13 +96,20 @@ def write_operational_status(
     return report
 
 
-def _latest_run_summary(run_dir: Path | None) -> dict[str, Any] | None:
+def _latest_run_summary(run_dir: Path | None, *, now: datetime) -> dict[str, Any] | None:
     if run_dir is None:
         return None
     manifest = _mapping(read_json(run_dir / "manifest.json", default={}))
     result = _mapping(manifest.get("result"))
     verdict = _mapping(read_json(run_dir / "safety_verdict.json", default={}))
     safety_verdict = verdict.get("overall") or result.get("safety_verdict")
+    finished_at = manifest.get("finished_at")
+    finished_at_dt = _parse_timestamp(finished_at)
+    run_age_hours = (
+        round(max(0.0, (now - finished_at_dt).total_seconds() / 3600), 4)
+        if finished_at_dt is not None
+        else None
+    )
     return {
         "run_id": manifest.get("run_id") or run_dir.name,
         "artifact_dir": str(run_dir),
@@ -107,7 +122,8 @@ def _latest_run_summary(run_dir: Path | None) -> dict[str, Any] | None:
         "signal_hash": result.get("signal_hash"),
         "risk_status": result.get("risk_status"),
         "cost_survival": result.get("cost_survival"),
-        "finished_at": manifest.get("finished_at"),
+        "finished_at": finished_at,
+        "run_age_hours": run_age_hours,
     }
 
 
@@ -117,6 +133,7 @@ def _readiness_reasons(
     promotion: Mapping[str, Any],
     health_score: Any,
     min_health_score: int,
+    max_ready_run_age_hours: int,
 ) -> list[dict[str, Any]]:
     reasons: list[dict[str, Any]] = []
     if latest_run is None:
@@ -143,6 +160,17 @@ def _readiness_reasons(
                     "run_id": latest_run.get("run_id"),
                     "observed": latest_run.get("safety_verdict"),
                     "required": "approved",
+                }
+            )
+        age = latest_run.get("run_age_hours")
+        if not isinstance(age, (int, float)) or age > max_ready_run_age_hours:
+            reasons.append(
+                {
+                    "code": FailureCode.OPERATIONAL_RUN_STALE.value,
+                    "message": "latest run is too old for operational readiness",
+                    "run_id": latest_run.get("run_id"),
+                    "observed_hours": age,
+                    "required_max_hours": max_ready_run_age_hours,
                 }
             )
     if promotion.get("eligible") is not True:
@@ -183,6 +211,18 @@ def _health_status(value: Any, min_health_score: int) -> str:
     if value >= 70:
         return "degraded"
     return "critical"
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

@@ -119,6 +119,25 @@ def test_operational_status_blocks_unapproved_latest_safety_verdict(tmp_path: Pa
     }
 
 
+def test_operational_status_blocks_stale_latest_run(tmp_path: Path):
+    paths = _paths(tmp_path)
+    _write_good_promotion_inputs(paths)
+    _write_run(paths, verdict="approved")
+
+    report = build_operational_status(
+        paths,
+        _settings(),
+        now=datetime(2026, 6, 16, tzinfo=UTC),
+    )
+
+    assert report["live_ready"] is False
+    assert report["checks"]["latest_run_fresh"] is False
+    assert report["latest_run"]["run_age_hours"] == 72.0
+    assert {reason["code"] for reason in report["readiness_reasons"]} == {
+        FailureCode.OPERATIONAL_RUN_STALE.value
+    }
+
+
 def test_operational_status_writes_state_snapshot(tmp_path: Path):
     paths = _paths(tmp_path)
     report = write_operational_status(

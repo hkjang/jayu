@@ -126,6 +126,7 @@ class PromotionSettings(BaseModel):
     min_mature_completion_ratio: float = Field(default=0.90, ge=0, le=1)
     min_health_score: int = Field(default=80, ge=0, le=100)
     maturity_horizon_days: int = Field(default=20, ge=1, le=252)
+    max_ready_run_age_hours: int = Field(default=36, ge=1, le=336)
     min_data_validation_success_rate: float = Field(default=0.95, ge=0, le=1)
     max_provider_disagreement_rate: float = Field(default=0.01, ge=0, le=1)
     min_risk_gate_pass_rate: float = Field(default=0.50, ge=0, le=1)

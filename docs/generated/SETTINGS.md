@@ -103,6 +103,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `promotion.min_mature_completion_ratio` | `number` | `0.9` | `{"maximum": 1, "minimum": 0}` |
 | `promotion.min_health_score` | `integer` | `80` | `{"maximum": 100, "minimum": 0}` |
 | `promotion.maturity_horizon_days` | `integer` | `20` | `{"maximum": 252, "minimum": 1}` |
+| `promotion.max_ready_run_age_hours` | `integer` | `36` | `{"maximum": 336, "minimum": 1}` |
 | `promotion.min_data_validation_success_rate` | `number` | `0.95` | `{"maximum": 1, "minimum": 0}` |
 | `promotion.max_provider_disagreement_rate` | `number` | `0.01` | `{"maximum": 1, "minimum": 0}` |
 | `promotion.min_risk_gate_pass_rate` | `number` | `0.5` | `{"maximum": 1, "minimum": 0}` |
