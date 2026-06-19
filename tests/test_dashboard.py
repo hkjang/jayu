@@ -500,8 +500,10 @@ def test_dashboard_promotion_reports_criteria_and_shadow_history(tmp_path: Path)
     assert {item["name"] for item in report["criteria"]} >= {"shadow_days", "health_score"}
 
 
-def test_dashboard_settings_validation_blocks_loose_operational_mode(tmp_path: Path):
+def test_dashboard_settings_validation_blocks_loose_operational_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     paths = _paths(tmp_path)
+    monkeypatch.setattr("os.environ", {})
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
 
     report = build_dashboard_settings_validation(paths, mode="shadow")
 

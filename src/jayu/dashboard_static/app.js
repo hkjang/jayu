@@ -1,5 +1,5 @@
 const state = {
-  page: "overview",
+  page: localStorage.getItem("jayu.dashboard.activePage") || "overview",
   runId: "latest",
   runs: [],
   decision: null,
@@ -14,6 +14,7 @@ const state = {
   tossAccounts: null,
   tossMarket: null,
   tossPortfolio: null,
+  apiMonitoring: null,
   tossAccountRegion: localStorage.getItem("jayu.toss.accountRegion") || "ALL",
   selectedTossAccount: localStorage.getItem("jayu.toss.selectedAccount") || "",
 };
@@ -219,6 +220,9 @@ async function loadPage() {
       state.tossAccounts = await api("/api/v1/toss/accounts");
       reconcileSelectedTossAccount();
     }
+    if (state.page === "api-monitoring") {
+      state.apiMonitoring = await api("/api/v1/api-monitoring");
+    }
     if (state.page === "toss-account") {
       const params = new URLSearchParams();
       if (state.selectedTossAccount) params.set("account", state.selectedTossAccount);
@@ -276,6 +280,7 @@ function pageTitle(page) {
     settings: "설정 검증",
     "toss-account": "Toss Account",
     toss: "Toss Market",
+    "api-monitoring": "API 모니터링",
   }[page];
 }
 
@@ -289,6 +294,7 @@ function render() {
   else if (state.page === "settings") renderSettingsValidation();
   else if (state.page === "toss-account") renderTossAccountDashboard();
   else if (state.page === "toss") renderTossMarket();
+  else if (state.page === "api-monitoring") renderApiMonitoring();
   else renderOverview();
   bindPageActions();
 }
@@ -1502,6 +1508,274 @@ function tossAccountHeadline(data, summary) {
   return `${summary.holding_count || 0}개 보유 종목을 첫 계좌 기준으로 조회했습니다.`;
 }
 
+function renderApiMonitoring() {
+  const data = state.apiMonitoring;
+  const summary = data.summary;
+  const providers = data.providers || [];
+  const categories = data.categories || [];
+  const disagreements = data.disagreements || [];
+  const notifFailures = data.notification_failures || [];
+  const kakao = data.kakao_status || {};
+  const cacheStats = data.cache_stats || {};
+  const config = data.config || {};
+  const runCtx = data.run_context || {};
+
+  const monitoringStatusLabel = {
+    success: "모든 데이터 출처 정상",
+    warning: "일부 출처에 경고가 있습니다",
+    failed: "실패한 데이터 출처가 있습니다",
+  }[summary.status] || "상태 확인 필요";
+
+  els.root.innerHTML = `
+    <div class="page-heading">
+      <div>
+        <h1>API 데이터 출처 모니터링</h1>
+        <p>프로젝트에서 사용하는 모든 외부 API 데이터 출처의 상태, 자격증명, 정책, 캐시, 최근 활동을 확인합니다.</p>
+      </div>
+      ${statusBadge(summary.status)}
+    </div>
+    <section class="status-banner status-${statusClass(summary.status)}">
+      <div>${statusBadge(summary.status)}</div>
+      <div>
+        <h2>${monitoringStatusLabel}</h2>
+        <p>${runCtx.run_id ? `최근 실행 <strong>${escapeHtml(runCtx.run_id)}</strong> 기준 (${formatDate(runCtx.finished_at)})` : "완료된 실행 기록이 없습니다. Provider 정책과 자격증명만 표시합니다."}</p>
+      </div>
+      <span class="code">${summary.failed_count ? "PROVIDER_FAILURE" : summary.partial_count ? "PARTIAL_FAILURE" : "ALL_SOURCES_OK"}</span>
+    </section>
+    <section class="metric-grid" aria-label="API 출처 요약">
+      ${metricCard("전체 Provider", summary.total_providers, "not_evaluated", `${categories.length}개 카테고리`)}
+      ${metricCard("자격증명 설정", `${summary.configured_count}/${summary.total_providers}`, summary.configured_count === summary.total_providers ? "success" : "warning", "환경변수 또는 설정 파일")}
+      ${metricCard("활성 Provider", summary.active_count, summary.active_count ? "success" : "not_evaluated", "현재 설정에서 사용 중")}
+      ${metricCard("실패", summary.failed_count, summary.failed_count ? "failed" : "success", "최근 run 기준")}
+      ${metricCard("불일치", summary.disagreement_count, summary.disagreement_count ? "data_error" : "success", "provider간 데이터 차이")}
+      ${metricCard("알림 실패", summary.notification_failure_count, summary.notification_failure_count ? "warning" : "success", "카카오 알림 기록")}
+    </section>
+    ${renderProviderCards(providers, categories)}
+    <div class="section-grid">
+      <section class="panel">
+        <div class="panel-header"><div><h2>데이터 설정 요약</h2><p>현재 설정 파일의 provider 관련 설정입니다.</p></div></div>
+        <div class="panel-body">
+          <div class="config-summary-grid">
+            ${configItem("Primary Provider", config.primary_price_provider || "-")}
+            ${configItem("Fallback Provider", config.fallback_price_provider || "none")}
+            ${configItem("Cross Validation", config.cross_validation_mode || "off")}
+            ${configItem("CV Providers", (config.cross_validation_providers || []).join(", ") || "없음")}
+            ${configItem("Supplemental", (config.supplemental_providers || []).join(", ") || "없음")}
+            ${configItem("불일치 정책", config.price_disagreement_policy || "-")}
+          </div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-header"><div><h2>카카오 알림 상태</h2><p>토큰과 자격증명 설정 여부입니다.</p></div></div>
+        <div class="panel-body">
+          <div class="config-summary-grid">
+            ${configItem("Access Token", kakao.has_access_token ? "설정됨 ✓" : "미설정")}
+            ${configItem("Refresh Token", kakao.has_refresh_token ? "설정됨 ✓" : "미설정")}
+            ${configItem("REST API Key", kakao.has_rest_api_key ? "설정됨 ✓" : "미설정")}
+            ${configItem("Client Secret", kakao.has_client_secret ? "설정됨 ✓" : "미설정")}
+          </div>
+        </div>
+      </section>
+    </div>
+    ${renderCacheStatsPanel(cacheStats)}
+    ${disagreements.length ? renderDisagreementsPanel(disagreements) : ""}
+    ${notifFailures.length ? renderNotificationFailuresPanel(notifFailures) : ""}
+  `;
+}
+
+function renderProviderCards(providers, categories) {
+  const grouped = {};
+  for (const cat of categories) {
+    grouped[cat.key] = { label: cat.label, icon: cat.icon, items: [] };
+  }
+  for (const p of providers) {
+    if (grouped[p.category]) {
+      grouped[p.category].items.push(p);
+    }
+  }
+
+  let html = '<section class="panel" style="margin-bottom:14px"><div class="panel-header"><div><h2>Provider 상태</h2><p>카테고리별 API 데이터 출처의 자격증명, 정책, 최근 활동을 확인합니다.</p></div></div>';
+
+  for (const key of Object.keys(grouped)) {
+    const group = grouped[key];
+    if (!group.items.length) continue;
+    html += `<div class="category-separator">${group.icon} ${escapeHtml(group.label)}</div>`;
+    html += '<div class="provider-grid">';
+    for (const p of group.items) {
+      html += renderProviderCard(p);
+    }
+    html += '</div>';
+  }
+
+  html += '</section>';
+  return html;
+}
+
+function renderProviderCard(p) {
+  const policy = p.policy || {};
+  const recent = p.recent || {};
+  const statusCls = {
+    success: "pmc-success",
+    partial: "pmc-partial",
+    failed: "pmc-failed",
+    unused: "pmc-unused",
+  }[recent.status] || "pmc-unused";
+
+  const recentStatusLabel = {
+    success: "성공",
+    partial: "일부 실패",
+    failed: "실패",
+    unused: "미사용",
+  }[recent.status] || "미사용";
+
+  const credClass = p.credential_configured ? "is-set" : "is-missing";
+  const credLabel = p.credential_configured ? "인증 설정됨" : "인증 미설정";
+
+  const envTags = (p.env_names || []).length
+    ? `<div class="pmc-env-list">${p.env_names.map((e) => `<span class="pmc-env-tag">${escapeHtml(e)}</span>`).join("")}</div>`
+    : "";
+
+  const cacheTtlLabel = policy.cache_ttl_seconds
+    ? policy.cache_ttl_seconds >= 3600
+      ? `${(policy.cache_ttl_seconds / 3600).toFixed(1)}h`
+      : `${Math.round(policy.cache_ttl_seconds / 60)}m`
+    : "-";
+
+  return `
+    <article class="provider-monitor-card ${statusCls}">
+      <div class="pmc-header">
+        <div class="pmc-header-left">
+          <strong>${escapeHtml(p.display_name)}</strong>
+          <span class="pmc-category-badge">${escapeHtml(p.category)}</span>
+          ${p.in_use ? '<span class="pmc-category-badge" style="background:#e8f5ee;border-color:#8bc9aa;color:#126b45">활성</span>' : ""}
+        </div>
+        <span class="pmc-credential ${credClass}">${credLabel}</span>
+      </div>
+      <span class="pmc-url">${escapeHtml(p.base_url)}</span>
+      <div class="pmc-detail-row">
+        <span class="policy-tag">timeout <strong>${policy.timeout_seconds ?? "-"}s</strong></span>
+        <span class="policy-tag">retry <strong>${policy.retries ?? "-"}</strong></span>
+        <span class="policy-tag">rate <strong>${policy.rate_limit_per_minute ?? "-"}/min</strong></span>
+        <span class="policy-tag">cache <strong>${cacheTtlLabel}</strong></span>
+        ${!p.enabled ? '<span class="policy-tag" style="color:var(--failed);border-color:var(--failed)">비활성</span>' : ""}
+      </div>
+      ${envTags}
+      <div class="pmc-activity">
+        <div class="pmc-activity-item">
+          <span>최근 상태</span>
+          <strong class="${recent.status === "success" ? "positive" : recent.status === "failed" ? "negative" : ""}">${recentStatusLabel}</strong>
+        </div>
+        <div class="pmc-activity-item">
+          <span>성공 / 실패</span>
+          <strong>${recent.success_count ?? 0} / ${recent.failed_count ?? 0}</strong>
+        </div>
+        <div class="pmc-activity-item">
+          <span>수집 행 수</span>
+          <strong>${formatNumber(recent.total_rows, 0)}</strong>
+        </div>
+        <div class="pmc-activity-item">
+          <span>소스 수</span>
+          <strong>${(recent.sources || []).length}</strong>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderCacheStatsPanel(cacheStats) {
+  const entries = Object.entries(cacheStats);
+  if (!entries.length) {
+    return `
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header"><div><h2>캐시 상태</h2><p>캐시 디렉터리 통계입니다.</p></div></div>
+        <div class="panel-body"><div class="empty-state"><strong>캐시 데이터 없음</strong>실행 후 캐시가 생성됩니다.</div></div>
+      </section>
+    `;
+  }
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>캐시 상태</h2><p>provider별 캐시 디렉터리의 파일 수와 용량입니다.</p></div></div>
+      <div class="panel-body">
+        <div class="cache-stat-grid">
+          ${entries.map(([name, stat]) => `
+            <div class="cache-stat-card">
+              <strong>${escapeHtml(name)}</strong>
+              <span>${stat.file_count ?? 0}개 파일 · ${formatBytes(stat.total_bytes ?? 0)}</span>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function configItem(label, value) {
+  return `
+    <div class="config-summary-item">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+    </div>
+  `;
+}
+
+function renderDisagreementsPanel(disagreements) {
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>최근 Provider 불일치</h2><p>최근 run에서 발견된 provider간 데이터 차이입니다.</p></div><span class="muted">${disagreements.length}건</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Ticker</th>
+          <th>날짜</th>
+          <th>필드</th>
+          <th>Provider A</th>
+          <th>Provider B</th>
+          <th>차이</th>
+        </tr></thead>
+        <tbody>
+          ${disagreements.slice(0, 20).map((d) => `<tr>
+            <td class="ticker-cell">${escapeHtml(d.ticker || d.symbol || "-")}</td>
+            <td>${escapeHtml(d.date || "-")}</td>
+            <td>${escapeHtml(d.field || "-")}</td>
+            <td class="code">${escapeHtml(d.provider_a || d.source_a || "-")}: ${escapeHtml(d.value_a ?? "-")}</td>
+            <td class="code">${escapeHtml(d.provider_b || d.source_b || "-")}: ${escapeHtml(d.value_b ?? "-")}</td>
+            <td class="numeric">${escapeHtml(d.delta ?? d.relative_delta ?? "-")}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+    </section>
+  `;
+}
+
+function renderNotificationFailuresPanel(failures) {
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>알림 실패 이력</h2><p>최근 카카오 알림 전송 실패 기록입니다.</p></div><span class="muted">${failures.length}건</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>시각</th>
+          <th>유형</th>
+          <th>오류 메시지</th>
+        </tr></thead>
+        <tbody>
+          ${failures.map((f) => `<tr>
+            <td>${formatDate(f.timestamp || f.time || f.at)}</td>
+            <td>${escapeHtml(f.type || f.kind || "-")}</td>
+            <td class="toss-payload">${escapeHtml(f.message || f.error || "-")}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+    </section>
+  `;
+}
+
 function bindPageActions() {
   document.querySelectorAll("[data-go]").forEach((button) => {
     button.addEventListener("click", () => navigate(button.dataset.go));
@@ -1570,8 +1844,9 @@ function bindPageActions() {
 }
 
 function navigate(page) {
-  if (!["overview", "data-quality", "risk", "signals", "trader-lens", "promotion", "settings", "toss-account", "toss"].includes(page)) return;
+  if (!["overview", "data-quality", "risk", "signals", "trader-lens", "promotion", "settings", "toss-account", "toss", "api-monitoring"].includes(page)) return;
   state.page = page;
+  localStorage.setItem("jayu.dashboard.activePage", page);
   document.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("is-active", item.dataset.page === page);
   });
@@ -1596,6 +1871,7 @@ els.runSelector.addEventListener("change", () => {
   state.tossAccounts = null;
   state.tossMarket = null;
   state.tossPortfolio = null;
+  state.apiMonitoring = null;
   loadPage();
 });
 
@@ -1608,9 +1884,15 @@ document.querySelector("#refresh-button").addEventListener("click", async () => 
   state.tossAccounts = null;
   state.tossMarket = null;
   state.tossPortfolio = null;
+  state.apiMonitoring = null;
   await loadPage();
 });
 
 document.querySelector("#retry-button").addEventListener("click", loadPage);
+
+// Initialize active sidebar menu item from state on load
+document.querySelectorAll(".nav-item").forEach((item) => {
+  item.classList.toggle("is-active", item.dataset.page === state.page);
+});
 
 loadPage();

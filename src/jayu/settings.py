@@ -381,6 +381,30 @@ ENV_ALIAS_KEYS = {
     "JAYU_TOSS_API_" + "KEY": "toss_api_" + "key",
     "JAYU_TOSS_SECRET_" + "KEY": "toss_secret_" + "key",
     "JAYU_TOSS_ACCOUNT": "toss_account",
+    # Tiingo
+    "JAYU_TIINGO_API_KEY": "tiingo_api_key",
+    "TIINGO_API_KEY": "tiingo_api_key",
+    # Alpha Vantage
+    "JAYU_ALPHA_VANTAGE_API_KEY": "alpha_vantage_api_key",
+    "ALPHA_VANTAGE_API_KEY": "alpha_vantage_api_key",
+    "ALPHA_VANTAGE_KEY": "alpha_vantage_api_key",
+    # Finnhub
+    "JAYU_FINNHUB_API_KEY": "finnhub_api_key",
+    "FINNHUB_API_KEY": "finnhub_api_key",
+    "FINNHUB_API": "finnhub_api_key",
+    # OpenFIGI
+    "JAYU_OPENFIGI_API_KEY": "openfigi_api_key",
+    "OPENFIGI_API_KEY": "openfigi_api_key",
+    "OPEN_FIGI": "openfigi_api_key",
+    # FRED
+    "JAYU_FRED_API_KEY": "fred_api_key",
+    "FRED_API_KEY": "fred_api_key",
+    # SEC EDGAR
+    "JAYU_SEC_USER_AGENT": "sec_user_agent",
+    "SEC_USER_AGENT": "sec_user_agent",
+    # Massive
+    "JAYU_MASSIVE_API_KEY": "massive_api_key",
+    "MASSIVE_API_KEY": "massive_api_key",
 }
 
 
@@ -419,6 +443,11 @@ def _dotenv_values(config_path: Path | None) -> dict[str, Any]:
     candidates: list[Path] = []
     if config_path:
         candidates.append(config_path.parent / ".env")
+    # Always check the project root .env unless we are running under pytest
+    import sys
+    if "pytest" not in sys.modules:
+        project_root = Path(__file__).resolve().parents[2]
+        candidates.append(project_root / ".env")
     candidates.append(Path.cwd() / ".env")
     values: dict[str, Any] = {}
     seen: set[Path] = set()

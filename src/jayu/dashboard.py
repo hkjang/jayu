@@ -904,6 +904,298 @@ def build_dashboard_toss_market_snapshot(
     }
 
 
+def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
+    settings = _load_dashboard_settings(paths)
+    now = datetime.now(UTC)
+
+    # --- Credential status (never expose values) ---
+    credentials: dict[str, bool] = {
+        "yahoo": True,  # public, no key needed
+        "massive": bool(_secret_value(settings.massive_api_key)),
+        "tiingo": bool(_secret_value(settings.tiingo_api_key)),
+        "sec_edgar": bool(_secret_value(settings.sec_user_agent)),
+        "fred": bool(_secret_value(settings.fred_api_key)),
+        "openfigi": True,  # works without key (lower rate limit)
+        "alpha_vantage_news": bool(_secret_value(settings.alpha_vantage_api_key)),
+        "finnhub_events": bool(_secret_value(settings.finnhub_api_key)),
+        "toss": bool(
+            _secret_value(settings.toss_api_key)
+            and _secret_value(settings.toss_secret_key)
+        ),
+        "kakao": bool(
+            _secret_value(settings.kakao_access_token)
+            or _secret_value(settings.kakao_refresh_token)
+        ),
+    }
+
+    # --- Provider policies ---
+    all_provider_names = [
+        "yahoo", "massive", "tiingo",
+        "sec_edgar", "fred", "openfigi",
+        "alpha_vantage_news", "finnhub_events",
+        "toss",
+    ]
+    policies: dict[str, dict[str, Any]] = {}
+    for name in all_provider_names:
+        policy_settings = settings.data.provider_policies.get(name)
+        if policy_settings:
+            policies[name] = {
+                "enabled": policy_settings.enabled,
+                "timeout_seconds": policy_settings.timeout_seconds,
+                "retries": policy_settings.retries,
+                "rate_limit_per_minute": policy_settings.rate_limit_per_minute,
+                "cache_ttl_seconds": policy_settings.cache_ttl_seconds,
+            }
+        else:
+            policies[name] = {
+                "enabled": True,
+                "timeout_seconds": 20.0,
+                "retries": 3,
+                "rate_limit_per_minute": 60,
+                "cache_ttl_seconds": 14_400,
+            }
+
+    # --- Latest run data sources ---
+    run_dir = _resolve_run_dir(paths, "latest")
+    recent_sources: list[dict[str, Any]] = []
+    recent_disagreements: list[dict[str, Any]] = []
+    run_id: str | None = None
+    run_finished_at: str | None = None
+    if run_dir is not None:
+        run_id = run_dir.name
+        manifest = _mapping(read_json(run_dir / "manifest.json", default={}))
+        run_finished_at = manifest.get("finished_at")
+        source_payload = _mapping(read_json(run_dir / "data_sources.json", default={}))
+        recent_sources = [
+            dict(item)
+            for item in _sequence(source_payload.get("sources"))
+            if isinstance(item, Mapping)
+        ]
+        disagreement_payload = _mapping(
+            read_json(run_dir / "provider_disagreement_report.json", default={})
+        )
+        recent_disagreements = [
+            dict(item)
+            for item in _sequence(disagreement_payload.get("disagreements"))
+            if isinstance(item, Mapping)
+        ]
+
+    # Group sources by provider
+    source_by_provider: dict[str, list[dict[str, Any]]] = {}
+    for source in recent_sources:
+        provider_name = str(source.get("provider", ""))
+        source_by_provider.setdefault(provider_name, []).append(source)
+
+    # --- Kakao token status ---
+    kakao_tokens = _mapping(read_json(paths.state_dir / "kakao_tokens.json", default={}))
+    kakao_has_access = bool(
+        kakao_tokens.get("access_token")
+        or _secret_value(settings.kakao_access_token)
+    )
+    kakao_has_refresh = bool(
+        kakao_tokens.get("refresh_token")
+        or _secret_value(settings.kakao_refresh_token)
+    )
+
+    # --- Notification failures ---
+    notification_failures: list[dict[str, Any]] = []
+    failure_file = paths.state_dir / "notification_failures.jsonl"
+    if failure_file.exists():
+        try:
+            lines = failure_file.read_text(encoding="utf-8").strip().splitlines()
+            for line in lines[-20:]:
+                try:
+                    notification_failures.append(json.loads(line))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+        except OSError:
+            pass
+
+    # --- Cache directory stats ---
+    cache_stats: dict[str, dict[str, Any]] = {}
+    if paths.cache_dir.exists():
+        for subdir in paths.cache_dir.iterdir():
+            if subdir.is_dir():
+                try:
+                    files = list(subdir.rglob("*"))
+                    file_count = sum(1 for f in files if f.is_file())
+                    total_bytes = sum(f.stat().st_size for f in files if f.is_file())
+                    cache_stats[subdir.name] = {
+                        "file_count": file_count,
+                        "total_bytes": total_bytes,
+                    }
+                except OSError:
+                    cache_stats[subdir.name] = {"file_count": 0, "total_bytes": 0}
+
+    # --- Build provider detail list ---
+    provider_categories: dict[str, str] = {
+        "yahoo": "price",
+        "massive": "price",
+        "tiingo": "price",
+        "sec_edgar": "fundamentals",
+        "fred": "macro",
+        "openfigi": "reference",
+        "alpha_vantage_news": "news",
+        "finnhub_events": "news",
+        "toss": "broker",
+        "kakao": "notification",
+    }
+    provider_base_urls: dict[str, str] = {
+        "yahoo": "yfinance (library)",
+        "massive": "https://api.massive.com/v2",
+        "tiingo": "https://api.tiingo.com/tiingo/daily",
+        "sec_edgar": "https://data.sec.gov",
+        "fred": "https://api.stlouisfed.org",
+        "openfigi": "https://api.openfigi.com/v3",
+        "alpha_vantage_news": "https://www.alphavantage.co/query",
+        "finnhub_events": "https://finnhub.io/api/v1",
+        "toss": "https://openapi.tossinvest.com",
+        "kakao": "https://kapi.kakao.com",
+    }
+    provider_env_names: dict[str, list[str]] = {
+        "yahoo": [],
+        "massive": ["JAYU_MASSIVE_API_KEY"],
+        "tiingo": ["JAYU_TIINGO_API_KEY"],
+        "sec_edgar": ["JAYU_SEC_USER_AGENT"],
+        "fred": ["JAYU_FRED_API_KEY"],
+        "openfigi": ["JAYU_OPENFIGI_API_KEY"],
+        "alpha_vantage_news": ["JAYU_ALPHA_VANTAGE_API_KEY"],
+        "finnhub_events": ["JAYU_FINNHUB_API_KEY"],
+        "toss": ["TS_API_KEY", "TS_SECRET_KEY", "TS_ACCOUNT"],
+        "kakao": [
+            "JAYU_KAKAO_ACCESS_TOKEN",
+            "JAYU_KAKAO_REFRESH_TOKEN",
+            "JAYU_KAKAO_REST_API_KEY",
+            "JAYU_KAKAO_CLIENT_SECRET",
+        ],
+    }
+    provider_display_names: dict[str, str] = {
+        "yahoo": "Yahoo Finance",
+        "massive": "Massive",
+        "tiingo": "Tiingo",
+        "sec_edgar": "SEC EDGAR",
+        "fred": "FRED",
+        "openfigi": "OpenFIGI",
+        "alpha_vantage_news": "Alpha Vantage News",
+        "finnhub_events": "Finnhub Events",
+        "toss": "Toss Securities",
+        "kakao": "Kakao Talk",
+    }
+
+    # Determine which providers are used in current config
+    active_price = {settings.data_provider}
+    if settings.data_fallback_provider != "none":
+        active_price.add(settings.data_fallback_provider)
+    active_price.update(settings.data.cross_validation_providers)
+    active_supplemental = set(settings.data.supplemental_providers)
+
+    providers_detail: list[dict[str, Any]] = []
+    all_names = list(provider_categories.keys())
+    for name in all_names:
+        category = provider_categories[name]
+        sources = source_by_provider.get(name, [])
+        success_count = sum(1 for s in sources if s.get("status") == "success")
+        failed_count = sum(1 for s in sources if s.get("status") != "success")
+        total_rows = sum(int(s.get("rows", 0) or 0) for s in sources)
+        # Determine recent status
+        if sources:
+            recent_status = "success" if failed_count == 0 else (
+                "partial" if success_count > 0 else "failed"
+            )
+        else:
+            recent_status = "unused"
+        # Is this provider actively in use?
+        in_use = (
+            (name in active_price and category == "price")
+            or (name in active_supplemental)
+            or (name == "toss")
+            or (name == "kakao")
+        )
+        policy = policies.get(name)
+        enabled = policy["enabled"] if policy else True
+        providers_detail.append({
+            "name": name,
+            "display_name": provider_display_names.get(name, name),
+            "category": category,
+            "base_url": provider_base_urls.get(name, ""),
+            "env_names": provider_env_names.get(name, []),
+            "credential_configured": credentials.get(name, False),
+            "enabled": enabled,
+            "in_use": in_use,
+            "policy": policy,
+            "recent": {
+                "status": recent_status,
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "total_rows": total_rows,
+                "sources": sources[:10],
+            },
+        })
+
+    # --- Aggregate summary ---
+    total_providers = len(all_names)
+    configured_count = sum(1 for v in credentials.values() if v)
+    active_count = sum(1 for p in providers_detail if p["in_use"])
+    providers_with_failures = sum(
+        1 for p in providers_detail if p["recent"]["status"] == "failed"
+    )
+    providers_with_partial = sum(
+        1 for p in providers_detail if p["recent"]["status"] == "partial"
+    )
+    overall_status = (
+        "failed" if providers_with_failures > 0
+        else "warning" if providers_with_partial > 0 or configured_count < total_providers
+        else "success"
+    )
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": now.isoformat(),
+        "summary": {
+            "status": overall_status,
+            "total_providers": total_providers,
+            "configured_count": configured_count,
+            "active_count": active_count,
+            "failed_count": providers_with_failures,
+            "partial_count": providers_with_partial,
+            "disagreement_count": len(recent_disagreements),
+            "notification_failure_count": len(notification_failures),
+        },
+        "run_context": {
+            "run_id": run_id,
+            "finished_at": run_finished_at,
+        },
+        "providers": providers_detail,
+        "categories": [
+            {"key": "price", "label": "가격 데이터", "icon": "📈"},
+            {"key": "fundamentals", "label": "기업 공시", "icon": "📊"},
+            {"key": "macro", "label": "거시 경제", "icon": "🏛️"},
+            {"key": "news", "label": "뉴스·이벤트", "icon": "📰"},
+            {"key": "reference", "label": "기준 정보", "icon": "🔍"},
+            {"key": "broker", "label": "증권사", "icon": "🏦"},
+            {"key": "notification", "label": "알림", "icon": "🔔"},
+        ],
+        "disagreements": recent_disagreements[:20],
+        "notification_failures": notification_failures[-10:],
+        "kakao_status": {
+            "has_access_token": kakao_has_access,
+            "has_refresh_token": kakao_has_refresh,
+            "has_rest_api_key": bool(_secret_value(settings.kakao_rest_api_key)),
+            "has_client_secret": bool(_secret_value(settings.kakao_client_secret)),
+        },
+        "cache_stats": cache_stats,
+        "config": {
+            "primary_price_provider": settings.data_provider,
+            "fallback_price_provider": settings.data_fallback_provider,
+            "cross_validation_providers": settings.data.cross_validation_providers,
+            "cross_validation_mode": settings.data.cross_validation_mode,
+            "supplemental_providers": settings.data.supplemental_providers,
+            "supplemental_failure_policy": settings.data.supplemental_failure_policy,
+            "price_disagreement_policy": settings.data.price_disagreement_policy,
+        },
+    }
+
+
 def serve_dashboard(
     paths: RuntimePaths,
     *,
@@ -1005,6 +1297,9 @@ def _dashboard_handler(
                             == "true",
                         )
                     )
+                    return
+                if parsed.path == "/api/v1/api-monitoring":
+                    self._json(build_dashboard_api_monitoring(paths))
                     return
                 if parsed.path.startswith("/api/"):
                     self._json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)

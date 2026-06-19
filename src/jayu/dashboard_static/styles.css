@@ -1238,3 +1238,245 @@ tbody tr:last-child td {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* --- API Monitoring --- */
+
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+  padding: 14px;
+}
+
+.provider-monitor-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border-strong);
+  border-radius: 7px;
+  transition: border-left-color 0.2s, box-shadow 0.2s;
+}
+
+.provider-monitor-card:hover {
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.06);
+}
+
+.provider-monitor-card.pmc-success {
+  border-left-color: var(--success);
+}
+
+.provider-monitor-card.pmc-warning {
+  border-left-color: var(--warning);
+}
+
+.provider-monitor-card.pmc-failed {
+  border-left-color: var(--failed);
+}
+
+.provider-monitor-card.pmc-unused {
+  border-left-color: var(--neutral);
+  opacity: 0.72;
+}
+
+.provider-monitor-card.pmc-partial {
+  border-left-color: var(--data-error);
+}
+
+.pmc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pmc-header strong {
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.pmc-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pmc-category-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: #f0f3f7;
+  border: 1px solid #dce2ea;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #475467;
+  white-space: nowrap;
+}
+
+.pmc-url {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pmc-detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.policy-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  background: #f7f9fb;
+  border: 1px solid #e1e6eb;
+  border-radius: 4px;
+  font-size: 10px;
+  color: #475467;
+  white-space: nowrap;
+}
+
+.policy-tag strong {
+  font-size: 10px;
+  color: var(--text);
+}
+
+.pmc-credential {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pmc-credential.is-set {
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid #8bc9aa;
+}
+
+.pmc-credential.is-missing {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid #e4b95a;
+}
+
+.pmc-activity {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 8px;
+  background: #fafbfc;
+  border: 1px solid #e9edf2;
+  border-radius: 5px;
+}
+
+.pmc-activity-item {
+  display: grid;
+  gap: 2px;
+}
+
+.pmc-activity-item span {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.pmc-activity-item strong {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pmc-env-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pmc-env-tag {
+  display: inline-flex;
+  padding: 2px 6px;
+  background: #eef2f6;
+  border: 1px solid #d5dde7;
+  border-radius: 3px;
+  font-size: 9px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  color: #475467;
+}
+
+.category-separator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 4px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.category-separator::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #e5e9ee;
+}
+
+.cache-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.cache-stat-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  background: #fafbfc;
+  border: 1px solid #e1e6eb;
+  border-radius: 5px;
+}
+
+.cache-stat-card strong {
+  font-size: 12px;
+}
+
+.cache-stat-card span {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.config-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.config-summary-item {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  background: #fafbfc;
+  border: 1px solid #e1e6eb;
+  border-radius: 5px;
+}
+
+.config-summary-item span {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.config-summary-item strong {
+  font-size: 12px;
+  color: var(--text);
+}
