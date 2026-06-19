@@ -74,6 +74,7 @@ from .safety_verdict import write_safety_verdict
 from .signal_replay import write_signal_replay_artifact
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
 from .survivorship import audit_survivorship
+from .toss import TOSS_GET_ENDPOINTS, TossCredentialsError, TossInvestClient
 
 
 app = typer.Typer(no_args_is_help=True, help="Jayu stock research automation")
@@ -81,10 +82,12 @@ portfolio_app = typer.Typer(no_args_is_help=True, help="Portfolio maintenance an
 report_app = typer.Typer(no_args_is_help=True, help="Run and signal reports")
 experiments_app = typer.Typer(help="Experiment registry and comparisons")
 promotion_app = typer.Typer(no_args_is_help=True, help="Shadow-to-live promotion")
+toss_app = typer.Typer(no_args_is_help=True, help="Read-only Toss Securities Open API")
 app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(report_app, name="report")
 app.add_typer(experiments_app, name="experiments")
 app.add_typer(promotion_app, name="promotion")
+app.add_typer(toss_app, name="toss")
 
 
 @app.command()
@@ -110,6 +113,37 @@ def _load(config: Path | None) -> tuple[Settings, RuntimePaths]:
     paths = settings.runtime_paths(root)
     paths.ensure_runtime_dirs()
     return settings, paths
+
+
+def _secret_value(value: Any) -> str | None:
+    return value.get_secret_value() if value else None
+
+
+def _echo_json(payload: Any) -> None:
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+
+
+def _toss_client(config: Path | None) -> TossInvestClient:
+    settings, _ = _load(config)
+    api_key = _secret_value(settings.toss_api_key)
+    secret_key = _secret_value(settings.toss_secret_key)
+    if not api_key or not secret_key:
+        raise typer.BadParameter(
+            "Toss Open API requires TS_API_KEY and TS_SECRET_KEY in .env or environment"
+        )
+    return TossInvestClient(
+        api_key,
+        secret_key,
+        account=_secret_value(settings.toss_account),
+        policy=provider_policy(settings, "toss"),
+    )
+
+
+def _run_toss(config: Path | None, action: Any) -> None:
+    try:
+        _echo_json(action(_toss_client(config)))
+    except (TossCredentialsError, RuntimeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _data_service(
@@ -1315,6 +1349,200 @@ def promotion_status(
         settings.promotion,
     )
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@toss_app.command("endpoints")
+def toss_endpoints() -> None:
+    """List implemented Toss Open API GET endpoints."""
+    _echo_json(
+        [
+            {
+                "operation_id": endpoint.operation_id,
+                "method": "GET",
+                "path": endpoint.path,
+                "requires_account": endpoint.requires_account,
+            }
+            for endpoint in TOSS_GET_ENDPOINTS
+        ]
+    )
+
+
+@toss_app.command("orderbook")
+def toss_orderbook(
+    symbol: Annotated[str, typer.Option("--symbol")],
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.orderbook(symbol))
+
+
+@toss_app.command("prices")
+def toss_prices(
+    symbols: Annotated[str, typer.Option("--symbols", help="Comma-separated symbols")],
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.prices(symbols))
+
+
+@toss_app.command("trades")
+def toss_trades(
+    symbol: Annotated[str, typer.Option("--symbol")],
+    count: Annotated[int, typer.Option("--count", min=1, max=50)] = 50,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.trades(symbol, count=count))
+
+
+@toss_app.command("price-limits")
+def toss_price_limits(
+    symbol: Annotated[str, typer.Option("--symbol")],
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.price_limits(symbol))
+
+
+@toss_app.command("candles")
+def toss_candles(
+    symbol: Annotated[str, typer.Option("--symbol")],
+    interval: Annotated[str, typer.Option("--interval")] = "1d",
+    count: Annotated[int, typer.Option("--count", min=1, max=200)] = 100,
+    before: Annotated[str | None, typer.Option("--before")] = None,
+    adjusted: Annotated[bool, typer.Option("--adjusted/--raw")] = True,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(
+        config,
+        lambda client: client.candles(
+            symbol,
+            interval=cast("Any", interval),
+            count=count,
+            before=before,
+            adjusted=adjusted,
+        ),
+    )
+
+
+@toss_app.command("stocks")
+def toss_stocks(
+    symbols: Annotated[str, typer.Option("--symbols", help="Comma-separated symbols")],
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.stocks(symbols))
+
+
+@toss_app.command("stock-warnings")
+def toss_stock_warnings(
+    symbol: Annotated[str, typer.Option("--symbol")],
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.stock_warnings(symbol))
+
+
+@toss_app.command("exchange-rate")
+def toss_exchange_rate(
+    base_currency: Annotated[str, typer.Option("--base-currency")],
+    quote_currency: Annotated[str, typer.Option("--quote-currency")],
+    date_time: Annotated[str | None, typer.Option("--date-time")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(
+        config,
+        lambda client: client.exchange_rate(
+            base_currency=base_currency,
+            quote_currency=quote_currency,
+            date_time=date_time,
+        ),
+    )
+
+
+@toss_app.command("market-calendar")
+def toss_market_calendar(
+    region: Annotated[str, typer.Option("--region", help="KR or US")],
+    date: Annotated[str | None, typer.Option("--date")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    region_code = region.strip().upper()
+    if region_code == "KR":
+        _run_toss(config, lambda client: client.market_calendar_kr(date=date))
+    elif region_code == "US":
+        _run_toss(config, lambda client: client.market_calendar_us(date=date))
+    else:
+        raise typer.BadParameter("region must be KR or US")
+
+
+@toss_app.command("accounts")
+def toss_accounts(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.accounts())
+
+
+@toss_app.command("holdings")
+def toss_holdings(
+    account: Annotated[str | None, typer.Option("--account")] = None,
+    symbol: Annotated[str | None, typer.Option("--symbol")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.holdings(account=account, symbol=symbol))
+
+
+@toss_app.command("orders")
+def toss_orders(
+    status: Annotated[str, typer.Option("--status", help="OPEN or CLOSED")],
+    account: Annotated[str | None, typer.Option("--account")] = None,
+    symbol: Annotated[str | None, typer.Option("--symbol")] = None,
+    from_date: Annotated[str | None, typer.Option("--from")] = None,
+    to_date: Annotated[str | None, typer.Option("--to")] = None,
+    cursor: Annotated[str | None, typer.Option("--cursor")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=100)] = 20,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(
+        config,
+        lambda client: client.orders(
+            status=cast("Any", status.strip().upper()),
+            account=account,
+            symbol=symbol,
+            from_date=from_date,
+            to_date=to_date,
+            cursor=cursor,
+            limit=limit,
+        ),
+    )
+
+
+@toss_app.command("order")
+def toss_order(
+    order_id: Annotated[str, typer.Option("--order-id")],
+    account: Annotated[str | None, typer.Option("--account")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.order(order_id, account=account))
+
+
+@toss_app.command("buying-power")
+def toss_buying_power(
+    currency: Annotated[str, typer.Option("--currency")],
+    account: Annotated[str | None, typer.Option("--account")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.buying_power(currency=currency, account=account))
+
+
+@toss_app.command("sellable-quantity")
+def toss_sellable_quantity(
+    symbol: Annotated[str, typer.Option("--symbol")],
+    account: Annotated[str | None, typer.Option("--account")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.sellable_quantity(symbol, account=account))
+
+
+@toss_app.command("commissions")
+def toss_commissions(
+    account: Annotated[str | None, typer.Option("--account")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _run_toss(config, lambda client: client.commissions(account=account))
 
 
 if __name__ == "__main__":

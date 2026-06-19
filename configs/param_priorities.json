@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-14T06:42:01.115851",
+  "updated_at": "2026-06-20T06:19:29.727741",
   "description": "Wilson score 기반 상위 파라미터값. engine이 샘플링 시 우선 참조.",
   "top_values": {
     "rsi_lo": [

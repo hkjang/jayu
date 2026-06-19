@@ -1,0 +1,56 @@
+- generic [active] [ref=e1]:
+  - link "본문으로 건너뛰기" [ref=e2] [cursor=pointer]:
+    - /url: "#main"
+  - generic [ref=e3]:
+    - complementary "주요 화면" [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: J
+        - generic [ref=e7]:
+          - strong [ref=e8]: Jayu
+          - generic [ref=e9]: 운영 콘솔
+      - navigation [ref=e10]:
+        - button "01 개요" [ref=e11] [cursor=pointer]:
+          - generic [ref=e12]: "01"
+          - generic [ref=e13]: 개요
+        - button "02 데이터 품질" [ref=e14] [cursor=pointer]:
+          - generic [ref=e15]: "02"
+          - generic [ref=e16]: 데이터 품질
+        - button "03 리스크 게이트" [ref=e17] [cursor=pointer]:
+          - generic [ref=e18]: "03"
+          - generic [ref=e19]: 리스크 게이트
+        - button "04 신호" [ref=e20] [cursor=pointer]:
+          - generic [ref=e21]: "04"
+          - generic [ref=e22]: 신호
+        - button "05 Trader Lens" [ref=e23] [cursor=pointer]:
+          - generic [ref=e24]: "05"
+          - generic [ref=e25]: Trader Lens
+        - button "06 Shadow 승격" [ref=e26] [cursor=pointer]:
+          - generic [ref=e27]: "06"
+          - generic [ref=e28]: Shadow 승격
+        - button "07 설정" [ref=e29] [cursor=pointer]:
+          - generic [ref=e30]: "07"
+          - generic [ref=e31]: 설정
+        - button "08 Toss Account" [ref=e32] [cursor=pointer]:
+          - generic [ref=e33]: "08"
+          - generic [ref=e34]: Toss Account
+        - button "09 Toss Market" [ref=e35] [cursor=pointer]:
+          - generic [ref=e36]: "09"
+          - generic [ref=e37]: Toss Market
+      - generic [ref=e38]:
+        - text: 읽기 전용 콘솔
+        - strong [ref=e39]: 주문 기능 없음
+    - generic [ref=e40]:
+      - banner [ref=e41]:
+        - generic [ref=e42]:
+          - generic [ref=e43]: UNKNOWN
+          - generic [ref=e44]: 실행
+          - combobox "실행 선택" [ref=e45]
+        - generic [ref=e46]:
+          - generic [ref=e47]:
+            - generic [ref=e48]: 마지막 완료
+            - strong [ref=e49]: "-"
+          - generic [ref=e50]:
+            - generic [ref=e51]: Toss 계좌
+            - strong [ref=e52]: 미선택
+          - button "새로고침" [ref=e53] [cursor=pointer]
+      - main [ref=e54]

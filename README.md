@@ -21,6 +21,9 @@ $env:JAYU_FRED_API_KEY = "..."
 $env:JAYU_OPENFIGI_API_KEY = "..."
 $env:JAYU_ALPHA_VANTAGE_API_KEY = "..."
 $env:JAYU_FINNHUB_API_KEY = "..."
+$env:TS_API_KEY = "..."
+$env:TS_SECRET_KEY = "..."
+$env:TS_ACCOUNT = "..."
 $env:JAYU_KAKAO_ACCESS_TOKEN = "..."
 $env:JAYU_KAKAO_REFRESH_TOKEN = "..."
 $env:JAYU_KAKAO_REST_API_KEY = "..."
@@ -54,6 +57,27 @@ uv run jayu status --output state/operational_status.json --markdown-output stat
 uv run jayu status --fail-on-not-ready
 uv run jayu validate-config --mode shadow
 uv run jayu dashboard --host 127.0.0.1 --port 8765
+uv run jayu toss endpoints
+uv run jayu toss prices --symbols AAPL,MSFT
+```
+
+## Toss Open API read-only commands
+
+Toss Securities Open API support is read-only. Jayu implements the documented
+GET endpoints for market data, stock metadata, exchange rates, market calendar,
+accounts, holdings, order lookup, buying power, sellable quantity, and
+commissions. It does not add order submission, modification, cancellation, or
+execution controls.
+
+Credentials are read from environment variables or `.env`. Use `TS_API_KEY` and
+`TS_SECRET_KEY`; account-scoped reads also need `TS_ACCOUNT` or `--account`.
+
+```powershell
+uv run jayu toss endpoints
+uv run jayu toss accounts
+uv run jayu toss holdings --account <ACCOUNT_SEQ>
+uv run jayu toss orders --status OPEN --account <ACCOUNT_SEQ>
+uv run jayu toss candles --symbol AAPL --interval 1d --count 100
 ```
 
 ## Read-only operations dashboard
@@ -69,6 +93,32 @@ uv run jayu dashboard --host 127.0.0.1 --port 8765
 Open `http://127.0.0.1:8765`. The current implementation covers Overview,
 Data Quality, Signal, Risk Gate, Shadow Promotion, and Settings Validation.
 The complete screen and API design is documented in [UX_UI_SPEC.md](docs/UX_UI_SPEC.md).
+
+### Dashboard start and stop
+
+PowerShell start:
+
+```powershell
+$env:UV_CACHE_DIR = ".uv-cache"
+uv run jayu dashboard --host 127.0.0.1 --port 8765
+```
+
+Check which process owns the dashboard port:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8765 -State Listen |
+  Select-Object LocalAddress, LocalPort, OwningProcess
+```
+
+Stop the dashboard:
+
+```powershell
+$pids = Get-NetTCPConnection -LocalPort 8765 -State Listen |
+  Select-Object -ExpandProperty OwningProcess -Unique
+if ($pids) { Stop-Process -Id $pids -Force }
+```
+
+Restart means running the stop command first, then the start command again.
 
 ## 프로세스 종료 코드
 

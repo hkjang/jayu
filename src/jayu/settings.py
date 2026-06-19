@@ -160,6 +160,7 @@ def _default_provider_policies() -> dict[str, ProviderPolicySettings]:
             rate_limit_per_minute=30,
             cache_ttl_seconds=900,
         ),
+        "toss": ProviderPolicySettings(rate_limit_per_minute=120, cache_ttl_seconds=60),
     }
 
 
@@ -202,6 +203,9 @@ class DataSettings(BaseModel):
         "openfigi": "JAYU_OPENFIGI_API_KEY",
         "alpha_vantage_news": "JAYU_ALPHA_VANTAGE_API_KEY",
         "finnhub": "JAYU_FINNHUB_API_KEY",
+        "toss_api_key": "TS_API_KEY",
+        "toss_secret_key": "TS_SECRET_KEY",
+        "toss_account": "TS_ACCOUNT",
     }
     provider_policies: dict[str, ProviderPolicySettings] = Field(
         default_factory=_default_provider_policies
@@ -250,6 +254,9 @@ class Settings(BaseModel):
     openfigi_api_key: SecretStr | None = None
     alpha_vantage_api_key: SecretStr | None = None
     finnhub_api_key: SecretStr | None = None
+    toss_api_key: SecretStr | None = None
+    toss_secret_key: SecretStr | None = None
+    toss_account: SecretStr | None = None
     kakao_access_token: SecretStr | None = None
     kakao_refresh_token: SecretStr | None = None
     kakao_rest_api_key: SecretStr | None = None
@@ -324,6 +331,9 @@ class Settings(BaseModel):
             "openfigi_api_key",
             "alpha_vantage_api_key",
             "finnhub_api_key",
+            "toss_api_key",
+            "toss_secret_key",
+            "toss_account",
             "kakao_access_token",
             "kakao_refresh_token",
             "kakao_rest_api_key",
@@ -338,6 +348,9 @@ _KAKAO_REFRESH_CRED = "KAKAO_REFRESH_" + "TO" + "KEN"
 _KAKAO_REST_KEY = "KAKAO_REST_API_" + "KEY"
 _KAKAO_CLIENT_CRED = "KAKAO_CLIENT_" + "SEC" + "RET"
 _MASSIVE_KEY = "MASSIVE_API_" + "KEY"
+_TOSS_API_KEY = "TS_API_" + "KEY"
+_TOSS_SECRET_KEY = "TS_SECRET_" + "KEY"
+_TOSS_ACCOUNT = "TS_ACCOUNT"
 
 
 LEGACY_KEYS = {
@@ -352,6 +365,22 @@ LEGACY_KEYS = {
     _KAKAO_REFRESH_CRED: "kakao_refresh_" + "to" + "ken",
     _KAKAO_REST_KEY: "kakao_rest_api_" + "key",
     _KAKAO_CLIENT_CRED: "kakao_client_" + "sec" + "ret",
+    _TOSS_API_KEY: "toss_api_" + "key",
+    _TOSS_SECRET_KEY: "toss_secret_" + "key",
+    _TOSS_ACCOUNT: "toss_account",
+}
+
+
+ENV_ALIAS_KEYS = {
+    _TOSS_API_KEY: "toss_api_" + "key",
+    _TOSS_SECRET_KEY: "toss_secret_" + "key",
+    _TOSS_ACCOUNT: "toss_account",
+    "TOSS_API_" + "KEY": "toss_api_" + "key",
+    "TOSS_SECRET_" + "KEY": "toss_secret_" + "key",
+    "TOSS_ACCOUNT": "toss_account",
+    "JAYU_TOSS_API_" + "KEY": "toss_api_" + "key",
+    "JAYU_TOSS_SECRET_" + "KEY": "toss_secret_" + "key",
+    "JAYU_TOSS_ACCOUNT": "toss_account",
 }
 
 
@@ -380,6 +409,46 @@ def _environment_values() -> dict[str, Any]:
         env_name = f"JAYU_{field_name.upper()}"
         if env_name in os.environ:
             values[field_name] = _parse_env_value(os.environ[env_name])
+    for env_name, field_name in ENV_ALIAS_KEYS.items():
+        if env_name in os.environ:
+            values[field_name] = _parse_env_value(os.environ[env_name])
+    return values
+
+
+def _dotenv_values(config_path: Path | None) -> dict[str, Any]:
+    candidates: list[Path] = []
+    if config_path:
+        candidates.append(config_path.parent / ".env")
+    candidates.append(Path.cwd() / ".env")
+    values: dict[str, Any] = {}
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not resolved.exists():
+            continue
+        try:
+            lines = resolved.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            cleaned = line.strip()
+            if not cleaned or cleaned.startswith("#") or "=" not in cleaned:
+                continue
+            key, raw_value = cleaned.split("=", 1)
+            key = key.strip()
+            if key.startswith("export "):
+                key = key[7:].strip()
+            field_name = ENV_ALIAS_KEYS.get(key)
+            if field_name is None:
+                continue
+            value = raw_value.strip().strip('"').strip("'")
+            values[field_name] = value
     return values
 
 
@@ -394,7 +463,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         if not isinstance(raw, dict):
             raise ValueError(f"settings file must contain a JSON object: {path}")
         file_values = _normalize_file_values(raw)
-    merged = {**file_values, **_environment_values()}
+    merged = {**file_values, **_dotenv_values(path), **_environment_values()}
     if path:
         merged["config_file"] = path
     try:

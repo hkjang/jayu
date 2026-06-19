@@ -39,7 +39,10 @@
       "fred": "JAYU_FRED_API_KEY",
       "openfigi": "JAYU_OPENFIGI_API_KEY",
       "alpha_vantage_news": "JAYU_ALPHA_VANTAGE_API_KEY",
-      "finnhub": "JAYU_FINNHUB_API_KEY"
+      "finnhub": "JAYU_FINNHUB_API_KEY",
+      "toss_api_key": "TS_API_KEY",
+      "toss_secret_key": "TS_SECRET_KEY",
+      "toss_account": "TS_ACCOUNT"
     },
     "provider_policies": {
       "yahoo": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 60, "cache_ttl_seconds": 14400},
@@ -49,7 +52,8 @@
       "fred": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 120, "cache_ttl_seconds": 86400},
       "openfigi": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 25, "cache_ttl_seconds": 604800},
       "alpha_vantage_news": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 5, "cache_ttl_seconds": 900},
-      "finnhub_events": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 30, "cache_ttl_seconds": 900}
+      "finnhub_events": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 30, "cache_ttl_seconds": 900},
+      "toss": {"timeout_seconds": 20, "retries": 3, "rate_limit_per_minute": 120, "cache_ttl_seconds": 60}
     }
   },
   "portfolio_mapping_file": "configs/portfolio_mapping.json",

@@ -35,6 +35,9 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `openfigi_api_key` | `string | null` | `null` | `{}` |
 | `alpha_vantage_api_key` | `string | null` | `null` | `{}` |
 | `finnhub_api_key` | `string | null` | `null` | `{}` |
+| `toss_api_key` | `string | null` | `null` | `{}` |
+| `toss_secret_key` | `string | null` | `null` | `{}` |
+| `toss_account` | `string | null` | `null` | `{}` |
 | `kakao_access_token` | `string | null` | `null` | `{}` |
 | `kakao_refresh_token` | `string | null` | `null` | `{}` |
 | `kakao_rest_api_key` | `string | null` | `null` | `{}` |
@@ -64,7 +67,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `data.macro_series` | `array` | `["FEDFUNDS", "DGS10", "DGS2", "CPIAUCSL", "UNRATE", "VIXCLS"]` | `{}` |
 | `data.macro_gate_min_return_retention` | `number` | `0.9` | `{"maximum": 2, "minimum": 0}` |
 | `data.macro_gate_min_positive_fold_ratio` | `number` | `0.5` | `{"maximum": 1, "minimum": 0}` |
-| `data.api_key_env_names` | `object` | `{"alpha_vantage_news": "JAYU_ALPHA_VANTAGE_API_KEY", "finnhub": "JAYU_FINNHUB_API_KEY", "fred": "JAYU_FRED_API_KEY", "massive": "JAYU_MASSIVE_API_KEY", "openfigi": "JAYU_OPENFIGI_API_KEY", "sec_edgar_user_agent": "JAYU_SEC_USER_AGENT", "tiingo": "JAYU_TIINGO_API_KEY"}` | `{}` |
+| `data.api_key_env_names` | `object` | `{"alpha_vantage_news": "JAYU_ALPHA_VANTAGE_API_KEY", "finnhub": "JAYU_FINNHUB_API_KEY", "fred": "JAYU_FRED_API_KEY", "massive": "JAYU_MASSIVE_API_KEY", "openfigi": "JAYU_OPENFIGI_API_KEY", "sec_edgar_user_agent": "JAYU_SEC_USER_AGENT", "tiingo": "JAYU_TIINGO_API_KEY", "toss_account": "TS_ACCOUNT", "toss_api_key": "TS_API_KEY", "toss_secret_key": "TS_SECRET_KEY"}` | `{}` |
 | `data.provider_policies` | `object` | `null` | `{}` |
 | `research` | `ResearchSettings` | `null` | `{}` |
 | `research.train_months` | `integer` | `18` | `{"maximum": 120, "minimum": 6}` |

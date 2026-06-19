@@ -1,0 +1,157 @@
+- generic [ref=e1]:
+  - link "본문으로 건너뛰기" [ref=e2] [cursor=pointer]:
+    - /url: "#main"
+  - generic [ref=e3]:
+    - complementary "주요 화면" [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: J
+        - generic [ref=e7]:
+          - strong [ref=e8]: Jayu
+          - generic [ref=e9]: 운영 콘솔
+      - navigation [ref=e10]:
+        - button "01 개요" [ref=e11] [cursor=pointer]:
+          - generic [ref=e12]: "01"
+          - generic [ref=e13]: 개요
+        - button "02 데이터 품질" [ref=e14] [cursor=pointer]:
+          - generic [ref=e15]: "02"
+          - generic [ref=e16]: 데이터 품질
+        - button "03 리스크 게이트" [ref=e17] [cursor=pointer]:
+          - generic [ref=e18]: "03"
+          - generic [ref=e19]: 리스크 게이트
+        - button "04 신호" [ref=e20] [cursor=pointer]:
+          - generic [ref=e21]: "04"
+          - generic [ref=e22]: 신호
+        - button "05 Trader Lens" [ref=e23] [cursor=pointer]:
+          - generic [ref=e24]: "05"
+          - generic [ref=e25]: Trader Lens
+        - button "06 Shadow 승격" [ref=e26] [cursor=pointer]:
+          - generic [ref=e27]: "06"
+          - generic [ref=e28]: Shadow 승격
+        - button "07 설정" [ref=e29] [cursor=pointer]:
+          - generic [ref=e30]: "07"
+          - generic [ref=e31]: 설정
+        - button "08 Toss Account" [active] [ref=e32] [cursor=pointer]:
+          - generic [ref=e33]: "08"
+          - generic [ref=e34]: Toss Account
+        - button "09 Toss Market" [ref=e35] [cursor=pointer]:
+          - generic [ref=e36]: "09"
+          - generic [ref=e37]: Toss Market
+      - generic [ref=e38]:
+        - text: 읽기 전용 콘솔
+        - strong [ref=e39]: 주문 기능 없음
+    - generic [ref=e40]:
+      - banner [ref=e41]:
+        - generic [ref=e42]:
+          - generic [ref=e43]: RESEARCH
+          - generic [ref=e44]: 실행
+          - combobox "실행 선택" [ref=e45]:
+            - option "20260620_071001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed" [selected]
+            - option "20260620_070501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_070002_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_065501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_065001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_064502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_064001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_063501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_063002_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_062501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_062131_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_062034_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260620_061938_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_231001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_230501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_230001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_225501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_225001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_224501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_224002_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_223502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_223001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_222501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_222001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_221501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_221001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_220501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_220001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_215502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_215001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_214501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_214001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_213501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_213001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_212501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_212001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_211501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_211001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_210501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_210001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_205501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_205001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_204502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_204001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_203502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_203003_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_200501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_200001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_195503_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_195001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_194502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_194001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_193502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_193007_simulate_SOXL-TQQQ_seed42 · RESEARCH · running"
+            - option "20260619_192501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_192001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_191501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_191001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_190502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_190002_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_185503_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_185001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_184501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_184002_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_183502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_183003_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_182503_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_182004_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_181501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_181001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_180501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_180001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_175501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_175001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_174501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_174001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260619_173501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_211501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_211001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_210501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_210001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_205501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_205001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_204501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_204001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_203503_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_203001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_202501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_202001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_201501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_201001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_200501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_200001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_195501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_195001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_194502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260618_194004_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260617_224501_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260617_224001_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+            - option "20260617_223502_simulate_SOXL-TQQQ_seed42 · RESEARCH · failed"
+        - generic [ref=e46]:
+          - generic [ref=e47]:
+            - generic [ref=e48]: 마지막 완료
+            - strong [ref=e49]: 2026. 06. 20. 오전 07:10
+          - generic [ref=e50]:
+            - generic [ref=e51]: Toss 계좌
+            - strong [ref=e52]: 선택됨 1
+          - button "새로고침" [ref=e53] [cursor=pointer]
+      - main [ref=e54]:
+        - generic [ref=e55]: 개요 화면을 갱신했습니다.

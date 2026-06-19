@@ -1,0 +1,25 @@
+{
+  "tickers": ["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"],
+  "initial_capital": 10000000,
+  "sim_runs": 500,
+  "transaction_fee": 0.0015,
+  "slippage": 0.0005,
+  "random_seed": 42,
+  "mode": "research",
+  "data_provider": "yahoo",
+  "data_fallback_provider": "none",
+  "data": {
+    "cross_validation_providers": [],
+    "cross_validation_mode": "warn",
+    "minimum_valid_price_sources": 1,
+    "price_disagreement_policy": "warn",
+    "require_verified_price_for_eligibility": false
+  },
+  "universe": {
+    "as_of": "2026-06-15",
+    "source": "manual_current_universe",
+    "includes_delisted": false,
+    "policy": "strict",
+    "exception_reason": "Current universe only; simulation use."
+  }
+}
