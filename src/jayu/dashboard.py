@@ -4162,7 +4162,8 @@ def build_dashboard_analysis(
         "stock": stock_data,
         "macro": macro_data,
         "news": news_data,
-        "toss": toss_portfolio
+        "toss": toss_portfolio,
+        "tradingview_details": build_tradingview_symbol_details(ticker),
     }
 
 
@@ -4264,6 +4265,562 @@ def _compute_atr(
     return results
 
 
+TRADINGVIEW_TECHNICAL_FIELDS = (
+    "Recommend.Other",
+    "Recommend.All",
+    "Recommend.MA",
+    "RSI",
+    "RSI[1]",
+    "Stoch.K",
+    "Stoch.D",
+    "Stoch.K[1]",
+    "Stoch.D[1]",
+    "CCI20",
+    "CCI20[1]",
+    "ADX",
+    "ADX+DI",
+    "ADX-DI",
+    "ADX+DI[1]",
+    "ADX-DI[1]",
+    "AO",
+    "AO[1]",
+    "AO[2]",
+    "Mom",
+    "Mom[1]",
+    "MACD.macd",
+    "MACD.signal",
+    "Rec.Stoch.RSI",
+    "Stoch.RSI.K",
+    "Rec.WR",
+    "W.R",
+    "Rec.BBPower",
+    "BBPower",
+    "Rec.UO",
+    "UO",
+    "EMA10",
+    "SMA10",
+    "EMA20",
+    "SMA20",
+    "EMA30",
+    "SMA30",
+    "EMA50",
+    "SMA50",
+    "EMA100",
+    "SMA100",
+    "EMA200",
+    "SMA200",
+    "Rec.Ichimoku",
+    "Ichimoku.BLine",
+    "Rec.VWMA",
+    "VWMA",
+    "Rec.HullMA9",
+    "HullMA9",
+    "Pivot.M.Classic.R3",
+    "Pivot.M.Classic.R2",
+    "Pivot.M.Classic.R1",
+    "Pivot.M.Classic.Middle",
+    "Pivot.M.Classic.S1",
+    "Pivot.M.Classic.S2",
+    "Pivot.M.Classic.S3",
+    "Pivot.M.Fibonacci.R3",
+    "Pivot.M.Fibonacci.R2",
+    "Pivot.M.Fibonacci.R1",
+    "Pivot.M.Fibonacci.Middle",
+    "Pivot.M.Fibonacci.S1",
+    "Pivot.M.Fibonacci.S2",
+    "Pivot.M.Fibonacci.S3",
+    "Pivot.M.Camarilla.R3",
+    "Pivot.M.Camarilla.R2",
+    "Pivot.M.Camarilla.R1",
+    "Pivot.M.Camarilla.Middle",
+    "Pivot.M.Camarilla.S1",
+    "Pivot.M.Camarilla.S2",
+    "Pivot.M.Camarilla.S3",
+    "Pivot.M.Woodie.R3",
+    "Pivot.M.Woodie.R2",
+    "Pivot.M.Woodie.R1",
+    "Pivot.M.Woodie.Middle",
+    "Pivot.M.Woodie.S1",
+    "Pivot.M.Woodie.S2",
+    "Pivot.M.Woodie.S3",
+    "Pivot.M.Demark.R1",
+    "Pivot.M.Demark.Middle",
+    "Pivot.M.Demark.S1",
+    "close",
+)
+
+TRADINGVIEW_TIMEFRAMES = (
+    ("1D", "1일", ""),
+    ("240", "4시간", "240"),
+    ("120", "2시간", "120"),
+    ("60", "1시간", "60"),
+    ("1", "1분", "1"),
+)
+
+TRADINGVIEW_DETAIL_FIELDS = (
+    "price_52_week_high",
+    "price_52_week_low",
+    "sector",
+    "country",
+    "market",
+    "Low.1M",
+    "High.1M",
+    "Perf.W",
+    "Perf.1M",
+    "Perf.3M",
+    "Perf.6M",
+    "Perf.Y",
+    "Perf.YTD",
+    "Recommend.All",
+    "average_volume_10d_calc",
+    "average_volume_30d_calc",
+    "nav_discount_premium",
+    "open_interest",
+    "country_code_fund",
+    "iv",
+    "underlying_symbol",
+    "delta",
+    "gamma",
+    "rho",
+    "theta",
+    "vega",
+    "theoPrice",
+)
+
+
+def _tradingview_symbol(ticker: str) -> str:
+    normalized = ticker.strip().upper()
+    if ":" in normalized:
+        return normalized
+    if normalized.endswith((".KS", ".KQ")):
+        return f"KRX:{normalized.rsplit('.', 1)[0]}"
+    exchange_map = {
+        "AAPL": "NASDAQ:AAPL",
+        "GOOGL": "NASDAQ:GOOGL",
+        "IONQ": "NYSE:IONQ",
+        "MSFT": "NASDAQ:MSFT",
+        "NVDA": "NASDAQ:NVDA",
+        "NVDL": "NASDAQ:NVDL",
+        "QBTS": "NYSE:QBTS",
+        "QQQ": "NASDAQ:QQQ",
+        "SOXL": "AMEX:SOXL",
+        "SPY": "AMEX:SPY",
+        "TQQQ": "NASDAQ:TQQQ",
+        "TSLA": "NASDAQ:TSLA",
+    }
+    return exchange_map.get(normalized, f"NASDAQ:{normalized}")
+
+
+def _tradingview_field_name(field: str, interval: str) -> str:
+    return f"{field}|{interval}" if interval else field
+
+
+def _tradingview_headers() -> dict[str, str]:
+    return {
+        "Accept": "application/json,text/plain,*/*",
+        "Referer": "https://www.tradingview.com/",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0 Safari/537.36"
+        ),
+    }
+
+
+def _rounded_float(value: Any, digits: int = 4) -> float | None:
+    try:
+        return round(float(value), digits)
+    except (TypeError, ValueError):
+        return None
+
+
+def _technical_recommendation(score: float | None) -> dict[str, Any]:
+    if score is None:
+        return {
+            "action": "hold",
+            "signal": "unknown",
+            "label": "데이터 없음",
+            "tone": "neutral",
+        }
+    if score >= 0.5:
+        return {"action": "buy", "signal": "strong_buy", "label": "강한 매수", "tone": "buy"}
+    if score >= 0.1:
+        return {"action": "buy", "signal": "buy", "label": "매수", "tone": "buy"}
+    if score <= -0.5:
+        return {
+            "action": "sell",
+            "signal": "strong_sell",
+            "label": "강한 매도",
+            "tone": "sell",
+        }
+    if score <= -0.1:
+        return {"action": "sell", "signal": "sell", "label": "매도", "tone": "sell"}
+    return {"action": "hold", "signal": "neutral", "label": "중립", "tone": "neutral"}
+
+
+def _pivot_levels(row: dict[str, Any]) -> dict[str, dict[str, float | None]]:
+    def item(prefix: str, keys: tuple[str, ...]) -> dict[str, float | None]:
+        return {key.lower(): row.get(f"Pivot.M.{prefix}.{key}") for key in keys}
+
+    return {
+        "classic": item("Classic", ("R3", "R2", "R1", "Middle", "S1", "S2", "S3")),
+        "fibonacci": item("Fibonacci", ("R3", "R2", "R1", "Middle", "S1", "S2", "S3")),
+        "camarilla": item("Camarilla", ("R3", "R2", "R1", "Middle", "S1", "S2", "S3")),
+        "woodie": item("Woodie", ("R3", "R2", "R1", "Middle", "S1", "S2", "S3")),
+        "demark": item("Demark", ("R1", "Middle", "S1")),
+    }
+
+
+def _nearest_pivot_levels(
+    close: float | None,
+    pivots: dict[str, dict[str, float | None]],
+) -> dict[str, Any]:
+    if close is None:
+        return {"support": None, "resistance": None}
+
+    levels: list[dict[str, Any]] = []
+    for family, values in pivots.items():
+        for name, value in values.items():
+            if value is None:
+                continue
+            levels.append(
+                {
+                    "family": family,
+                    "level": name,
+                    "value": value,
+                    "distance_pct": round(((value - close) / close) * 100, 4),
+                }
+            )
+
+    supports = [level for level in levels if level["value"] <= close]
+    resistances = [level for level in levels if level["value"] >= close]
+    support = max(supports, key=lambda item: item["value"], default=None)
+    resistance = min(resistances, key=lambda item: item["value"], default=None)
+    return {"support": support, "resistance": resistance}
+
+
+def _technical_rationale(row: dict[str, Any]) -> list[dict[str, str]]:
+    notes: list[dict[str, str]] = []
+    rsi = row.get("RSI")
+    rsi_prev = row.get("RSI[1]")
+    stoch_k = row.get("Stoch.K")
+    stoch_d = row.get("Stoch.D")
+    adx = row.get("ADX")
+    plus_di = row.get("ADX+DI")
+    minus_di = row.get("ADX-DI")
+    macd = row.get("MACD.macd")
+    macd_signal = row.get("MACD.signal")
+    mom = row.get("Mom")
+    close = row.get("close")
+
+    if rsi is not None:
+        if rsi <= 30:
+            notes.append({"tone": "sell", "text": f"RSI {rsi:.1f}: 과매도권"})
+        elif rsi <= 40:
+            trend = (
+                " 하락 중"
+                if rsi_prev is not None and rsi < rsi_prev
+                else ""
+            )
+            notes.append({"tone": "sell", "text": f"RSI {rsi:.1f}: 약세 구간{trend}"})
+        elif rsi >= 70:
+            notes.append({"tone": "buy", "text": f"RSI {rsi:.1f}: 강한 과열/추세"})
+
+    if stoch_k is not None and stoch_d is not None:
+        if stoch_k < 20 and stoch_k < stoch_d:
+            notes.append(
+                {
+                    "tone": "sell",
+                    "text": f"Stoch {stoch_k:.1f}/{stoch_d:.1f}: 단기 매도 압력",
+                }
+            )
+        elif stoch_k > 80 and stoch_k > stoch_d:
+            notes.append(
+                {
+                    "tone": "buy",
+                    "text": f"Stoch {stoch_k:.1f}/{stoch_d:.1f}: 단기 강세",
+                }
+            )
+
+    if adx is not None and plus_di is not None and minus_di is not None:
+        if adx >= 25 and minus_di > plus_di:
+            notes.append(
+                {
+                    "tone": "sell",
+                    "text": f"ADX {adx:.1f}: 하락 추세 우세(-DI {minus_di:.1f} > +DI {plus_di:.1f})",
+                }
+            )
+        elif adx >= 25 and plus_di > minus_di:
+            notes.append(
+                {
+                    "tone": "buy",
+                    "text": f"ADX {adx:.1f}: 상승 추세 우세(+DI {plus_di:.1f} > -DI {minus_di:.1f})",
+                }
+            )
+
+    if macd is not None and macd_signal is not None:
+        if macd < macd_signal:
+            notes.append(
+                {
+                    "tone": "sell",
+                    "text": f"MACD {macd:.2f} < Signal {macd_signal:.2f}",
+                }
+            )
+        elif macd > macd_signal:
+            notes.append(
+                {
+                    "tone": "buy",
+                    "text": f"MACD {macd:.2f} > Signal {macd_signal:.2f}",
+                }
+            )
+
+    if mom is not None:
+        if mom < 0:
+            notes.append({"tone": "sell", "text": f"Momentum {mom:.2f}: 음수"})
+        elif mom > 0:
+            notes.append({"tone": "buy", "text": f"Momentum {mom:.2f}: 양수"})
+
+    if close is not None:
+        watched_mas = {
+            "EMA20": row.get("EMA20"),
+            "EMA50": row.get("EMA50"),
+            "EMA200": row.get("EMA200"),
+        }
+        below = [name for name, value in watched_mas.items() if value is not None and close < value]
+        above = [name for name, value in watched_mas.items() if value is not None and close > value]
+        if below:
+            notes.append({"tone": "sell", "text": f"종가가 {', '.join(below)} 아래"})
+        elif above:
+            notes.append({"tone": "buy", "text": f"종가가 {', '.join(above)} 위"})
+
+    return notes[:6]
+
+
+def build_tradingview_technical_summary(ticker: str = "SOXL") -> dict[str, Any]:
+    """Return TradingView scanner technical recommendations across key timeframes."""
+    import requests
+
+    symbol = _tradingview_symbol(ticker)
+    rows: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    for timeframe_id, label, interval in TRADINGVIEW_TIMEFRAMES:
+        fields = [
+            _tradingview_field_name(field, interval)
+            for field in TRADINGVIEW_TECHNICAL_FIELDS
+        ]
+        try:
+            response = requests.get(
+                "https://scanner.tradingview.com/symbol",
+                params={
+                    "symbol": symbol,
+                    "fields": ",".join(fields),
+                    "no_404": "true",
+                    "label-product": "popup-technicals",
+                },
+                headers=_tradingview_headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+            def value(field: str, digits: int = 4) -> float | None:
+                return _rounded_float(
+                    payload.get(_tradingview_field_name(field, interval)),
+                    digits=digits,
+                )
+
+            raw_values = {field: value(field) for field in TRADINGVIEW_TECHNICAL_FIELDS}
+            raw_values["close"] = value("close", digits=2)
+            pivots = _pivot_levels(raw_values)
+            nearest_pivots = _nearest_pivot_levels(raw_values.get("close"), pivots)
+            score = value("Recommend.All")
+            recommendation = _technical_recommendation(score)
+            rows.append(
+                {
+                    "timeframe": timeframe_id,
+                    "label": label,
+                    "score": score,
+                    "recommend_all": score,
+                    "recommend_ma": value("Recommend.MA"),
+                    "recommend_other": value("Recommend.Other"),
+                    "recommendation": recommendation,
+                    "close": value("close", digits=2),
+                    "rsi": value("RSI", digits=2),
+                    "macd": value("MACD.macd", digits=4),
+                    "macd_signal": value("MACD.signal", digits=4),
+                    "ema20": value("EMA20", digits=2),
+                    "sma20": value("SMA20", digits=2),
+                    "ema50": value("EMA50", digits=2),
+                    "ema200": value("EMA200", digits=2),
+                    "oscillators": {
+                        "rsi": value("RSI", digits=2),
+                        "rsi_prev": value("RSI[1]", digits=2),
+                        "stoch_k": value("Stoch.K", digits=2),
+                        "stoch_d": value("Stoch.D", digits=2),
+                        "stoch_k_prev": value("Stoch.K[1]", digits=2),
+                        "stoch_d_prev": value("Stoch.D[1]", digits=2),
+                        "stoch_rsi_k": value("Stoch.RSI.K", digits=2),
+                        "cci20": value("CCI20", digits=2),
+                        "cci20_prev": value("CCI20[1]", digits=2),
+                        "adx": value("ADX", digits=2),
+                        "adx_plus_di": value("ADX+DI", digits=2),
+                        "adx_minus_di": value("ADX-DI", digits=2),
+                        "ao": value("AO", digits=4),
+                        "ao_prev": value("AO[1]", digits=4),
+                        "ao_prev2": value("AO[2]", digits=4),
+                        "mom": value("Mom", digits=4),
+                        "mom_prev": value("Mom[1]", digits=4),
+                        "macd": value("MACD.macd", digits=4),
+                        "macd_signal": value("MACD.signal", digits=4),
+                        "williams_r": value("W.R", digits=2),
+                        "bbpower": value("BBPower", digits=4),
+                        "ultimate_osc": value("UO", digits=2),
+                    },
+                    "moving_averages": {
+                        "ema10": value("EMA10", digits=2),
+                        "sma10": value("SMA10", digits=2),
+                        "ema20": value("EMA20", digits=2),
+                        "sma20": value("SMA20", digits=2),
+                        "ema30": value("EMA30", digits=2),
+                        "sma30": value("SMA30", digits=2),
+                        "ema50": value("EMA50", digits=2),
+                        "sma50": value("SMA50", digits=2),
+                        "ema100": value("EMA100", digits=2),
+                        "sma100": value("SMA100", digits=2),
+                        "ema200": value("EMA200", digits=2),
+                        "sma200": value("SMA200", digits=2),
+                        "vwma": value("VWMA", digits=2),
+                        "hullma9": value("HullMA9", digits=2),
+                        "ichimoku_bline": value("Ichimoku.BLine", digits=2),
+                    },
+                    "recommendations": {
+                        "stoch_rsi": value("Rec.Stoch.RSI", digits=2),
+                        "williams_r": value("Rec.WR", digits=2),
+                        "bbpower": value("Rec.BBPower", digits=2),
+                        "ultimate_osc": value("Rec.UO", digits=2),
+                        "ichimoku": value("Rec.Ichimoku", digits=2),
+                        "vwma": value("Rec.VWMA", digits=2),
+                        "hullma9": value("Rec.HullMA9", digits=2),
+                    },
+                    "pivots": pivots,
+                    "nearest_pivots": nearest_pivots,
+                    "rationale": _technical_rationale(raw_values),
+                }
+            )
+        except Exception as exc:
+            errors.append({"timeframe": timeframe_id, "label": label, "error": str(exc)})
+
+    if not rows:
+        first_error = errors[0]["error"] if errors else "TradingView scanner returned no data"
+        return {
+            "status": "unavailable",
+            "symbol": symbol,
+            "error": first_error,
+            "timeframes": rows,
+            "errors": errors,
+        }
+
+    valid_scores = [row["score"] for row in rows if row["score"] is not None]
+    consensus_score = (
+        round(sum(valid_scores) / len(valid_scores), 4) if valid_scores else None
+    )
+    consensus = _technical_recommendation(consensus_score)
+    strong_count = sum(
+        1
+        for row in rows
+        if row["recommendation"]["signal"] in {"strong_buy", "strong_sell"}
+    )
+
+    return {
+        "status": "partial" if errors else "ok",
+        "source": "TradingView scanner",
+        "symbol": symbol,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "consensus_score": consensus_score,
+        "consensus": consensus,
+        "confidence": round(min(1.0, abs(consensus_score or 0.0) * 2), 4),
+        "strong_signal_count": strong_count,
+        "timeframes": rows,
+        "errors": errors,
+    }
+
+
+def build_tradingview_symbol_details(ticker: str = "SOXL") -> dict[str, Any]:
+    """Return TradingView right-details scanner fields normalized for dashboard use."""
+    import requests
+
+    symbol = _tradingview_symbol(ticker)
+    try:
+        response = requests.get(
+            "https://scanner.tradingview.com/symbol",
+            params={
+                "symbol": symbol,
+                "fields": ",".join(TRADINGVIEW_DETAIL_FIELDS),
+                "no_404": "true",
+                "label-product": "right-details",
+            },
+            headers=_tradingview_headers(),
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "symbol": symbol,
+            "error": str(exc),
+        }
+
+    recommend_score = _rounded_float(payload.get("Recommend.All"))
+    return {
+        "status": "ok",
+        "source": "TradingView scanner",
+        "symbol": symbol,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "profile": {
+            "sector": payload.get("sector"),
+            "country": payload.get("country"),
+            "country_code_fund": payload.get("country_code_fund"),
+            "market": payload.get("market"),
+            "underlying_symbol": payload.get("underlying_symbol"),
+        },
+        "quote": {
+            "price_52_week_high": _rounded_float(payload.get("price_52_week_high"), 4),
+            "price_52_week_low": _rounded_float(payload.get("price_52_week_low"), 4),
+            "high_1m": _rounded_float(payload.get("High.1M"), 4),
+            "low_1m": _rounded_float(payload.get("Low.1M"), 4),
+            "recommend_all": recommend_score,
+            "recommendation": _technical_recommendation(recommend_score),
+        },
+        "performance": {
+            "week": _rounded_float(payload.get("Perf.W"), 4),
+            "one_month": _rounded_float(payload.get("Perf.1M"), 4),
+            "three_month": _rounded_float(payload.get("Perf.3M"), 4),
+            "six_month": _rounded_float(payload.get("Perf.6M"), 4),
+            "year_to_date": _rounded_float(payload.get("Perf.YTD"), 4),
+            "one_year": _rounded_float(payload.get("Perf.Y"), 4),
+        },
+        "volume": {
+            "average_10d": _rounded_float(payload.get("average_volume_10d_calc"), 0),
+            "average_30d": _rounded_float(payload.get("average_volume_30d_calc"), 0),
+        },
+        "fund": {
+            "nav_discount_premium": _rounded_float(payload.get("nav_discount_premium"), 4),
+        },
+        "derivatives": {
+            "open_interest": _rounded_float(payload.get("open_interest"), 0),
+            "iv": _rounded_float(payload.get("iv"), 4),
+            "delta": _rounded_float(payload.get("delta"), 4),
+            "gamma": _rounded_float(payload.get("gamma"), 4),
+            "rho": _rounded_float(payload.get("rho"), 4),
+            "theta": _rounded_float(payload.get("theta"), 4),
+            "vega": _rounded_float(payload.get("vega"), 4),
+            "theo_price": _rounded_float(payload.get("theoPrice"), 4),
+        },
+    }
+
+
 def build_analysis_technical(
     ticker: str = "SOXL",
     period: str = "1y",
@@ -4357,6 +4914,8 @@ def build_analysis_technical(
         return {
             "ticker": ticker,
             "period": period,
+            "tradingview": build_tradingview_technical_summary(ticker),
+            "tradingview_details": build_tradingview_symbol_details(ticker),
             "latest_price": round(latest_price, 2),
             "change_pct": round(change_pct, 2),
             "latest_rsi": rsi14[latest],
@@ -4666,7 +5225,7 @@ def build_analysis_portfolio_stats(paths: RuntimePaths, run_id: str | None = Non
 def build_analysis_economic_calendar() -> dict[str, Any]:
     """Return recent and upcoming major economic release dates."""
     import requests
-    from datetime import date, timedelta, datetime
+    from datetime import date, timedelta
 
     CALENDAR_SERIES = {
         "FEDFUNDS": {"name": "FOMC 기준금리 결정", "icon": "🏛️", "frequency": "월별"},
@@ -4688,7 +5247,11 @@ def build_analysis_economic_calendar() -> dict[str, Any]:
             url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
             res = requests.get(url, timeout=10)
             res.raise_for_status()
-            lines = [l for l in res.text.strip().splitlines() if l and not l.startswith("observation_date")]
+            lines = [
+                line
+                for line in res.text.strip().splitlines()
+                if line and not line.startswith("observation_date")
+            ]
             if not lines:
                 continue
             # Last 3 actual releases
@@ -4700,7 +5263,7 @@ def build_analysis_economic_calendar() -> dict[str, Any]:
                     if val_str == ".":
                         continue
                     try:
-                        d_obj = date.fromisoformat(d_str)
+                        date.fromisoformat(d_str)
                         last_releases.append({"date": d_str, "value": float(val_str)})
                     except Exception:
                         continue

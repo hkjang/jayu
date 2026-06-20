@@ -1,4 +1,6 @@
 import json
+import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Thread
@@ -697,6 +699,9 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "renderSituationTags" in content
     assert "Category split" in content
     assert "Sector exposure" in content
+    assert "TradingView 상세 스냅샷" in content
+    assert "초단기 상세 진단" in content
+    assert "NAV 프리미엄" in content
     assert "renderTraderLens" in content
     assert "data-toss-account" in content
     assert "주문 실행" not in content
@@ -704,6 +709,22 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "No run-local signals found" not in content
     assert "Promotion eligible" not in content
     assert "Settings Validation" not in content
+
+
+def test_dashboard_static_app_js_parses_when_node_available():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+
+    app_js = dashboard_static_dir() / "app.js"
+    completed = subprocess.run(
+        [node, "--check", str(app_js)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_dashboard_http_server_serves_static_page_and_api(tmp_path: Path):
@@ -863,7 +884,6 @@ def test_build_dashboard_analysis_structure(tmp_path, monkeypatch):
 
     # Mock yfinance.download to return a simple DataFrame
     import pandas as pd
-    import numpy as np
 
     fake_dates = pd.date_range("2025-01-01", periods=5, freq="D")
     fake_df = pd.DataFrame(
@@ -876,7 +896,6 @@ def test_build_dashboard_analysis_structure(tmp_path, monkeypatch):
         },
         index=fake_dates,
     )
-    import jayu.dashboard as dash_module
     monkeypatch.setattr("yfinance.download", lambda *a, **kw: fake_df)
 
     # Mock requests.get for FRED public CSV
@@ -921,6 +940,7 @@ def test_build_dashboard_analysis_structure(tmp_path, monkeypatch):
 
     # Toss portfolio is empty dict (no credentials)
     assert isinstance(result["toss"], dict)
+    assert result["tradingview_details"]["status"] == "unavailable"
 
 
 def test_build_dashboard_analysis_bad_ticker(tmp_path, monkeypatch):
@@ -940,3 +960,154 @@ def test_build_dashboard_analysis_bad_ticker(tmp_path, monkeypatch):
 
     result = build_dashboard_analysis(paths, ticker="BADTICKER", macro_series="FEDFUNDS", period="1y")
     assert "error" in result["stock"]
+
+
+def test_tradingview_technical_summary_maps_scores(monkeypatch):
+    from jayu.dashboard import build_tradingview_technical_summary
+
+    class FakeResp:
+        def __init__(self, fields: str):
+            self.fields = fields
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            payload = {}
+            for field in self.fields.split(","):
+                base = field.split("|", 1)[0]
+                if base == "Recommend.All":
+                    payload[field] = 0.6
+                elif base == "Recommend.MA":
+                    payload[field] = 0.8
+                elif base == "Recommend.Other":
+                    payload[field] = 0.3
+                elif base == "RSI":
+                    payload[field] = 61.5
+                elif base == "MACD.macd":
+                    payload[field] = 1.25
+                elif base == "MACD.signal":
+                    payload[field] = 0.95
+                elif base == "close":
+                    payload[field] = 279.29
+                else:
+                    payload[field] = 1.0
+            return payload
+
+    def fake_get(url, *, params, headers, timeout):
+        assert url == "https://scanner.tradingview.com/symbol"
+        assert params["symbol"] == "AMEX:SOXL"
+        assert headers["Referer"] == "https://www.tradingview.com/"
+        assert timeout == 10
+        return FakeResp(params["fields"])
+
+    import requests as req_module
+
+    monkeypatch.setattr(req_module, "get", fake_get)
+
+    result = build_tradingview_technical_summary("SOXL")
+
+    assert result["status"] == "ok"
+    assert result["symbol"] == "AMEX:SOXL"
+    assert result["consensus"]["signal"] == "strong_buy"
+    assert result["consensus"]["action"] == "buy"
+    assert result["consensus_score"] == 0.6
+    assert len(result["timeframes"]) == 5
+    assert result["timeframes"][0]["recommend_ma"] == 0.8
+    assert result["timeframes"][0]["recommendation"]["label"] == "강한 매수"
+    assert result["timeframes"][0]["oscillators"]["rsi"] == 61.5
+    assert "moving_averages" in result["timeframes"][0]
+    assert "nearest_pivots" in result["timeframes"][0]
+    assert result["timeframes"][0]["rationale"]
+
+
+def test_tradingview_technical_summary_keeps_partial_timeframes(monkeypatch):
+    from jayu.dashboard import build_tradingview_technical_summary
+
+    class FakeResp:
+        def __init__(self, fields: str):
+            self.fields = fields
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                field: (
+                    0.2
+                    if field.split("|", 1)[0].startswith("Recommend")
+                    else 60.0
+                )
+                for field in self.fields.split(",")
+            }
+
+    def fake_get(url, *, params, headers, timeout):
+        if any(field.endswith("|1") for field in params["fields"].split(",")):
+            raise RuntimeError("minute scanner timeout")
+        return FakeResp(params["fields"])
+
+    import requests as req_module
+
+    monkeypatch.setattr(req_module, "get", fake_get)
+
+    result = build_tradingview_technical_summary("SOXL")
+
+    assert result["status"] == "partial"
+    assert result["consensus"]["label"] == "매수"
+    assert len(result["timeframes"]) == 4
+    assert result["errors"][0]["timeframe"] == "1"
+
+
+def test_tradingview_symbol_details_normalizes_right_panel_fields(monkeypatch):
+    from jayu.dashboard import build_tradingview_symbol_details
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "price_52_week_high": 286.1526,
+                "price_52_week_low": 20.28,
+                "sector": "Miscellaneous",
+                "country": "United States",
+                "market": "america",
+                "Low.1M": 157.561,
+                "High.1M": 286.1526,
+                "Perf.W": 45.2366,
+                "Perf.1M": 97.7414,
+                "Perf.3M": 410.6784,
+                "Perf.6M": 605.2778,
+                "Perf.Y": 1186.1616,
+                "Perf.YTD": 518.8566,
+                "Recommend.All": 0.5576,
+                "average_volume_10d_calc": 71218496,
+                "average_volume_30d_calc": 61889092.4,
+                "nav_discount_premium": -0.0432,
+                "country_code_fund": "US",
+                "iv": None,
+                "underlying_symbol": None,
+            }
+
+    def fake_get(url, *, params, headers, timeout):
+        assert url == "https://scanner.tradingview.com/symbol"
+        assert params["symbol"] == "AMEX:SOXL"
+        assert params["label-product"] == "right-details"
+        assert headers["Referer"] == "https://www.tradingview.com/"
+        assert "price_52_week_high" in params["fields"]
+        assert timeout == 10
+        return FakeResp()
+
+    import requests as req_module
+
+    monkeypatch.setattr(req_module, "get", fake_get)
+
+    result = build_tradingview_symbol_details("SOXL")
+
+    assert result["status"] == "ok"
+    assert result["profile"]["sector"] == "Miscellaneous"
+    assert result["quote"]["recommendation"]["signal"] == "strong_buy"
+    assert result["quote"]["price_52_week_high"] == 286.1526
+    assert result["performance"]["one_month"] == 97.7414
+    assert result["volume"]["average_10d"] == 71218496
+    assert result["fund"]["nav_discount_premium"] == -0.0432

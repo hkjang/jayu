@@ -2882,6 +2882,16 @@ const _$ = (v, d = 2) => v == null ? "-" : `$${Number(v).toFixed(d)}`;
 const _pct = (v, d = 2) => v == null ? "-" : `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(d)}%`;
 const _num = (v, d = 2) => v == null ? "-" : Number(v).toFixed(d);
 const _chgCls = (v) => Number(v) > 0 ? "analysis-positive" : Number(v) < 0 ? "analysis-negative" : "";
+const _score = (v, d = 2) => v == null ? "-" : Number(v).toFixed(d);
+const _volume = (v) => {
+  if (v == null || Number.isNaN(Number(v))) return "-";
+  const n = Number(v);
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toLocaleString("ko-KR", { maximumFractionDigits: 0 });
+};
+const _signalToneColor = (tone) => tone === "buy" ? "#16a34a" : tone === "sell" ? "#dc2626" : "#64748b";
+const _statusForAction = (action) => action === "buy" ? "success" : action === "sell" ? "failed" : "warning";
 
 // ── SVG helpers ────────────────────────────────────────────────────────────
 function _svgScale(vals, h, pad = 0.08) {
@@ -2900,6 +2910,97 @@ function _svgArea(pts, fill) {
   if (pts.length < 2) return "";
   const first = pts[0].split(","), last = pts[pts.length - 1].split(",");
   return `<polygon fill="${fill}" points="${pts.join(" ")} ${last[0]},9999 ${first[0]},9999"/>`;
+}
+
+function _renderTradingViewDetailsPanel(details, { compact = false } = {}) {
+  if (!details || details.status !== "ok") {
+    return details?.error ? `
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header"><div><h2>TradingView 상세 스냅샷</h2><p>${escapeHtml(details.error)}</p></div></div>
+      </section>` : "";
+  }
+
+  const profile = details.profile || {};
+  const quote = details.quote || {};
+  const performance = details.performance || {};
+  const volume = details.volume || {};
+  const fund = details.fund || {};
+  const derivatives = details.derivatives || {};
+  const recommendation = quote.recommendation || {};
+  const nav = fund.nav_discount_premium;
+  const hasDerivativeData = ["open_interest", "iv", "delta", "gamma", "theta", "vega", "theo_price"].some((key) => derivatives[key] != null);
+  const perfRows = [
+    ["1주", performance.week],
+    ["1개월", performance.one_month],
+    ["3개월", performance.three_month],
+    ["6개월", performance.six_month],
+    ["YTD", performance.year_to_date],
+    ["1년", performance.one_year],
+  ];
+
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>TradingView 상세 스냅샷</h2>
+          <p>${escapeHtml(details.symbol || "-")} · ${escapeHtml(profile.market || "-")} · ${escapeHtml(profile.country || "-")}</p>
+        </div>
+        <span class="status-badge status-${_statusForAction(recommendation.action)}">${escapeHtml(recommendation.label || "-")}</span>
+      </div>
+      <div class="panel-body">
+        <section class="metric-grid" style="margin-bottom:12px">
+          <div class="metric-card">
+            <span class="metric-label">섹터 / 국가</span>
+            <span class="metric-value" style="font-size:15px">${escapeHtml(profile.sector || "-")}</span>
+            <span class="metric-sub">${escapeHtml(profile.country_code_fund || profile.country || "-")}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">52주 범위</span>
+            <span class="metric-value" style="font-size:15px">${_$(quote.price_52_week_low)} - ${_$(quote.price_52_week_high)}</span>
+            <span class="metric-sub">TradingView right-details</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">1개월 범위</span>
+            <span class="metric-value" style="font-size:15px">${_$(quote.low_1m)} - ${_$(quote.high_1m)}</span>
+            <span class="metric-sub">고가/저가</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">평균 거래량</span>
+            <span class="metric-value" style="font-size:15px">${_volume(volume.average_10d)} / ${_volume(volume.average_30d)}</span>
+            <span class="metric-sub">10일 / 30일</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">NAV 프리미엄</span>
+            <span class="metric-value ${_chgCls(nav)}" style="font-size:15px">${_pct(nav)}</span>
+            <span class="metric-sub">ETF 괴리율</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">추천 점수</span>
+            <span class="metric-value" style="font-size:15px;color:${_signalToneColor(recommendation.tone)}">${_score(quote.recommend_all)}</span>
+            <span class="metric-sub">${escapeHtml(recommendation.label || "-")}</span>
+          </div>
+        </section>
+        ${compact ? "" : `
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead><tr style="border-bottom:2px solid var(--border)">
+              <th style="text-align:left;padding:7px 10px">성과</th>
+              ${perfRows.map(([label]) => `<th style="text-align:right;padding:7px 10px">${label}</th>`).join("")}
+            </tr></thead>
+            <tbody>
+              <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:7px 10px;font-weight:700">수익률</td>
+                ${perfRows.map(([, value]) => `<td class="${_chgCls(value)}" style="text-align:right;padding:7px 10px;font-weight:700">${_pct(value)}</td>`).join("")}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        ${hasDerivativeData ? `
+        <div style="margin-top:10px;color:var(--muted);font-size:12px">
+          옵션성 지표: OI ${_volume(derivatives.open_interest)} · IV ${_pct(derivatives.iv)} · Δ ${_score(derivatives.delta)} · Θ ${_score(derivatives.theta)} · Theo ${_$(derivatives.theo_price)}
+        </div>` : ""}`}
+      </div>
+    </section>`;
 }
 
 // ── Tab render coordinator ─────────────────────────────────────────────────
@@ -3067,6 +3168,7 @@ function renderAnalysisBasic(container, ticker, macro, period) {
   const macroData = data.macro || {};
   const news = data.news || [];
   const toss = data.toss || {};
+  const tvDetails = data.tradingview_details || {};
 
   const macroLabel = MACRO_OPTIONS.find(m => m.id === macro)?.label || macro;
 
@@ -3122,6 +3224,7 @@ function renderAnalysisBasic(container, ticker, macro, period) {
     </article>`).join("") : `<p style="color:var(--muted);padding:10px 0">Finnhub 또는 Alpha Vantage API 키가 설정되어 있지 않습니다.</p>`;
 
   const chartHtml = _renderDualAxisChart(stock.history || [], macroData.history || []);
+  const tradingViewDetailsHtml = _renderTradingViewDetailsPanel(tvDetails);
 
   let tossHtml = "";
   if (toss.positions?.length) {
@@ -3185,6 +3288,7 @@ function renderAnalysisBasic(container, ticker, macro, period) {
         <span class="metric-sub">전기 대비</span>
       </div>` : ""}
     </section>
+    ${tradingViewDetailsHtml}
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header"><div><h2>가격 & ${macroLabel} 차트</h2></div></div>
       <div class="panel-body" style="padding:0 4px">${chartHtml}</div>
@@ -3240,6 +3344,124 @@ function renderAnalysisTechnical(container, ticker, period) {
   const rsi = data.latest_rsi;
   const rsiColor = rsi == null ? "" : rsi > 70 ? "#ef4444" : rsi < 30 ? "#22c55e" : "#3b82f6";
   const rsiLabel = rsi == null ? "-" : rsi > 70 ? "과매수" : rsi < 30 ? "과매도" : "중립";
+  const tv = data.tradingview || {};
+  const tvConsensus = tv.consensus || {};
+  const tvScore = (score) => score == null ? "-" : Number(score).toFixed(2);
+  const tvSignalLabel = (row) => escapeHtml(row?.recommendation?.label || "데이터 없음");
+  const tvRows = Array.isArray(tv.timeframes) ? tv.timeframes : [];
+  const tradingViewDetailsHtml = _renderTradingViewDetailsPanel(data.tradingview_details || {}, { compact: true });
+  const tvErrors = Array.isArray(tv.errors) ? tv.errors : [];
+  const tvDetail = tvRows.find(row => row.timeframe === "1") || tvRows[tvRows.length - 1] || {};
+  const tvOsc = tvDetail.oscillators || {};
+  const tvMas = tvDetail.moving_averages || {};
+  const tvNearest = tvDetail.nearest_pivots || {};
+  const pivotLabel = (level) => level ? `${escapeHtml(level.family || "-")} ${escapeHtml(String(level.level || "").toUpperCase())} ${_$(level.value)} (${_pct(level.distance_pct)})` : "-";
+  const rationaleHtml = Array.isArray(tvDetail.rationale) && tvDetail.rationale.length
+    ? tvDetail.rationale.map(note => `<span class="status-badge status-${_statusForAction(note.tone)}" style="margin:0 6px 6px 0">${escapeHtml(note.text || "")}</span>`).join("")
+    : `<span style="color:var(--muted)">세부 근거 없음</span>`;
+  const tvDetailHtml = tvDetail.timeframe ? `
+    <section style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <h3 style="margin:0;font-size:15px">초단기 상세 진단 · ${escapeHtml(tvDetail.label || tvDetail.timeframe)}</h3>
+        <span class="status-badge status-${_statusForAction(tvDetail?.recommendation?.action)}">${escapeHtml(tvDetail?.recommendation?.label || "-")}</span>
+      </div>
+      <div class="metric-grid" style="margin-bottom:10px">
+        <div class="metric-card">
+          <span class="metric-label">RSI / Stoch</span>
+          <span class="metric-value" style="font-size:15px">${_num(tvOsc.rsi)} / ${_num(tvOsc.stoch_k)}</span>
+          <span class="metric-sub">D ${_num(tvOsc.stoch_d)} · Stoch RSI ${_num(tvOsc.stoch_rsi_k)}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">ADX 방향성</span>
+          <span class="metric-value" style="font-size:15px">${_num(tvOsc.adx)}</span>
+          <span class="metric-sub">+DI ${_num(tvOsc.adx_plus_di)} / -DI ${_num(tvOsc.adx_minus_di)}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">MACD / Momentum</span>
+          <span class="metric-value" style="font-size:15px">${_score(tvOsc.macd)} / ${_score(tvOsc.macd_signal)}</span>
+          <span class="metric-sub">Mom ${_score(tvOsc.mom)} · AO ${_score(tvOsc.ao)}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">이평선 위치</span>
+          <span class="metric-value" style="font-size:15px">${_$(tvDetail.close)}</span>
+          <span class="metric-sub">EMA20 ${_$(tvMas.ema20)} · EMA200 ${_$(tvMas.ema200)}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">근접 지지</span>
+          <span class="metric-value" style="font-size:13px">${pivotLabel(tvNearest.support)}</span>
+          <span class="metric-sub">월간 피벗 기준</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">근접 저항</span>
+          <span class="metric-value" style="font-size:13px">${pivotLabel(tvNearest.resistance)}</span>
+          <span class="metric-sub">월간 피벗 기준</span>
+        </div>
+      </div>
+      <div>${rationaleHtml}</div>
+    </section>` : "";
+  const tradingViewHtml = (tv.status === "ok" || tv.status === "partial") && tvRows.length ? `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>TradingView 기술적 매매 신호</h2>
+          <p>${escapeHtml(tv.symbol || data.ticker || ticker)} scanner consensus${tv.status === "partial" ? " · 일부 시간대 실패" : ""}</p>
+        </div>
+        <span class="status-badge status-${_statusForAction(tvConsensus.action)}">${escapeHtml(tvConsensus.label || "-")}</span>
+      </div>
+      <div class="panel-body">
+        <div class="metric-grid" style="margin-bottom:12px">
+          <div class="metric-card">
+            <span class="metric-label">최종 액션</span>
+            <span class="metric-value" style="font-size:22px;color:${_signalToneColor(tvConsensus.tone)}">${escapeHtml(tvConsensus.label || "-")}</span>
+            <span class="metric-sub">평균 점수 ${tvScore(tv.consensus_score)}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">신뢰도</span>
+            <span class="metric-value">${Math.round((tv.confidence || 0) * 100)}%</span>
+            <span class="metric-sub">점수 절대값 기반</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">강한 신호</span>
+            <span class="metric-value">${tv.strong_signal_count || 0}</span>
+            <span class="metric-sub">강한 매수/매도 시간대</span>
+          </div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr style="border-bottom:2px solid var(--border)">
+                <th style="text-align:left;padding:7px 10px">시간대</th>
+                <th style="text-align:left;padding:7px 10px">신호</th>
+                <th style="text-align:right;padding:7px 10px">종합</th>
+                <th style="text-align:right;padding:7px 10px">MA</th>
+                <th style="text-align:right;padding:7px 10px">Osc</th>
+                <th style="text-align:right;padding:7px 10px">RSI</th>
+                <th style="text-align:right;padding:7px 10px">MACD</th>
+                <th style="text-align:right;padding:7px 10px">Close</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tvRows.map(row => `
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:7px 10px;font-weight:700">${escapeHtml(row.label || row.timeframe || "-")}</td>
+                  <td style="padding:7px 10px;color:${_signalToneColor(row?.recommendation?.tone)};font-weight:700">${tvSignalLabel(row)}</td>
+                  <td style="text-align:right;padding:7px 10px">${tvScore(row.recommend_all)}</td>
+                  <td style="text-align:right;padding:7px 10px">${tvScore(row.recommend_ma)}</td>
+                  <td style="text-align:right;padding:7px 10px">${tvScore(row.recommend_other)}</td>
+                  <td style="text-align:right;padding:7px 10px">${_num(row.rsi)}</td>
+                  <td style="text-align:right;padding:7px 10px">${tvScore(row.macd)}</td>
+                  <td style="text-align:right;padding:7px 10px">${_$(row.close)}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        ${tvErrors.length ? `<p style="margin:10px 0 0;color:var(--muted);font-size:12px">일부 시간대 실패: ${tvErrors.map(err => escapeHtml(err.label || err.timeframe || "-")).join(", ")}</p>` : ""}
+        ${tvDetailHtml}
+      </div>
+    </section>` : `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>TradingView 기술적 매매 신호</h2><p>${escapeHtml(tv.error || "scanner 데이터를 불러오지 못했습니다.")}</p></div></div>
+    </section>`;
 
   // Generate charts
   const dates = recs.map(r => r.date);
@@ -3273,6 +3495,8 @@ function renderAnalysisTechnical(container, ticker, period) {
         <span class="metric-sub">±${data.latest_atr && data.latest_price ? _num(data.latest_atr/data.latest_price*100)+"%" : "-"}</span>
       </div>
     </section>
+    ${tradingViewHtml}
+    ${tradingViewDetailsHtml}
     <section class="panel">
       <div class="panel-header"><div><h2>기술적 지표 차트</h2><p>가격·볼린저·EMA / MACD / RSI / 거래량</p></div></div>
       <div class="panel-body" style="padding:0 4px">${chartHtml}</div>
@@ -3825,293 +4049,4 @@ function _renderTechnicalCharts(recs, dates) {
   </svg>`;
 
   return chart1 + chart2 + chart3 + chart4;
-}
-
-
-  const data = state.analysis || {};
-  const stock = data.stock || {};
-  const macro = data.macro || {};
-  const news = data.news || [];
-  const toss = data.toss || {};
-
-  const tickers = ["SOXL","TQQQ","TSLA","AAPL","NVDA","NVDL","IONQ","QBTS","QQQ","SPY","MSFT","GOOGL"];
-  const macroSeries = [
-    { id: "FEDFUNDS", label: "기준금리 (Fed Funds Rate)" },
-    { id: "CPIAUCSNS", label: "소비자물가지수 (CPI)" },
-    { id: "UNRATE", label: "실업률 (Unemployment Rate)" },
-    { id: "T10Y2Y", label: "10년-2년 국채 스프레드" },
-    { id: "GDPC1", label: "실질 GDP (Real GDP)" },
-    { id: "M2SL", label: "M2 통화량" },
-    { id: "BAMLH0A0HYM2", label: "하이일드 스프레드" },
-  ];
-  const periods = [
-    { id: "1m", label: "1개월" }, { id: "3m", label: "3개월" }, { id: "6m", label: "6개월" },
-    { id: "1y", label: "1년" }, { id: "2y", label: "2년" }, { id: "5y", label: "5년" }, { id: "10y", label: "10년" },
-  ];
-
-  const selectedTicker = state.analysisTicker || "SOXL";
-  const selectedMacro = state.analysisMacro || "FEDFUNDS";
-  const selectedPeriod = state.analysisPeriod || "2y";
-
-  const priceFmt = (v) => v == null ? "-" : (typeof v === "number" ? `$${v.toFixed(2)}` : String(v));
-  const pctFmt = (v) => v == null ? "-" : `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
-  const numFmt = (v, d = 2) => v == null ? "-" : Number(v).toFixed(d);
-
-  const changeCls = (v) => v > 0 ? "analysis-positive" : v < 0 ? "analysis-negative" : "";
-
-  // Build SVG chart
-  const chartHtml = renderAnalysisChart(stock.history || [], macro.history || []);
-
-  // Build Toss positions table
-  let tossHtml = "";
-  if (toss.positions && toss.positions.length) {
-    tossHtml = `
-    <section class="panel" style="margin-top:14px">
-      <div class="panel-header"><div><h2>📊 Toss 보유 종목</h2><p>계좌 번호: ${escapeHtml(toss.account_no || "-")}</p></div></div>
-      <div class="panel-body" style="overflow-x:auto">
-        <table class="analysis-table" style="width:100%;border-collapse:collapse;font-size:13px">
-          <thead><tr style="border-bottom:2px solid var(--border)">
-            <th style="text-align:left;padding:8px 10px">종목</th>
-            <th style="text-align:right;padding:8px 10px">수량</th>
-            <th style="text-align:right;padding:8px 10px">매수가</th>
-            <th style="text-align:right;padding:8px 10px">현재가</th>
-            <th style="text-align:right;padding:8px 10px">손익</th>
-            <th style="text-align:right;padding:8px 10px">수익률</th>
-          </tr></thead>
-          <tbody>
-            ${toss.positions.map(pos => {
-              const plr = parseFloat(pos.profit_loss_rate || 0);
-              return `<tr style="border-bottom:1px solid var(--border)">
-                <td style="padding:7px 10px;font-weight:600">${escapeHtml(pos.symbol || "-")}</td>
-                <td style="text-align:right;padding:7px 10px">${pos.qty ?? "-"}</td>
-                <td style="text-align:right;padding:7px 10px">$${numFmt(pos.buy_price)}</td>
-                <td style="text-align:right;padding:7px 10px">$${numFmt(pos.current_price)}</td>
-                <td style="text-align:right;padding:7px 10px;${plr >= 0 ? "color:var(--success)" : "color:var(--failed)"}">${numFmt(pos.profit_loss)}</td>
-                <td style="text-align:right;padding:7px 10px;font-weight:600;${plr >= 0 ? "color:var(--success)" : "color:var(--failed)"}">${pctFmt(plr)}</td>
-              </tr>`;
-            }).join("")}
-          </tbody>
-        </table>
-      </div>
-    </section>`;
-  }
-
-  // News sentiment
-  const sentimentBadge = (s) => {
-    if (s === "Positive") return `<span class="analysis-badge-pos">▲ 긍정</span>`;
-    if (s === "Negative") return `<span class="analysis-badge-neg">▼ 부정</span>`;
-    return `<span class="analysis-badge-neu">— 중립</span>`;
-  };
-  const newsHtml = news.length ? news.map(n => `
-    <article class="analysis-news-item">
-      <div class="analysis-news-meta">
-        ${sentimentBadge(n.sentiment)}
-        <span class="analysis-news-source">${escapeHtml(n.source || "-")}</span>
-        <span class="analysis-news-date">${n.published_at ? n.published_at.slice(0,10) : "-"}</span>
-      </div>
-      <a class="analysis-news-title" href="${escapeHtml(n.url || "#")}" target="_blank" rel="noopener">${escapeHtml(n.headline || "제목 없음")}</a>
-    </article>`) .join("") : `<p style="color:var(--text-muted);padding:16px 0">뉴스 API 키가 설정되어 있지 않거나 데이터가 없습니다.</p>`;
-
-  els.root.innerHTML = `
-    <div class="page-heading">
-      <div>
-        <h1>📈 주식 & 경제 분석</h1>
-        <p>Yahoo Finance, FRED 경제 데이터, 뉴스 감성 분석을 통합하여 주식과 거시경제 지표를 한눈에 확인합니다.</p>
-      </div>
-    </div>
-
-    <section class="panel" style="margin-bottom:14px">
-      <div class="panel-header"><div><h2>조회 설정</h2><p>종목, 경제 지표, 기간을 선택하면 차트와 데이터가 자동 갱신됩니다.</p></div></div>
-      <div class="panel-body">
-        <div class="analysis-controls">
-          <div class="analysis-control-group">
-            <label for="analysis-ticker">종목 (Ticker)</label>
-            <select id="analysis-ticker" class="analysis-select">
-              ${tickers.map(t => `<option value="${t}" ${t === selectedTicker ? "selected" : ""}>${t}</option>`).join("")}
-            </select>
-          </div>
-          <div class="analysis-control-group">
-            <label for="analysis-macro">경제 지표 (FRED)</label>
-            <select id="analysis-macro" class="analysis-select">
-              ${macroSeries.map(s => `<option value="${s.id}" ${s.id === selectedMacro ? "selected" : ""}>${s.label}</option>`).join("")}
-            </select>
-          </div>
-          <div class="analysis-control-group">
-            <label for="analysis-period">기간</label>
-            <select id="analysis-period" class="analysis-select">
-              ${periods.map(p => `<option value="${p.id}" ${p.id === selectedPeriod ? "selected" : ""}>${p.label}</option>`).join("")}
-            </select>
-          </div>
-          <div class="analysis-control-group" style="align-self:flex-end">
-            <button id="btn-analysis-fetch" class="button button-primary" type="button" style="height:38px;min-width:100px">
-              📊 조회
-            </button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    ${stock.error ? `<section class="panel"><div class="panel-body"><p style="color:var(--failed)">${escapeHtml(stock.error)}</p></div></section>` : `
-    <section class="metric-grid" style="margin-bottom:14px">
-      <div class="metric-card">
-        <span class="metric-label">현재가</span>
-        <span class="metric-value" style="font-size:22px">${priceFmt(stock.latest_price)}</span>
-        <span class="metric-sub">${escapeHtml(stock.ticker || selectedTicker)}</span>
-      </div>
-      <div class="metric-card">
-        <span class="metric-label">전일 대비</span>
-        <span class="metric-value ${changeCls(stock.change_pct)}" style="font-size:22px">${pctFmt(stock.change_pct)}</span>
-        <span class="metric-sub">일간 수익률</span>
-      </div>
-      <div class="metric-card">
-        <span class="metric-label">52주 최고가</span>
-        <span class="metric-value">${priceFmt(stock.fifty_two_week_high)}</span>
-        <span class="metric-sub">기간 내 최고</span>
-      </div>
-      <div class="metric-card">
-        <span class="metric-label">52주 최저가</span>
-        <span class="metric-value">${priceFmt(stock.fifty_two_week_low)}</span>
-        <span class="metric-sub">기간 내 최저</span>
-      </div>
-      ${!macro.error ? `
-      <div class="metric-card">
-        <span class="metric-label">${escapeHtml((macro.name || selectedMacro).slice(0, 30))}</span>
-        <span class="metric-value">${numFmt(macro.latest_value, 2)}</span>
-        <span class="metric-sub">${escapeHtml(macro.latest_date || "-")}</span>
-      </div>
-      <div class="metric-card">
-        <span class="metric-label">경제 지표 변화</span>
-        <span class="metric-value ${changeCls(macro.change)}">${macro.change != null ? (macro.change >= 0 ? "+" : "") + numFmt(macro.change, 3) : "-"}</span>
-        <span class="metric-sub">전기 대비</span>
-      </div>` : ""}
-    </section>
-    `}
-
-    <section class="panel" style="margin-bottom:14px">
-      <div class="panel-header"><div><h2>가격 & 경제 지표 차트</h2><p>주식 종가(왼쪽 축)와 선택한 FRED 경제 시리즈(오른쪽 축)를 이중 축으로 표시합니다.</p></div></div>
-      <div class="panel-body" style="padding:0 4px">
-        ${chartHtml}
-      </div>
-    </section>
-
-    ${tossHtml}
-
-    <section class="panel" style="margin-top:14px">
-      <div class="panel-header"><div><h2>📰 최근 뉴스 & 감성 분석</h2><p>Finnhub 또는 Alpha Vantage에서 수집한 최근 30일 뉴스와 AI 감성 평가입니다.</p></div></div>
-      <div class="panel-body">
-        <div class="analysis-news-list">${newsHtml}</div>
-      </div>
-    </section>
-  `;
-}
-
-function renderAnalysisChart(stockHistory, macroHistory) {
-  const W = 900, H = 260, PL = 60, PR = 65, PT = 20, PB = 40;
-  const innerW = W - PL - PR;
-  const innerH = H - PT - PB;
-
-  if (!stockHistory.length) {
-    return `<div style="height:260px;display:flex;align-items:center;justify-content:center;color:var(--text-muted)">주가 데이터를 불러오는 중...</div>`;
-  }
-
-  // X-axis dates span (using stock dates as anchor)
-  const stockDates = stockHistory.map(d => d.date);
-  const allDates = [...new Set([...stockDates, ...macroHistory.map(d => d.date)])].sort();
-  const xMin = allDates[0], xMax = allDates[allDates.length - 1];
-  const dateToX = (d) => {
-    const t = (d >= xMax ? 1 : d <= xMin ? 0 : (d.localeCompare(xMin)) / (xMax.localeCompare(xMin)));
-    return PL + t * innerW;
-  };
-
-  // Y-axis for stock
-  const stockVals = stockHistory.map(d => d.close).filter(v => v != null && !isNaN(v));
-  const sMin = Math.min(...stockVals), sMax = Math.max(...stockVals);
-  const sPad = (sMax - sMin) * 0.08 || 1;
-  const stockToY = (v) => PT + innerH - ((v - (sMin - sPad)) / ((sMax + sPad) - (sMin - sPad))) * innerH;
-
-  // Y-axis for macro
-  const macroVals = macroHistory.map(d => d.value).filter(v => v != null && !isNaN(v));
-  let macroLine = "";
-  let macroAxisHtml = "";
-  if (macroVals.length > 1) {
-    const mMin = Math.min(...macroVals), mMax = Math.max(...macroVals);
-    const mPad = (mMax - mMin) * 0.08 || 0.1;
-    const macroToY = (v) => PT + innerH - ((v - (mMin - mPad)) / ((mMax + mPad) - (mMin - mPad))) * innerH;
-    const macroPoints = macroHistory
-      .filter(d => d.value != null && !isNaN(d.value) && d.date >= xMin && d.date <= xMax)
-      .map(d => `${dateToX(d.date).toFixed(1)},${macroToY(d.value).toFixed(1)}`).join(" ");
-    if (macroPoints) {
-      macroLine = `<polyline fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5,3" opacity="0.85" points="${macroPoints}"/>`;
-    }
-    // Right Y-axis labels
-    const mTicks = 4;
-    for (let i = 0; i <= mTicks; i++) {
-      const v = mMin - mPad + (i / mTicks) * ((mMax + mPad) - (mMin - mPad));
-      const y = macroToY(v);
-      macroAxisHtml += `<text x="${W - PR + 8}" y="${y.toFixed(1)}" font-size="10" fill="#f59e0b" dominant-baseline="middle">${v.toFixed(2)}</text>`;
-    }
-    macroAxisHtml += `<line x1="${W - PR}" y1="${PT}" x2="${W - PR}" y2="${PT + innerH}" stroke="#f59e0b" stroke-width="0.5" opacity="0.4"/>`;
-  }
-
-  // Stock line & area
-  const stockPoints = stockHistory
-    .filter(d => d.close != null && !isNaN(d.close))
-    .map(d => `${dateToX(d.date).toFixed(1)},${stockToY(d.close).toFixed(1)}`).join(" ");
-  const stockAreaPoints = stockHistory
-    .filter(d => d.close != null && !isNaN(d.close))
-    .map(d => `${dateToX(d.date).toFixed(1)},${stockToY(d.close).toFixed(1)}`).join(" ")
-    + ` ${(PL + innerW).toFixed(1)},${(PT + innerH).toFixed(1)} ${PL},${(PT + innerH).toFixed(1)}`;
-
-  // Left Y-axis labels
-  let leftAxisHtml = "";
-  const sTicks = 4;
-  for (let i = 0; i <= sTicks; i++) {
-    const v = (sMin - sPad) + (i / sTicks) * ((sMax + sPad) - (sMin - sPad));
-    const y = stockToY(v);
-    leftAxisHtml += `<text x="${PL - 6}" y="${y.toFixed(1)}" font-size="10" fill="#6366f1" text-anchor="end" dominant-baseline="middle">$${v.toFixed(0)}</text>`;
-  }
-
-  // X-axis labels (5 evenly spaced)
-  let xAxisHtml = "";
-  const xStep = Math.max(1, Math.floor(allDates.length / 5));
-  for (let i = 0; i < allDates.length; i += xStep) {
-    const d = allDates[i];
-    const x = dateToX(d);
-    xAxisHtml += `<text x="${x.toFixed(1)}" y="${(PT + innerH + 14).toFixed(1)}" font-size="10" fill="#94a3b8" text-anchor="middle">${d.slice(0,7)}</text>`;
-  }
-
-  // Grid lines
-  let gridHtml = "";
-  for (let i = 0; i <= sTicks; i++) {
-    const v = (sMin - sPad) + (i / sTicks) * ((sMax + sPad) - (sMin - sPad));
-    const y = stockToY(v);
-    gridHtml += `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${PL + innerW}" y2="${y.toFixed(1)}" stroke="#e2e8f0" stroke-width="1"/>`;
-  }
-
-  return `
-    <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-height:280px;display:block" preserveAspectRatio="xMidYMid meet">
-      <defs>
-        <linearGradient id="stockGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#6366f1" stop-opacity="0.25"/>
-          <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
-        </linearGradient>
-        <clipPath id="chartClip">
-          <rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}"/>
-        </clipPath>
-      </defs>
-      <rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}" fill="white" rx="4"/>
-      ${gridHtml}
-      <g clip-path="url(#chartClip)">
-        ${stockAreaPoints ? `<polygon fill="url(#stockGrad)" points="${stockAreaPoints}"/>` : ""}
-        ${stockPoints ? `<polyline fill="none" stroke="#6366f1" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="${stockPoints}"/>` : ""}
-        ${macroLine}
-      </g>
-      <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${PT + innerH}" stroke="#cbd5e1" stroke-width="1"/>
-      <line x1="${PL}" y1="${PT + innerH}" x2="${PL + innerW}" y2="${PT + innerH}" stroke="#cbd5e1" stroke-width="1"/>
-      ${leftAxisHtml}
-      ${macroAxisHtml}
-      ${xAxisHtml}
-      <text x="${PL + 8}" y="${PT + 14}" font-size="11" font-weight="600" fill="#6366f1">● 주가 (좌축 $)</text>
-      ${macroVals.length > 1 ? `<text x="${PL + 120}" y="${PT + 14}" font-size="11" font-weight="600" fill="#f59e0b">--- 경제 지표 (우축)</text>` : ""}
-    </svg>`;
 }

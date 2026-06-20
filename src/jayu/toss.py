@@ -3,9 +3,12 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from .provider_core import HttpJsonClient, ProviderPolicy
+
+if TYPE_CHECKING:
+    from .paths import RuntimePaths
 
 
 class JsonRequester(Protocol):
@@ -904,7 +907,6 @@ def sync_portfolio_from_toss(
 ) -> dict[str, Any]:
     """Fetch live holdings from Toss OpenAPI and overwrite the local portfolio.csv file."""
     import csv
-    import time
 
     try:
         resp = client.holdings(account=account)
@@ -993,12 +995,6 @@ def attach_toss_readiness_to_signals(client: TossInvestClient, paths: Any) -> di
         cash_usd = float(bp_usd.get("amount") or bp_usd.get("buyingPower") or 0.0)
     except Exception:
         cash_usd = 0.0
-
-    try:
-        exch = client.exchange_rate(base_currency="USD", quote_currency="KRW")
-        usd_krw = float(exch.get("rate") or exch.get("exchangeRate") or 1350.0)
-    except Exception:
-        usd_krw = 1350.0
 
     try:
         commissions = client.commissions()
@@ -1228,4 +1224,3 @@ def load_live_toss_positions(snapshot: dict[str, Any], mapping: Any, usd_krw: fl
             )
         )
     return positions
-
