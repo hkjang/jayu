@@ -128,6 +128,14 @@ class HttpJsonClient:
                     )
                 response.raise_for_status()
                 return response.json()
+            except requests.HTTPError as exc:
+                status_code = exc.response.status_code if exc.response is not None else None
+                failures.append(f"attempt {attempt}: {exc}")
+                is_retryable = status_code in {429} or (status_code is not None and status_code >= 500)
+                if not is_retryable:
+                    raise RuntimeError(f"provider request failed: {exc}")
+                if attempt < self.policy.retries:
+                    self.sleep(float(attempt))
             except (requests.RequestException, ValueError) as exc:
                 failures.append(f"attempt {attempt}: {exc}")
                 if attempt < self.policy.retries:

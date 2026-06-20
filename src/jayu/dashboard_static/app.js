@@ -14,11 +14,24 @@ const state = {
   tossAccounts: null,
   tossMarket: null,
   tossPortfolio: null,
+  tossReconciliation: null,
+  tossOrderPlan: null,
+  tossSubTab: localStorage.getItem("jayu.toss.subTab") || "overview",
   apiMonitoring: null,
   tossAccountRegion: localStorage.getItem("jayu.toss.accountRegion") || "ALL",
   selectedTossAccount: localStorage.getItem("jayu.toss.selectedAccount") || "",
   apiMonitoringRefreshSec: localStorage.getItem("jayu.apiMonitoring.refresh") || "off",
   autoRefreshTimer: null,
+  analysis: null,
+  analysisTicker: localStorage.getItem("jayu.analysis.ticker") || "SOXL",
+  analysisMacro: localStorage.getItem("jayu.analysis.macro") || "FEDFUNDS",
+  analysisPeriod: localStorage.getItem("jayu.analysis.period") || "1y",
+  analysisTab: "market",
+  analysisMarketOverview: null,
+  analysisTechnical: null,
+  analysisCompare: null,
+  analysisPortfolio: null,
+  analysisCalendar: null,
 };
 
 const els = {
@@ -225,10 +238,23 @@ async function loadPage() {
     if (state.page === "api-monitoring") {
       state.apiMonitoring = await api("/api/v1/api-monitoring");
     }
+    if (state.page === "analysis") {
+      // Analysis tabs load data themselves via bindPageActions auto-triggers
+    }
     if (state.page === "toss-account") {
       const params = new URLSearchParams();
       if (state.selectedTossAccount) params.set("account", state.selectedTossAccount);
-      state.tossPortfolio = await api(`/api/v1/toss/portfolio${params.toString() ? `?${params.toString()}` : ""}`);
+      
+      const [portfolio, reconciliation, orderPlan] = await Promise.all([
+        api(`/api/v1/toss/portfolio${params.toString() ? `?${params.toString()}` : ""}`),
+        api(`/api/v1/toss/reconciliation${params.toString() ? `?${params.toString()}` : ""}`),
+        api("/api/v1/toss/order-plan")
+      ]);
+
+      state.tossPortfolio = portfolio;
+      state.tossReconciliation = reconciliation;
+      state.tossOrderPlan = orderPlan;
+
       state.tossAccounts = {
         status: state.tossPortfolio.status,
         accounts: state.tossPortfolio.accounts || [],
@@ -284,6 +310,7 @@ function pageTitle(page) {
     "toss-account": "Toss Account",
     toss: "Toss Market",
     "api-monitoring": "API 모니터링",
+    analysis: "주식 & 경제 분석",
   }[page];
 }
 
@@ -298,6 +325,7 @@ function render() {
   else if (state.page === "toss-account") renderTossAccountDashboard();
   else if (state.page === "toss") renderTossMarket();
   else if (state.page === "api-monitoring") renderApiMonitoring();
+  else if (state.page === "analysis") renderAnalysis();
   else renderOverview();
   bindPageActions();
 }
@@ -652,6 +680,71 @@ function renderTossAccountDashboard() {
   const allocation = visibleHoldings.filter((item) => item.weight !== null && item.weight !== undefined);
   const sections = data.sections || {};
   const activeRegionLabel = { ALL: "전체", KR: "한국", US: "미국" }[state.tossAccountRegion] || "전체";
+
+  let activeContentHtml = "";
+  if (state.tossSubTab === "reconciliation") {
+    activeContentHtml = renderReconciliation(state.tossReconciliation);
+  } else if (state.tossSubTab === "order-plan") {
+    activeContentHtml = renderOrderPlan(state.tossOrderPlan);
+  } else {
+    activeContentHtml = `
+      ${renderTossRegionTabs(data.region_totals || [])}
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header">
+          <div><h2>Account selector</h2><p>버튼을 누르지 않아도 첫 계좌가 자동으로 선택됩니다. 다른 계좌를 고르면 즉시 다시 조회합니다.</p></div>
+          ${statusBadge(data.read_only ? "success" : "blocked", "read only")}
+        </div>
+        ${renderTossAccountCards(accounts, selected)}
+      </section>
+      <div class="visual-grid">
+        <section class="panel">
+          <div class="panel-header"><div><h2>Market split</h2><p>KRW 환산 기준 한국/미국/기타 비중입니다.</p></div></div>
+          <div class="panel-body">${renderExposureDonut(data.region_totals || [], "region")}</div>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><div><h2>Currency split</h2><p>USD와 KRW가 섞여도 KRW 환산 기준으로 비교합니다.</p></div></div>
+          <div class="panel-body">${renderExposureDonut(data.currency_totals || [], "currency")}</div>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><div><h2>FX rates</h2><p>환산에 사용한 환율과 유효 시각입니다.</p></div></div>
+          <div class="panel-body">${renderFxRateCards(data.fx_rates || [])}</div>
+        </section>
+      </div>
+      <div class="visual-grid">
+        <section class="panel">
+          <div class="panel-header"><div><h2>Category split</h2><p>주식, ETF, 레버리지 ETF 같은 종목 유형별 노출입니다.</p></div></div>
+          <div class="panel-body">${renderExposureDonut(data.category_totals || [], "category")}</div>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><div><h2>Sector exposure</h2><p>종목 메타데이터에서 읽은 섹터 기준 상위 노출입니다.</p></div></div>
+          <div class="panel-body">${renderExposureDonut(data.sector_totals || [], "sector")}</div>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><div><h2>Situation tags</h2><p>집중도, 손익, 당일 급등락, 경고 상태를 태그로 묶었습니다.</p></div></div>
+          <div class="panel-body">${renderSituationTags(data.situation_totals || [])}</div>
+        </section>
+      </div>
+      <div class="section-grid">
+        <section class="panel">
+          <div class="panel-header"><div><h2>Holding allocation</h2><p>${activeRegionLabel} 탭의 KRW 환산 평가금액 기준 보유 비중입니다.</p></div></div>
+          <div class="panel-body">${renderHoldingAllocation(allocation)}</div>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><div><h2>P/L contributors</h2><p>KRW 환산 평가손익 기여도가 큰 종목입니다.</p></div></div>
+          <div class="panel-body">${renderPnlContributors(visibleHoldings)}</div>
+        </section>
+      </div>
+      <section class="panel">
+        <div class="panel-header"><div><h2>Holdings</h2><p>수량, 평균단가, 현재가, 평가금액, 손익률을 한 표에서 확인합니다.</p></div></div>
+        ${renderTossHoldingsTable(visibleHoldings)}
+      </section>
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header"><div><h2>Account GET status</h2><p>계좌 화면에서 자동 호출한 GET endpoint 결과입니다.</p></div></div>
+        ${renderTossSectionTable(sections)}
+      </section>
+    `;
+  }
+
   els.root.innerHTML = `
     <div class="page-heading">
       <div>
@@ -660,6 +753,19 @@ function renderTossAccountDashboard() {
       </div>
       ${statusBadge(summary.status || data.status)}
     </div>
+    
+    <div class="segmented-tabs" role="tablist" style="margin-bottom:14px">
+      <button class="${state.tossSubTab === 'overview' ? 'is-active' : ''}" type="button" data-toss-subtab="overview">
+        <span>자산 요약 (Asset Summary)</span>
+      </button>
+      <button class="${state.tossSubTab === 'reconciliation' ? 'is-active' : ''}" type="button" data-toss-subtab="reconciliation">
+        <span>보유 종목 대조 (Reconciliation)</span>
+      </button>
+      <button class="${state.tossSubTab === 'order-plan' ? 'is-active' : ''}" type="button" data-toss-subtab="order-plan">
+        <span>주문 준비도 및 전표 (Order Plan)</span>
+      </button>
+    </div>
+
     <section class="status-banner status-${statusClass(summary.status || data.status)}">
       <div>${statusBadge(summary.status || data.status)}</div>
       <div>
@@ -676,59 +782,320 @@ function renderTossAccountDashboard() {
       ${metricCard("USD/KRW", fxRateLabel(data.fx_rates, "USD"), fxRateStatus(data.fx_rates, "USD"), fxRateDetail(data.fx_rates, "USD"))}
       ${metricCard("조회 실패", summary.failed_section_count ?? 0, summary.failed_section_count ? "warning" : "success", (summary.failed_sections || []).join(", ") || "없음")}
     </section>
-    ${renderTossRegionTabs(data.region_totals || [])}
-    <section class="panel" style="margin-bottom:14px">
-      <div class="panel-header">
-        <div><h2>Account selector</h2><p>버튼을 누르지 않아도 첫 계좌가 자동으로 선택됩니다. 다른 계좌를 고르면 즉시 다시 조회합니다.</p></div>
-        ${statusBadge(data.read_only ? "success" : "blocked", "read only")}
+    
+    ${activeContentHtml}
+  `;
+}
+
+function renderReconciliation(reconciliation) {
+  const recon = reconciliation || {};
+  const status = recon.status || "unknown";
+  const differences = recon.differences || [];
+  const unmapped = recon.unmapped_tickers || [];
+
+  let statusHtml = "";
+  if (status === "synchronized") {
+    statusHtml = `
+      <section class="status-banner status-success">
+        <div>${statusBadge("success")}</div>
+        <div>
+          <h2>포트폴리오 일치 (Synchronized)</h2>
+          <p>Local portfolio.csv와 Toss 실계좌 보유 종목 및 수량이 완벽히 일치합니다.</p>
+        </div>
+      </section>
+    `;
+  } else if (status === "diverged") {
+    statusHtml = `
+      <section class="status-banner status-warning">
+        <div>${statusBadge("warning")}</div>
+        <div>
+          <h2>포트폴리오 불일치 (Diverged)</h2>
+          <p>Local portfolio.csv와 Toss 실계좌 간에 수량 불일치 또는 누락된 종목이 있습니다. 실계좌 보유 종목 기준으로 로컬 CSV를 갱신할 수 있습니다.</p>
+          <div style="margin-top: 10px;">
+            <button id="btn-sync-portfolio-banner" class="button button-primary" type="button">실계좌 종목으로 동기화</button>
+          </div>
+        </div>
+      </section>
+    `;
+  } else if (status === "missing_credentials") {
+    statusHtml = `
+      <section class="status-banner status-warning">
+        <div>${statusBadge("warning")}</div>
+        <div>
+          <h2>자격증명 미설정</h2>
+          <p>Toss API Key와 Secret Key가 설정되지 않아 실계좌 대조를 진행할 수 없습니다.</p>
+        </div>
+      </section>
+    `;
+  } else {
+    statusHtml = `
+      <section class="status-banner status-failed">
+        <div>${statusBadge("failed")}</div>
+        <div>
+          <h2>조회 실패</h2>
+          <p>${escapeHtml(recon.message || "Toss 실계좌 정보를 가져올 수 없습니다.")}</p>
+        </div>
+      </section>
+    `;
+  }
+
+  let tableHtml = "";
+  if (differences.length === 0) {
+    tableHtml = `
+      <div class="empty-state">
+        <strong>불일치 내역이 없습니다.</strong>
+        <span>Local 포트폴리오 파일과 실계좌 보유 종목의 수량이 같습니다.</span>
       </div>
-      ${renderTossAccountCards(accounts, selected)}
-    </section>
-    <div class="visual-grid">
-      <section class="panel">
-        <div class="panel-header"><div><h2>Market split</h2><p>KRW 환산 기준 한국/미국/기타 비중입니다.</p></div></div>
-        <div class="panel-body">${renderExposureDonut(data.region_totals || [], "region")}</div>
+    `;
+  } else {
+    tableHtml = `
+      <div class="table-wrap"><table>
+        <thead>
+          <tr>
+            <th>종목 (Ticker)</th>
+            <th class="numeric">로컬 수량 (portfolio.csv)</th>
+            <th class="numeric">토스 수량 (Holdings)</th>
+            <th class="numeric">차이 (Diff)</th>
+            <th>구분</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${differences.map(d => {
+            const diffClass = Number(d.difference || 0) < 0 ? "negative" : "positive";
+            const diffTypeLabel = {
+              missing_in_toss: "토스 누락",
+              missing_in_local: "로컬 누락",
+              quantity_mismatch: "수량 불일치"
+            }[d.type] || d.type;
+            const badgeType = d.type === "quantity_mismatch" ? "warning" : "blocked";
+            return `
+              <tr>
+                <td class="ticker-cell">${escapeHtml(d.ticker)}</td>
+                <td class="numeric">${formatNumber(d.local_quantity, 4)}</td>
+                <td class="numeric">${formatNumber(d.toss_quantity, 4)}</td>
+                <td class="numeric ${diffClass}">${formatNumber(d.difference, 4)}</td>
+                <td>${statusBadge(badgeType, diffTypeLabel)}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table></div>
+    `;
+  }
+
+  let unmappedHtml = "";
+  if (unmapped.length > 0) {
+    unmappedHtml = `
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div><h2>미매핑 종목 (Unmapped Tickers)</h2><p>portfolio_mapping.json에 등록되지 않은 종목 코드입니다.</p></div>
+          ${statusBadge("blocked", `${unmapped.length}건`)}
+        </div>
+        <div class="panel-body">
+          <div class="tag-cloud">
+            ${unmapped.map(ticker => `
+              <div class="tag-pill" style="border-color:var(--status-blocked)">
+                <strong style="color:var(--status-blocked)">${escapeHtml(ticker)}</strong>
+                <span>매핑 미등록</span>
+              </div>
+            `).join("")}
+          </div>
+        </div>
       </section>
-      <section class="panel">
-        <div class="panel-header"><div><h2>Currency split</h2><p>USD와 KRW가 섞여도 KRW 환산 기준으로 비교합니다.</p></div></div>
-        <div class="panel-body">${renderExposureDonut(data.currency_totals || [], "currency")}</div>
-      </section>
-      <section class="panel">
-        <div class="panel-header"><div><h2>FX rates</h2><p>환산에 사용한 환율과 유효 시각입니다.</p></div></div>
-        <div class="panel-body">${renderFxRateCards(data.fx_rates || [])}</div>
-      </section>
-    </div>
-    <div class="visual-grid">
-      <section class="panel">
-        <div class="panel-header"><div><h2>Category split</h2><p>주식, ETF, 레버리지 ETF 같은 종목 유형별 노출입니다.</p></div></div>
-        <div class="panel-body">${renderExposureDonut(data.category_totals || [], "category")}</div>
-      </section>
-      <section class="panel">
-        <div class="panel-header"><div><h2>Sector exposure</h2><p>종목 메타데이터에서 읽은 섹터 기준 상위 노출입니다.</p></div></div>
-        <div class="panel-body">${renderExposureDonut(data.sector_totals || [], "sector")}</div>
-      </section>
-      <section class="panel">
-        <div class="panel-header"><div><h2>Situation tags</h2><p>집중도, 손익, 당일 급등락, 경고 상태를 태그로 묶었습니다.</p></div></div>
-        <div class="panel-body">${renderSituationTags(data.situation_totals || [])}</div>
-      </section>
-    </div>
-    <div class="section-grid">
-      <section class="panel">
-        <div class="panel-header"><div><h2>Holding allocation</h2><p>${activeRegionLabel} 탭의 KRW 환산 평가금액 기준 보유 비중입니다.</p></div></div>
-        <div class="panel-body">${renderHoldingAllocation(allocation)}</div>
-      </section>
-      <section class="panel">
-        <div class="panel-header"><div><h2>P/L contributors</h2><p>KRW 환산 평가손익 기여도가 큰 종목입니다.</p></div></div>
-        <div class="panel-body">${renderPnlContributors(visibleHoldings)}</div>
-      </section>
-    </div>
+    `;
+  }
+
+  return `
+    ${statusHtml}
     <section class="panel">
-      <div class="panel-header"><div><h2>Holdings</h2><p>수량, 평균단가, 현재가, 평가금액, 손익률을 한 표에서 확인합니다.</p></div></div>
-      ${renderTossHoldingsTable(visibleHoldings)}
+      <div class="panel-header" style="align-items: center;">
+        <div><h2>보유 종목 대조 상세</h2><p>Local portfolio.csv와 Toss 실계좌 수량을 비교한 내역입니다.</p></div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button id="btn-sync-portfolio" class="button button-secondary" type="button">실계좌 종목으로 동기화</button>
+          ${statusBadge(differences.length ? "warning" : "success", differences.length ? "불일치 발견" : "일치")}
+        </div>
+      </div>
+      ${tableHtml}
     </section>
-    <section class="panel" style="margin-top:14px">
-      <div class="panel-header"><div><h2>Account GET status</h2><p>계좌 화면에서 자동 호출한 GET endpoint 결과입니다.</p></div></div>
-      ${renderTossSectionTable(sections)}
+    ${unmappedHtml}
+  `;
+}
+
+function renderOrderPlan(orderPlanData) {
+  const planData = orderPlanData || {};
+  const orderPlan = planData.order_plan || {};
+  const warningsGate = planData.warnings_gate || {};
+  const marketSession = planData.market_session || {};
+  const todaySignals = planData.today_signals || {};
+
+  const krOpen = marketSession.KR?.open || false;
+  const usOpen = marketSession.US?.open || false;
+
+  const orders = orderPlan.orders || [];
+
+  const sessionHtml = `
+    <div class="visual-grid" style="margin-bottom:14px">
+      <div class="panel">
+        <div class="panel-header"><div><h2>한국 시장 (KR Session)</h2><p>토스 API 실시간 조회 기준</p></div></div>
+        <div class="panel-body">
+          <div class="metric-card" style="border:none;box-shadow:none;padding:0">
+            <span class="value" style="font-size:24px">${krOpen ? "개장 중 (OPEN)" : "휴장/장마감 (CLOSED)"}</span>
+            <span class="status ${krOpen ? "success" : "not_evaluated"}" style="margin-top:5px;display:inline-block">${krOpen ? "실시간 거래 가능" : "주문 보류"}</span>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><div><h2>미국 시장 (US Session)</h2><p>토스 API 실시간 조회 기준</p></div></div>
+        <div class="panel-body">
+          <div class="metric-card" style="border:none;box-shadow:none;padding:0">
+            <span class="value" style="font-size:24px">${usOpen ? "개장 중 (OPEN)" : "휴장/장마감 (CLOSED)"}</span>
+            <span class="status ${usOpen ? "success" : "not_evaluated"}" style="margin-top:5px;display:inline-block">${usOpen ? "실시간 거래 가능" : "주문 보류"}</span>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><div><h2>오늘의 주문 계획 요약</h2><p>eligible buy signals</p></div></div>
+        <div class="panel-body">
+          <div class="metric-card" style="border:none;box-shadow:none;padding:0">
+            <span class="value" style="font-size:24px">${orders.length} 건</span>
+            <span class="status ${orders.length ? "success" : "not_evaluated"}" style="margin-top:5px;display:inline-block">${orders.length ? "수동 매수 slip 대기" : "주문 대상 없음"}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const tickers = Object.keys(todaySignals);
+  let readinessHtml = "";
+  if (tickers.length === 0) {
+    readinessHtml = `
+      <div class="empty-state">
+        <strong>오늘 생성된 신호가 없습니다.</strong>
+        <span>신호가 생성되고 toss readiness가 연동되면 상세 준비도가 표시됩니다.</span>
+      </div>
+    `;
+  } else {
+    readinessHtml = `
+      <div class="table-wrap"><table>
+        <thead>
+          <tr>
+            <th>종목 (Ticker)</th>
+            <th>신호 방향</th>
+            <th>Eligible</th>
+            <th>Toss 보유 여부</th>
+            <th>매수 가능 금액 (Buying Power)</th>
+            <th>수수료 구조</th>
+            <th>경고 여부</th>
+            <th>메시지</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tickers.map(ticker => {
+            const sig = todaySignals[ticker] || {};
+            const readiness = sig.broker_readiness || {};
+            const warnInfo = warningsGate[ticker] || {};
+            const isHeld = readiness.is_held || false;
+            const buyingPower = readiness.buying_power?.amount ?? 0;
+            const currency = readiness.buying_power?.currency || "-";
+            const comm = readiness.commission_structure || {};
+            const hasWarning = warnInfo.has_warning || readiness.warnings?.has_warning || false;
+            const warnMsg = warnInfo.message || readiness.warnings?.message || "-";
+
+            return `
+              <tr>
+                <td class="ticker-cell">${escapeHtml(ticker)}</td>
+                <td><strong>${escapeHtml(sig.action || sig.signal || "-")}</strong></td>
+                <td>${statusBadge(sig.eligible ? "success" : "blocked", sig.eligible ? "Eligible" : "Blocked")}</td>
+                <td>${statusBadge(isHeld ? "warning" : "not_evaluated", isHeld ? "보유 중" : "미보유")}</td>
+                <td class="numeric">${formatNumber(buyingPower, 2)} ${escapeHtml(currency)}</td>
+                <td class="code" style="font-size:10px">${compactJson(comm) || "-"}</td>
+                <td>${statusBadge(hasWarning ? "blocked" : "success", hasWarning ? "위험/정지" : "정상")}</td>
+                <td><small style="color:var(--muted)">${escapeHtml(warnMsg)}</small></td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table></div>
+    `;
+  }
+
+  let slipsHtml = "";
+  if (orders.length === 0) {
+    slipsHtml = `
+      <div class="empty-state">
+        <strong>대상 수동 주문이 없습니다.</strong>
+        <span>eligible buy 신호가 존재하는 경우 여기에 주문 가이드 전표가 노출됩니다.</span>
+      </div>
+    `;
+  } else {
+    slipsHtml = `
+      <div class="table-wrap"><table>
+        <thead>
+          <tr>
+            <th>종목</th>
+            <th>행동</th>
+            <th class="numeric">승인 비중 (Approved %)</th>
+            <th class="numeric">주문 예정 금액 (Target Cash)</th>
+            <th class="numeric">기준 가격 (Price)</th>
+            <th class="numeric">예상 수량 (Est Qty)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${orders.map(o => `
+            <tr>
+              <td class="ticker-cell"><strong>${escapeHtml(o.ticker)}</strong></td>
+              <td><span style="color:var(--status-success);font-weight:bold">${escapeHtml(o.action)}</span></td>
+              <td class="numeric">${formatPercent(o.approved_pct, 1)}</td>
+              <td class="numeric"><strong>${formatNumber(o.estimated_cash, 2)} ${escapeHtml(o.currency)}</strong></td>
+              <td class="numeric">${formatNumber(o.price, 2)}</td>
+              <td class="numeric" style="color:var(--brand-primary)"><strong>${formatNumber(o.estimated_quantity, 4)}</strong></td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table></div>
+    `;
+  }
+
+  let markdownPlan = "# Manual Order Plan Report\n";
+  markdownPlan += `Generated At: ${planData.order_plan?.generated_at || new Date().toISOString()}\n\n`;
+  markdownPlan += "| Ticker | Action | Approved Pct | Target Cash | Est Price | Est Qty |\n";
+  markdownPlan += "|---|---|---|---|---|---|\n";
+  orders.forEach(o => {
+    markdownPlan += `| \`${o.ticker}\` | **${o.action}** | ${(o.approved_pct * 100).toFixed(1)}% | ${o.estimated_cash.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} ${o.currency} | ${o.price.toLocaleString()} | ${o.estimated_quantity.toFixed(4)} |\n`;
+  });
+  if (orders.length === 0) {
+    markdownPlan += "| - | - | - | - | - | - |\n\n*No eligible buy orders.*";
+  }
+
+  return `
+    ${sessionHtml}
+    
+    <div class="section-grid" style="margin-bottom:14px">
+      <section class="panel">
+        <div class="panel-header">
+          <div><h2>수동 주문 전표 (Manual Buy Slips)</h2><p>실제 주문 체결 없이 운영자가 참고용으로 확인하는 slip 목록입니다.</p></div>
+          ${statusBadge(orders.length ? "success" : "not_evaluated")}
+        </div>
+        ${slipsHtml}
+      </section>
+      
+      <section class="panel">
+        <div class="panel-header">
+          <div><h2>Markdown 전표 복사</h2><p>카카오톡이나 노션 공유용 전표입니다.</p></div>
+          <button class="button button-secondary" type="button" data-command="${escapeHtml(markdownPlan)}">전표 복사</button>
+        </div>
+        <div class="panel-body">
+          <pre class="code" style="max-height: 250px; overflow-y: auto; font-size: 11px; white-space: pre-wrap; margin:0">${escapeHtml(markdownPlan)}</pre>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>종목별 실시간 준비도 및 경고 상태 (Signal Readiness)</h2><p>투자경고/거래정지/유의종목인 경우 eligible은 false로 자동 강제 차단됩니다.</p></div>
+        ${statusBadge("success", "준비도 검사 완료")}
+      </div>
+      ${readinessHtml}
     </section>
   `;
 }
@@ -1506,7 +1873,7 @@ function traderLensHeadline(summary) {
 function tossAccountHeadline(data, summary) {
   if (data.status === "missing_credentials") return "Toss API 키 설정이 필요합니다.";
   if (data.status === "no_accounts") return "조회 가능한 Toss 계좌가 없습니다.";
-  if (data.status === "failed") return "Toss 계좌 조회에 실패했습니다.";
+  if (data.status === "failed") return `Toss 계좌 조회에 실패했습니다: ${data.error || "이유 알 수 없음"}`;
   if (summary.failed_section_count) return "일부 계좌 GET 조회가 실패했습니다.";
   return `${summary.holding_count || 0}개 보유 종목을 첫 계좌 기준으로 조회했습니다.`;
 }
@@ -1994,6 +2361,14 @@ function bindPageActions() {
       bindPageActions();
     });
   });
+  document.querySelectorAll("[data-toss-subtab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.tossSubTab = button.dataset.tossSubtab || "overview";
+      localStorage.setItem("jayu.toss.subTab", state.tossSubTab);
+      renderTossAccountDashboard();
+      bindPageActions();
+    });
+  });
   const tossForm = document.querySelector("#toss-market-form");
   if (tossForm) {
     tossForm.addEventListener("submit", async (event) => {
@@ -2189,6 +2564,201 @@ function bindPageActions() {
     logSearchInput.addEventListener("input", filterLogs);
     logLevelFilter.addEventListener("change", filterLogs);
   }
+
+  // Portfolio sync action
+  const syncButtons = document.querySelectorAll("#btn-sync-portfolio, #btn-sync-portfolio-banner");
+  syncButtons.forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const confirmMsg = "현재 토스 실계좌 보유 종목 정보를 가져와서 로컬 portfolio.csv 파일을 갱신하시겠습니까?";
+      if (!confirm(confirmMsg)) return;
+
+      btn.disabled = true;
+      const originalText = btn.textContent;
+      btn.textContent = "동기화 진행 중...";
+
+      try {
+        const payload = {};
+        if (state.selectedTossAccount) {
+          payload.account = state.selectedTossAccount;
+        }
+
+        const res = await fetch("/api/v1/toss/reconciliation/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.status === "success") {
+          alert(data.message || "성공적으로 동기화되었습니다.");
+          // Clear cached portfolio and reconciliation data so they are re-fetched
+          state.tossPortfolio = null;
+          state.tossReconciliation = null;
+          loadPage();
+        } else {
+          alert(`동기화 실패: ${data.message || "오류가 발생했습니다."}`);
+        }
+      } catch (err) {
+        alert(`동기화 에러: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    });
+  });
+
+  // ── Analysis Tab Switching ─────────────────────────────────────────────────
+  document.querySelectorAll("[data-analysis-tab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.analysisTab = btn.dataset.analysisTab;
+      renderAnalysis();
+      bindPageActions();
+    });
+  });
+
+  // ── Market Overview ────────────────────────────────────────────────────────
+  const btnLoadMarket = document.querySelector("#btn-load-market");
+  if (btnLoadMarket) {
+    btnLoadMarket.addEventListener("click", async () => {
+      btnLoadMarket.disabled = true;
+      btnLoadMarket.textContent = "⏳ 로딩 중...";
+      try {
+        state.analysisMarketOverview = await api("/api/v1/analysis/market-overview");
+        renderAnalysis();
+        bindPageActions();
+      } catch (err) {
+        alert("시장 데이터 조회 실패: " + (err.message || "오류"));
+      } finally {
+        btnLoadMarket.disabled = false;
+        btnLoadMarket.textContent = "🔄 시장 데이터 새로고침";
+      }
+    });
+    // Auto-load market data on tab entry if not loaded yet
+    if (!state.analysisMarketOverview && state.analysisTab === "market") {
+      btnLoadMarket.click();
+    }
+  }
+
+  // ── Basic Analysis Fetch ───────────────────────────────────────────────────
+  const btnAnalysisFetch = document.querySelector("#btn-analysis-fetch");
+  if (btnAnalysisFetch) {
+    btnAnalysisFetch.addEventListener("click", async () => {
+      const ticker = document.querySelector("#analysis-ticker")?.value || state.analysisTicker || "SOXL";
+      const macro = document.querySelector("#analysis-macro")?.value || state.analysisMacro || "FEDFUNDS";
+      const period = document.querySelector("#analysis-period")?.value || state.analysisPeriod || "1y";
+      state.analysisTicker = ticker;
+      state.analysisMacro = macro;
+      state.analysisPeriod = period;
+      localStorage.setItem("jayu.analysis.ticker", ticker);
+      localStorage.setItem("jayu.analysis.macro", macro);
+      localStorage.setItem("jayu.analysis.period", period);
+      state.analysis = null;
+      btnAnalysisFetch.disabled = true;
+      btnAnalysisFetch.textContent = "⏳ 조회 중...";
+      try {
+        state.analysis = await api(`/api/v1/analysis?ticker=${encodeURIComponent(ticker)}&macro_series=${encodeURIComponent(macro)}&period=${encodeURIComponent(period)}`);
+        renderAnalysis();
+        bindPageActions();
+      } catch (err) {
+        alert("분석 조회 실패: " + (err.message || "오류"));
+      } finally {
+        btnAnalysisFetch.disabled = false;
+        btnAnalysisFetch.textContent = "📊 조회";
+      }
+    });
+  }
+
+  // ── Technical Indicators Fetch ─────────────────────────────────────────────
+  const btnTechFetch = document.querySelector("#btn-tech-fetch");
+  if (btnTechFetch) {
+    btnTechFetch.addEventListener("click", async () => {
+      const ticker = document.querySelector("#tech-ticker")?.value || state.analysisTicker || "SOXL";
+      const period = document.querySelector("#tech-period")?.value || state.analysisPeriod || "1y";
+      state.analysisTicker = ticker;
+      state.analysisPeriod = period;
+      btnTechFetch.disabled = true;
+      btnTechFetch.textContent = "⏳ 계산 중...";
+      try {
+        state.analysisTechnical = await api(`/api/v1/analysis/technical?ticker=${encodeURIComponent(ticker)}&period=${encodeURIComponent(period)}`);
+        renderAnalysis();
+        bindPageActions();
+      } catch (err) {
+        alert("기술적 지표 조회 실패: " + (err.message || "오류"));
+      } finally {
+        btnTechFetch.disabled = false;
+        btnTechFetch.textContent = "📊 조회";
+      }
+    });
+  }
+
+  // ── Multi-Compare Fetch ────────────────────────────────────────────────────
+  const btnCompareFetch = document.querySelector("#btn-compare-fetch");
+  if (btnCompareFetch) {
+    btnCompareFetch.addEventListener("click", async () => {
+      const rawTickers = document.querySelector("#compare-tickers")?.value || "SOXL,TQQQ,NVDA,QQQ,SPY";
+      const period = document.querySelector("#compare-period")?.value || state.analysisPeriod || "1y";
+      state.analysisPeriod = period;
+      btnCompareFetch.disabled = true;
+      btnCompareFetch.textContent = "⏳ 비교 중...";
+      try {
+        const tickers = rawTickers.split(",").map(t => t.trim()).filter(Boolean).join(",");
+        state.analysisCompare = await api(`/api/v1/analysis/multi-compare?tickers=${encodeURIComponent(tickers)}&period=${encodeURIComponent(period)}`);
+        renderAnalysis();
+        bindPageActions();
+      } catch (err) {
+        alert("비교 조회 실패: " + (err.message || "오류"));
+      } finally {
+        btnCompareFetch.disabled = false;
+        btnCompareFetch.textContent = "📊 비교";
+      }
+    });
+  }
+
+  // ── Portfolio Stats Fetch ──────────────────────────────────────────────────
+  const btnPortfolioFetch = document.querySelector("#btn-portfolio-fetch");
+  if (btnPortfolioFetch) {
+    btnPortfolioFetch.addEventListener("click", async () => {
+      btnPortfolioFetch.disabled = true;
+      btnPortfolioFetch.textContent = "⏳ 로딩 중...";
+      try {
+        const run = state.runId ? `?run_id=${encodeURIComponent(state.runId)}` : "";
+        state.analysisPortfolio = await api(`/api/v1/analysis/portfolio-stats${run}`);
+        renderAnalysis();
+        bindPageActions();
+      } catch (err) {
+        alert("포트폴리오 성과 조회 실패: " + (err.message || "오류"));
+      } finally {
+        btnPortfolioFetch.disabled = false;
+        btnPortfolioFetch.textContent = "📊 실행 데이터 조회";
+      }
+    });
+    // Auto-load if not loaded yet
+    if (!state.analysisPortfolio && state.analysisTab === "portfolio") {
+      btnPortfolioFetch.click();
+    }
+  }
+
+  // ── Economic Calendar Fetch ────────────────────────────────────────────────
+  const btnCalendarFetch = document.querySelector("#btn-calendar-fetch");
+  if (btnCalendarFetch) {
+    btnCalendarFetch.addEventListener("click", async () => {
+      btnCalendarFetch.disabled = true;
+      btnCalendarFetch.textContent = "⏳ 로딩 중...";
+      try {
+        state.analysisCalendar = await api("/api/v1/analysis/economic-calendar");
+        renderAnalysis();
+        bindPageActions();
+      } catch (err) {
+        alert("경제 캘린더 조회 실패: " + (err.message || "오류"));
+      } finally {
+        btnCalendarFetch.disabled = false;
+        btnCalendarFetch.textContent = "📅 캘린더 로드";
+      }
+    });
+    // Auto-load if not loaded yet
+    if (!state.analysisCalendar && state.analysisTab === "calendar") {
+      btnCalendarFetch.click();
+    }
+  }
 }
 
 
@@ -2226,7 +2796,7 @@ function setupApiMonitoringRefreshTimer() {
 }
 
 function navigate(page) {
-  if (!["overview", "data-quality", "risk", "signals", "trader-lens", "promotion", "settings", "toss-account", "toss", "api-monitoring"].includes(page)) return;
+  if (!["overview", "data-quality", "risk", "signals", "trader-lens", "promotion", "settings", "toss-account", "toss", "api-monitoring", "analysis"].includes(page)) return;
   clearApiMonitoringRefreshTimer();
   state.page = page;
   localStorage.setItem("jayu.dashboard.activePage", page);
@@ -2279,3 +2849,1269 @@ document.querySelectorAll(".nav-item").forEach((item) => {
 });
 
 loadPage();
+
+// ─── Analysis Page ────────────────────────────────────────────────────────────
+
+const ANALYSIS_TABS = [
+  { id: "market",    label: "🌐 시장 현황",       key: "analysisMarketOverview" },
+  { id: "basic",     label: "📊 기본 분석",        key: "analysis" },
+  { id: "technical", label: "📈 기술적 지표",      key: "analysisTechnical" },
+  { id: "compare",   label: "⚖️ 멀티 비교",       key: "analysisCompare" },
+  { id: "portfolio", label: "🏆 포트폴리오 성과", key: "analysisPortfolio" },
+  { id: "calendar",  label: "📅 경제 캘린더",      key: "analysisCalendar" },
+];
+
+const TICKER_OPTIONS = ["SOXL","TQQQ","TSLA","AAPL","NVDA","NVDL","IONQ","QBTS","QQQ","SPY","MSFT","GOOGL","AMZN","META","AMD"];
+const MACRO_OPTIONS = [
+  { id: "FEDFUNDS",  label: "기준금리 (Fed Funds)" },
+  { id: "CPIAUCSL",  label: "소비자물가지수 (CPI)" },
+  { id: "UNRATE",    label: "실업률" },
+  { id: "T10Y2Y",    label: "10년-2년 국채 스프레드" },
+  { id: "GDPC1",     label: "실질 GDP" },
+  { id: "M2SL",      label: "M2 통화량" },
+  { id: "BAMLH0A0HYM2", label: "하이일드 스프레드" },
+];
+const PERIOD_OPTIONS = [
+  { id: "3m", label: "3개월" }, { id: "6m", label: "6개월" },
+  { id: "1y", label: "1년" }, { id: "2y", label: "2년" },
+  { id: "5y", label: "5년" },
+];
+
+// ── formatters ─────────────────────────────────────────────────────────────
+const _$ = (v, d = 2) => v == null ? "-" : `$${Number(v).toFixed(d)}`;
+const _pct = (v, d = 2) => v == null ? "-" : `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(d)}%`;
+const _num = (v, d = 2) => v == null ? "-" : Number(v).toFixed(d);
+const _chgCls = (v) => Number(v) > 0 ? "analysis-positive" : Number(v) < 0 ? "analysis-negative" : "";
+
+// ── SVG helpers ────────────────────────────────────────────────────────────
+function _svgScale(vals, h, pad = 0.08) {
+  const clean = vals.filter(v => v != null && !isNaN(v));
+  if (!clean.length) return { min: 0, max: 1, toY: () => h / 2 };
+  const mn = Math.min(...clean), mx = Math.max(...clean);
+  const p = (mx - mn) * pad || Math.abs(mn) * 0.05 || 1;
+  const lo = mn - p, hi = mx + p;
+  return { min: lo, max: hi, toY: (v) => h - ((v - lo) / (hi - lo)) * h };
+}
+function _svgLine(pts, stroke, sw = 1.8, dash = "") {
+  if (!pts.length) return "";
+  return `<polyline fill="none" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round" ${dash ? `stroke-dasharray="${dash}"` : ""} points="${pts.join(" ")}"/>`;
+}
+function _svgArea(pts, fill) {
+  if (pts.length < 2) return "";
+  const first = pts[0].split(","), last = pts[pts.length - 1].split(",");
+  return `<polygon fill="${fill}" points="${pts.join(" ")} ${last[0]},9999 ${first[0]},9999"/>`;
+}
+
+// ── Tab render coordinator ─────────────────────────────────────────────────
+function renderAnalysis() {
+  const tab = state.analysisTab || "market";
+  const ticker = state.analysisTicker || "SOXL";
+  const period = state.analysisPeriod || "1y";
+  const macro = state.analysisMacro || "FEDFUNDS";
+
+  const tabBar = `
+    <div class="analysis-tab-bar">
+      ${ANALYSIS_TABS.map(t => `
+        <button class="analysis-tab-btn ${t.id === tab ? "is-active" : ""}"
+          data-analysis-tab="${t.id}" type="button">${t.label}</button>
+      `).join("")}
+    </div>`;
+
+  const pageHead = `
+    <div class="page-heading" style="margin-bottom:12px">
+      <div><h1>📈 주식 & 경제 분석</h1>
+        <p>Yahoo Finance · FRED · 기술적 지표 · 섹터 현황을 통합 분석합니다.</p>
+      </div>
+    </div>`;
+
+  els.root.innerHTML = pageHead + tabBar + `<div id="analysis-tab-content"></div>`;
+
+  const content = document.querySelector("#analysis-tab-content");
+
+  if (tab === "market") {
+    renderAnalysisMarket(content);
+  } else if (tab === "basic") {
+    renderAnalysisBasic(content, ticker, macro, period);
+  } else if (tab === "technical") {
+    renderAnalysisTechnical(content, ticker, period);
+  } else if (tab === "compare") {
+    renderAnalysisCompare(content, period);
+  } else if (tab === "portfolio") {
+    renderAnalysisPortfolio(content);
+  } else if (tab === "calendar") {
+    renderAnalysisCalendar(content);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 1: 시장 현황
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAnalysisMarket(container) {
+  const data = state.analysisMarketOverview || {};
+
+  if (!data.indices) {
+    container.innerHTML = `<div class="analysis-loading">⏳ 시장 데이터를 불러오는 중... <button id="btn-load-market" class="button button-primary" style="margin-left:12px">조회</button></div>`;
+    return;
+  }
+
+  const indices = data.indices || [];
+  const sectors = data.sectors || [];
+  const fg = data.fear_greed || { value: 50, label: "중립", vix: 20 };
+
+  // Fear & Greed gauge (SVG semicircle)
+  const fgAngle = (fg.value / 100) * 180 - 90; // -90 to 90 degrees
+  const r = 54, cx = 70, cy = 68;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const needle = {
+    x: cx + r * 0.85 * Math.cos(toRad(fgAngle)),
+    y: cy + r * 0.85 * Math.sin(toRad(fgAngle)),
+  };
+  const fgColor = fg.value >= 70 ? "#22c55e" : fg.value >= 55 ? "#84cc16" : fg.value >= 40 ? "#eab308" : fg.value >= 25 ? "#f97316" : "#ef4444";
+
+  const fgGauge = `
+    <svg viewBox="0 0 140 80" style="width:140px;height:80px" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="fgGrad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#ef4444"/>
+          <stop offset="40%" stop-color="#f97316"/>
+          <stop offset="60%" stop-color="#eab308"/>
+          <stop offset="80%" stop-color="#84cc16"/>
+          <stop offset="100%" stop-color="#22c55e"/>
+        </linearGradient>
+      </defs>
+      <path d="M16,68 A54,54 0 0,1 124,68" fill="none" stroke="url(#fgGrad)" stroke-width="10" stroke-linecap="round"/>
+      <line x1="${cx}" y1="${cy}" x2="${needle.x.toFixed(1)}" y2="${needle.y.toFixed(1)}" stroke="#1e293b" stroke-width="2.5" stroke-linecap="round"/>
+      <circle cx="${cx}" cy="${cy}" r="4" fill="#1e293b"/>
+      <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="10" font-weight="700" fill="${fgColor}">${fg.label}</text>
+      <text x="${cx}" y="${cy + 25}" text-anchor="middle" font-size="9" fill="#64748b">${fg.value} / 100</text>
+    </svg>`;
+
+  // Sparkline SVG
+  const sparkSvg = (vals, positive) => {
+    if (!vals || vals.length < 2) return `<svg width="60" height="20"></svg>`;
+    const s = _svgScale(vals, 16, 0.05);
+    const pts = vals.map((v, i) => `${(i / (vals.length - 1) * 58 + 1).toFixed(1)},${(s.toY(v) + 2).toFixed(1)}`);
+    const col = positive ? "#22c55e" : "#ef4444";
+    return `<svg width="60" height="20" xmlns="http://www.w3.org/2000/svg" style="overflow:visible">${_svgLine(pts, col, 1.5)}</svg>`;
+  };
+
+  // Sector heatmap
+  const sectorHeatmap = sectors.map(s => {
+    const pct = s.change_pct || 0;
+    const intensity = Math.min(Math.abs(pct) / 3, 1);
+    const bg = pct > 0
+      ? `rgba(34,197,94,${0.15 + intensity * 0.45})`
+      : `rgba(239,68,68,${0.15 + intensity * 0.45})`;
+    const textColor = pct > 0 ? "#14532d" : "#7f1d1d";
+    return `<div class="sector-cell" style="background:${bg};color:${textColor}">
+      <span class="sector-name">${s.name}</span>
+      <span class="sector-sym">${s.symbol}</span>
+      <span class="sector-pct">${_pct(pct)}</span>
+    </div>`;
+  }).join("");
+
+  container.innerHTML = `
+    <div class="analysis-market-grid">
+      <!-- Fear & Greed + VIX -->
+      <section class="panel analysis-fg-panel">
+        <div class="panel-header"><div><h2>🎯 공포 & 탐욕 지수</h2><p>VIX 기반 시장 심리 추정</p></div></div>
+        <div class="panel-body" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+          ${fgGauge}
+          <div>
+            <div style="font-size:28px;font-weight:800;color:${fgColor}">${fg.value}</div>
+            <div style="font-size:13px;font-weight:600;color:${fgColor}">${fg.label}</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px">VIX = ${_num(fg.vix)}</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Reload button -->
+      <div style="grid-column:1/-1;display:flex;justify-content:flex-end;margin-bottom:-6px">
+        <button id="btn-load-market" class="button button-primary" type="button">🔄 시장 데이터 새로고침</button>
+      </div>
+
+      <!-- Major Indices -->
+      <section class="panel" style="grid-column:1/-1">
+        <div class="panel-header"><div><h2>📊 주요 지수 & 자산</h2></div></div>
+        <div class="panel-body" style="overflow-x:auto">
+          <div class="analysis-index-grid">
+            ${indices.map(idx => {
+              const up = idx.change_pct >= 0;
+              return `<div class="analysis-index-card ${up ? "up" : "down"}">
+                <div class="idx-name">${escapeHtml(idx.name)}</div>
+                <div class="idx-price">${_num(idx.price, idx.price > 1000 ? 0 : 2)}</div>
+                <div class="idx-chg ${_chgCls(idx.change_pct)}">${_pct(idx.change_pct)}</div>
+                <div class="idx-spark">${sparkSvg(idx.sparkline, up)}</div>
+              </div>`;
+            }).join("")}
+          </div>
+        </div>
+      </section>
+
+      <!-- Sector Heatmap -->
+      <section class="panel" style="grid-column:1/-1">
+        <div class="panel-header"><div><h2>🗺️ 섹터 히트맵</h2><p>전일 대비 섹터 ETF 등락률</p></div></div>
+        <div class="panel-body">
+          <div class="sector-heatmap">${sectorHeatmap}</div>
+        </div>
+      </section>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 2: 기본 분석 (기존 개선)
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAnalysisBasic(container, ticker, macro, period) {
+  const data = state.analysis || {};
+  const stock = data.stock || {};
+  const macroData = data.macro || {};
+  const news = data.news || [];
+  const toss = data.toss || {};
+
+  const macroLabel = MACRO_OPTIONS.find(m => m.id === macro)?.label || macro;
+
+  const controlPanel = `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>조회 설정</h2></div></div>
+      <div class="panel-body">
+        <div class="analysis-controls">
+          <div class="analysis-control-group">
+            <label>종목 (Ticker)</label>
+            <select id="analysis-ticker" class="analysis-select">
+              ${TICKER_OPTIONS.map(t => `<option value="${t}" ${t===ticker?"selected":""}>${t}</option>`).join("")}
+            </select>
+          </div>
+          <div class="analysis-control-group">
+            <label>경제 지표 (FRED)</label>
+            <select id="analysis-macro" class="analysis-select">
+              ${MACRO_OPTIONS.map(s => `<option value="${s.id}" ${s.id===macro?"selected":""}>${s.label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="analysis-control-group">
+            <label>기간</label>
+            <select id="analysis-period" class="analysis-select">
+              ${PERIOD_OPTIONS.map(p => `<option value="${p.id}" ${p.id===period?"selected":""}>${p.label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="analysis-control-group" style="align-self:flex-end">
+            <button id="btn-analysis-fetch" class="button button-primary" type="button" style="height:38px">📊 조회</button>
+          </div>
+        </div>
+      </div>
+    </section>`;
+
+  if (!data.stock) {
+    container.innerHTML = controlPanel + `<div class="analysis-loading">종목, 지표, 기간을 선택 후 조회 버튼을 누르세요.</div>`;
+    return;
+  }
+
+  const sentimentBadge = (s) => {
+    if (s === "Positive") return `<span class="analysis-badge-pos">▲ 긍정</span>`;
+    if (s === "Negative") return `<span class="analysis-badge-neg">▼ 부정</span>`;
+    return `<span class="analysis-badge-neu">— 중립</span>`;
+  };
+
+  const newsHtml = news.length ? news.slice(0, 10).map(n => `
+    <article class="analysis-news-item">
+      <div class="analysis-news-meta">
+        ${sentimentBadge(n.sentiment)}
+        <span class="analysis-news-source">${escapeHtml(n.source||"-")}</span>
+        <span class="analysis-news-date">${n.published_at?n.published_at.slice(0,10):"-"}</span>
+      </div>
+      <a class="analysis-news-title" href="${escapeHtml(n.url||"#")}" target="_blank" rel="noopener">${escapeHtml(n.headline||"제목 없음")}</a>
+    </article>`).join("") : `<p style="color:var(--muted);padding:10px 0">Finnhub 또는 Alpha Vantage API 키가 설정되어 있지 않습니다.</p>`;
+
+  const chartHtml = _renderDualAxisChart(stock.history || [], macroData.history || []);
+
+  let tossHtml = "";
+  if (toss.positions?.length) {
+    tossHtml = `<section class="panel" style="margin-top:14px">
+      <div class="panel-header"><div><h2>📂 Toss 보유 종목</h2><p>${escapeHtml(toss.account_no||"")}</p></div></div>
+      <div class="panel-body" style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="border-bottom:2px solid var(--border)">
+            <th style="text-align:left;padding:7px 10px">종목</th><th style="text-align:right;padding:7px 10px">수량</th>
+            <th style="text-align:right;padding:7px 10px">매수가</th><th style="text-align:right;padding:7px 10px">현재가</th>
+            <th style="text-align:right;padding:7px 10px">손익</th><th style="text-align:right;padding:7px 10px">수익률</th>
+          </tr></thead>
+          <tbody>${toss.positions.map(pos => {
+            const plr = parseFloat(pos.profit_loss_rate||0);
+            const c = plr>=0?"color:var(--success)":"color:var(--failed)";
+            return `<tr style="border-bottom:1px solid var(--border)">
+              <td style="padding:6px 10px;font-weight:600">${escapeHtml(pos.symbol||"-")}</td>
+              <td style="text-align:right;padding:6px 10px">${pos.qty??"-"}</td>
+              <td style="text-align:right;padding:6px 10px">${_$(pos.buy_price)}</td>
+              <td style="text-align:right;padding:6px 10px">${_$(pos.current_price)}</td>
+              <td style="text-align:right;padding:6px 10px;${c}">${_num(pos.profit_loss)}</td>
+              <td style="text-align:right;padding:6px 10px;font-weight:600;${c}">${_pct(plr)}</td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table>
+      </div>
+    </section>`;
+  }
+
+  container.innerHTML = controlPanel + `
+    <section class="metric-grid" style="margin-bottom:14px">
+      <div class="metric-card">
+        <span class="metric-label">현재가</span>
+        <span class="metric-value" style="font-size:22px">${_$(stock.latest_price)}</span>
+        <span class="metric-sub">${escapeHtml(stock.ticker||ticker)}</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">전일 대비</span>
+        <span class="metric-value ${_chgCls(stock.change_pct)}" style="font-size:22px">${_pct(stock.change_pct)}</span>
+        <span class="metric-sub">일간 수익률</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">기간 최고가</span>
+        <span class="metric-value">${_$(stock.fifty_two_week_high)}</span>
+        <span class="metric-sub">구간 내 최고</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">기간 최저가</span>
+        <span class="metric-value">${_$(stock.fifty_two_week_low)}</span>
+        <span class="metric-sub">구간 내 최저</span>
+      </div>
+      ${!macroData.error ? `
+      <div class="metric-card">
+        <span class="metric-label">${escapeHtml((macroData.name||macro).slice(0,32))}</span>
+        <span class="metric-value">${_num(macroData.latest_value,2)}</span>
+        <span class="metric-sub">${escapeHtml(macroData.latest_date||"-")}</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">지표 변화</span>
+        <span class="metric-value ${_chgCls(macroData.change)}">${macroData.change!=null?(macroData.change>=0?"+":"")+_num(macroData.change,3):"-"}</span>
+        <span class="metric-sub">전기 대비</span>
+      </div>` : ""}
+    </section>
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>가격 & ${macroLabel} 차트</h2></div></div>
+      <div class="panel-body" style="padding:0 4px">${chartHtml}</div>
+    </section>
+    ${tossHtml}
+    <section class="panel" style="margin-top:14px">
+      <div class="panel-header"><div><h2>📰 뉴스 & 감성 분석</h2></div></div>
+      <div class="panel-body"><div class="analysis-news-list">${newsHtml}</div></div>
+    </section>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 3: 기술적 지표
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAnalysisTechnical(container, ticker, period) {
+  const data = state.analysisTechnical || {};
+
+  const controlPanel = `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>기술적 지표 설정</h2></div></div>
+      <div class="panel-body">
+        <div class="analysis-controls">
+          <div class="analysis-control-group">
+            <label>종목</label>
+            <select id="tech-ticker" class="analysis-select">
+              ${TICKER_OPTIONS.map(t => `<option value="${t}" ${t===ticker?"selected":""}>${t}</option>`).join("")}
+            </select>
+          </div>
+          <div class="analysis-control-group">
+            <label>기간</label>
+            <select id="tech-period" class="analysis-select">
+              ${PERIOD_OPTIONS.map(p => `<option value="${p.id}" ${p.id===period?"selected":""}>${p.label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="analysis-control-group" style="align-self:flex-end">
+            <button id="btn-tech-fetch" class="button button-primary" style="height:38px">📊 조회</button>
+          </div>
+        </div>
+      </div>
+    </section>`;
+
+  if (!data.records) {
+    container.innerHTML = controlPanel + `<div class="analysis-loading">종목을 선택하고 조회 버튼을 누르세요.</div>`;
+    return;
+  }
+
+  const recs = data.records || [];
+  const regime = data.latest_regime || "unknown";
+  const regimeColor = regime === "bull" ? "#22c55e" : regime === "bear" ? "#ef4444" : "#eab308";
+  const regimeLabel = regime === "bull" ? "🐂 강세장 (Bull)" : regime === "bear" ? "🐻 약세장 (Bear)" : "↔️ 횡보장 (Sideways)";
+
+  // Summary cards
+  const rsi = data.latest_rsi;
+  const rsiColor = rsi == null ? "" : rsi > 70 ? "#ef4444" : rsi < 30 ? "#22c55e" : "#3b82f6";
+  const rsiLabel = rsi == null ? "-" : rsi > 70 ? "과매수" : rsi < 30 ? "과매도" : "중립";
+
+  // Generate charts
+  const dates = recs.map(r => r.date);
+  const chartHtml = _renderTechnicalCharts(recs, dates);
+
+  container.innerHTML = controlPanel + `
+    <section class="metric-grid" style="margin-bottom:14px">
+      <div class="metric-card">
+        <span class="metric-label">현재가</span>
+        <span class="metric-value" style="font-size:22px">${_$(data.latest_price)}</span>
+        <span class="metric-sub ${_chgCls(data.change_pct)}">${_pct(data.change_pct)} 전일 대비</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">시장 레짐</span>
+        <span class="metric-value" style="font-size:16px;color:${regimeColor}">${regimeLabel}</span>
+        <span class="metric-sub">EMA200 기준</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">RSI(14)</span>
+        <span class="metric-value" style="color:${rsiColor}">${_num(rsi)}</span>
+        <span class="metric-sub" style="color:${rsiColor}">${rsiLabel}</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">EMA 20 / 50 / 200</span>
+        <span class="metric-value" style="font-size:13px">${_$(data.latest_ema20,2)} / ${_$(data.latest_ema50,2)}</span>
+        <span class="metric-sub">EMA200 = ${_$(data.latest_ema200,2)}</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">ATR(14) 일간 변동성</span>
+        <span class="metric-value">${_$(data.latest_atr)}</span>
+        <span class="metric-sub">±${data.latest_atr && data.latest_price ? _num(data.latest_atr/data.latest_price*100)+"%" : "-"}</span>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><div><h2>기술적 지표 차트</h2><p>가격·볼린저·EMA / MACD / RSI / 거래량</p></div></div>
+      <div class="panel-body" style="padding:0 4px">${chartHtml}</div>
+    </section>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 4: 멀티 비교
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAnalysisCompare(container, period) {
+  const data = state.analysisCompare || {};
+  const COMPARE_COLORS = ["#6366f1","#f59e0b","#22c55e","#ef4444","#06b6d4","#d946ef"];
+
+  const defaultTickers = "SOXL,TQQQ,NVDA,QQQ,SPY";
+
+  const controlPanel = `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>멀티 종목 비교</h2><p>최대 6개 종목의 정규화 수익률 (시작=100)</p></div></div>
+      <div class="panel-body">
+        <div class="analysis-controls">
+          <div class="analysis-control-group" style="flex:3;min-width:220px">
+            <label>종목 (쉼표로 구분, 최대 6개)</label>
+            <input id="compare-tickers" class="analysis-select" type="text" value="${escapeHtml(data.tickers?.join(",")||defaultTickers)}" placeholder="SOXL,TQQQ,NVDA,QQQ,SPY"/>
+          </div>
+          <div class="analysis-control-group">
+            <label>기간</label>
+            <select id="compare-period" class="analysis-select">
+              ${PERIOD_OPTIONS.map(p => `<option value="${p.id}" ${p.id===period?"selected":""}>${p.label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="analysis-control-group" style="align-self:flex-end">
+            <button id="btn-compare-fetch" class="button button-primary" style="height:38px">📊 비교</button>
+          </div>
+        </div>
+      </div>
+    </section>`;
+
+  if (!data.dates) {
+    container.innerHTML = controlPanel + `<div class="analysis-loading">종목과 기간을 설정하고 비교 버튼을 누르세요.</div>`;
+    return;
+  }
+
+  const dates = data.dates || [];
+  const tickers = data.tickers || [];
+  const series = data.series || {};
+  const summary = data.summary || [];
+
+  // Multi-line chart
+  const W = 900, H = 260, PL = 55, PR = 20, PT = 20, PB = 38;
+  const innerW = W - PL - PR, innerH = H - PT - PB;
+  const allVals = tickers.flatMap(t => (series[t]||[]).filter(v=>v!=null));
+  const sc = _svgScale(allVals, innerH, 0.05);
+
+  const dateToX = (i) => PL + (i / Math.max(dates.length - 1, 1)) * innerW;
+  const valToY = (v) => PT + sc.toY(v);
+
+  const lines = tickers.map((t, ti) => {
+    const pts = (series[t]||[]).map((v,i) => v!=null ? `${dateToX(i).toFixed(1)},${valToY(v).toFixed(1)}` : null).filter(Boolean);
+    return _svgLine(pts, COMPARE_COLORS[ti % COMPARE_COLORS.length], 2);
+  });
+
+  // Baseline 100 line
+  const baseY = valToY(100);
+
+  // X-axis labels
+  let xLabels = "";
+  const step = Math.max(1, Math.floor(dates.length / 5));
+  for (let i = 0; i < dates.length; i += step) {
+    xLabels += `<text x="${dateToX(i).toFixed(1)}" y="${PT+innerH+14}" font-size="10" fill="#94a3b8" text-anchor="middle">${dates[i].slice(0,7)}</text>`;
+  }
+
+  // Y-axis labels
+  let yLabels = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = sc.min + (i / 4) * (sc.max - sc.min);
+    const y = PT + sc.toY(v);
+    yLabels += `<text x="${PL-5}" y="${y.toFixed(1)}" font-size="10" fill="#94a3b8" text-anchor="end" dominant-baseline="middle">${v.toFixed(0)}</text>`;
+  }
+
+  // Legend
+  const legend = tickers.map((t, ti) => `
+    <span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:12px;font-weight:600;color:${COMPARE_COLORS[ti]}">
+      <span style="width:18px;height:2px;display:inline-block;background:${COMPARE_COLORS[ti]};border-radius:1px"></span>${t}
+    </span>`).join("");
+
+  container.innerHTML = controlPanel + `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>정규화 수익률 차트 (시작 = 100)</h2></div></div>
+      <div class="panel-body" style="padding:4px">
+        <div style="margin-bottom:8px">${legend}</div>
+        <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-height:280px;display:block">
+          <rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}" fill="#fafbfc" rx="4"/>
+          <line x1="${PL}" y1="${baseY.toFixed(1)}" x2="${PL+innerW}" y2="${baseY.toFixed(1)}" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+          ${[0,1,2,3,4].map(i => {
+            const v = sc.min + (i/4)*(sc.max-sc.min);
+            const y = PT + sc.toY(v);
+            return `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${PL+innerW}" y2="${y.toFixed(1)}" stroke="#e2e8f0" stroke-width="0.7"/>`;
+          }).join("")}
+          <clipPath id="compareClip"><rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}"/></clipPath>
+          <g clip-path="url(#compareClip)">${lines.join("")}</g>
+          <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${PT+innerH}" stroke="#cbd5e1" stroke-width="1"/>
+          <line x1="${PL}" y1="${PT+innerH}" x2="${PL+innerW}" y2="${PT+innerH}" stroke="#cbd5e1" stroke-width="1"/>
+          ${yLabels}${xLabels}
+        </svg>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><div><h2>기간 수익률 순위</h2></div></div>
+      <div class="panel-body" style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          <thead><tr style="border-bottom:2px solid var(--border)">
+            <th style="text-align:left;padding:8px 10px">순위</th>
+            <th style="text-align:left;padding:8px 10px">종목</th>
+            <th style="text-align:right;padding:8px 10px">정규화 현재값</th>
+            <th style="text-align:right;padding:8px 10px">기간 수익률</th>
+            <th style="padding:8px 10px;min-width:120px">게이지</th>
+          </tr></thead>
+          <tbody>
+            ${summary.map((s, i) => {
+              const ret = s.total_return_pct;
+              const pct100 = Math.max(Math.min(Math.abs(ret||0)/50*100, 100), 0);
+              const barColor = ret >= 0 ? "#22c55e" : "#ef4444";
+              const color = COMPARE_COLORS[tickers.indexOf(s.ticker) % COMPARE_COLORS.length];
+              return `<tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:7px 10px;color:var(--muted)">#${i+1}</td>
+                <td style="padding:7px 10px;font-weight:700;color:${color}">${escapeHtml(s.ticker)}</td>
+                <td style="text-align:right;padding:7px 10px">${_num(s.latest_norm,2)}</td>
+                <td style="text-align:right;padding:7px 10px;font-weight:700;${ret>=0?"color:#15803d":"color:#b91c1c"}">${_pct(ret)}</td>
+                <td style="padding:7px 10px">
+                  <div style="background:#e2e8f0;border-radius:4px;height:8px;overflow:hidden">
+                    <div style="height:100%;width:${pct100}%;background:${barColor};border-radius:4px;transition:width 0.5s"></div>
+                  </div>
+                </td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 5: 포트폴리오 성과
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAnalysisPortfolio(container) {
+  const data = state.analysisPortfolio || {};
+  const agg = data.aggregate || {};
+  const runs = data.runs || [];
+  const curve = data.equity_curve || [];
+
+  const loadBtn = `<div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+    <button id="btn-portfolio-fetch" class="button button-primary" type="button">📊 실행 데이터 조회</button>
+  </div>`;
+
+  if (!data.aggregate) {
+    container.innerHTML = loadBtn + `<div class="analysis-loading">전략 실행 성과 데이터를 불러옵니다.</div>`;
+    return;
+  }
+
+  // Equity curve chart
+  let eqChart = "<p style='color:var(--muted);font-size:13px'>에쿼티 커브 데이터 없음</p>";
+  if (curve.length > 1) {
+    const W = 900, H = 180, PL = 70, PR = 20, PT = 10, PB = 30;
+    const innerW = W - PL - PR, innerH = H - PT - PB;
+    const eqVals = curve.map(r => r.equity).filter(v => v!=null);
+    const sc = _svgScale(eqVals, innerH, 0.05);
+    const dateIdxs = curve.map((_, i) => i);
+    const pts = curve.map((r,i) =>
+      r.equity != null ? `${(PL + i/(curve.length-1)*innerW).toFixed(1)},${(PT+sc.toY(r.equity)).toFixed(1)}` : null
+    ).filter(Boolean);
+    const areaPts = [...pts, `${PL+innerW},${PT+innerH}`, `${PL},${PT+innerH}`].join(" ");
+    const step = Math.max(1, Math.floor(curve.length / 5));
+    let xL = "", yL = "";
+    for (let i = 0; i < curve.length; i += step) {
+      const x = PL + i/(curve.length-1)*innerW;
+      const d = curve[i].date?.slice(0,10)||"";
+      xL += `<text x="${x.toFixed(1)}" y="${PT+innerH+14}" font-size="10" fill="#94a3b8" text-anchor="middle">${d.slice(0,7)}</text>`;
+    }
+    for (let i = 0; i <= 4; i++) {
+      const v = sc.min + (i/4)*(sc.max-sc.min);
+      const y = PT + sc.toY(v);
+      yL += `<text x="${PL-5}" y="${y.toFixed(1)}" font-size="10" fill="#94a3b8" text-anchor="end" dominant-baseline="middle">$${(v/1000).toFixed(0)}K</text>`;
+    }
+    eqChart = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-height:200px;display:block">
+      <defs>
+        <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#6366f1" stop-opacity="0.3"/>
+          <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+        </linearGradient>
+        <clipPath id="eqClip"><rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}"/></clipPath>
+      </defs>
+      <rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}" fill="#fafbfc" rx="4"/>
+      <g clip-path="url(#eqClip)">
+        <polygon fill="url(#eqGrad)" points="${areaPts}"/>
+        ${_svgLine(pts, "#6366f1", 2)}
+      </g>
+      <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${PT+innerH}" stroke="#cbd5e1" stroke-width="1"/>
+      <line x1="${PL}" y1="${PT+innerH}" x2="${PL+innerW}" y2="${PT+innerH}" stroke="#cbd5e1" stroke-width="1"/>
+      ${yL}${xL}
+    </svg>`;
+  }
+
+  container.innerHTML = loadBtn + `
+    <section class="metric-grid" style="margin-bottom:14px">
+      <div class="metric-card">
+        <span class="metric-label">분석 실행 수</span>
+        <span class="metric-value" style="font-size:24px">${agg.run_count??"-"}</span>
+        <span class="metric-sub">최근 10개 기준</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">평균 Sharpe 비율</span>
+        <span class="metric-value ${_chgCls(agg.avg_sharpe)}">${_num(agg.avg_sharpe)}</span>
+        <span class="metric-sub">연환산 일간</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">평균 Sortino 비율</span>
+        <span class="metric-value ${_chgCls(agg.avg_sortino)}">${_num(agg.avg_sortino)}</span>
+        <span class="metric-sub">하방 표준편차 기준</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">평균 승률</span>
+        <span class="metric-value">${_num(agg.avg_win_rate)}%</span>
+        <span class="metric-sub">전체 매매 기준</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">평균 MDD</span>
+        <span class="metric-value analysis-negative">-${_num(agg.avg_max_drawdown)}%</span>
+        <span class="metric-sub">최대 낙폭</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">평균 수익률</span>
+        <span class="metric-value ${_chgCls(agg.avg_total_return)}">${_pct(agg.avg_total_return)}</span>
+        <span class="metric-sub">누적 기준</span>
+      </div>
+    </section>
+    ${curve.length > 1 ? `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>에쿼티 커브</h2><p>최근 실행 자본금 추이</p></div></div>
+      <div class="panel-body" style="padding:0 4px">${eqChart}</div>
+    </section>` : ""}
+    <section class="panel">
+      <div class="panel-header"><div><h2>실행 이력</h2></div></div>
+      <div class="panel-body" style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="border-bottom:2px solid var(--border)">
+            <th style="text-align:left;padding:6px 8px">실행 ID</th>
+            <th style="text-align:right;padding:6px 8px">매매수</th>
+            <th style="text-align:right;padding:6px 8px">Sharpe</th>
+            <th style="text-align:right;padding:6px 8px">Sortino</th>
+            <th style="text-align:right;padding:6px 8px">승률</th>
+            <th style="text-align:right;padding:6px 8px">MDD</th>
+            <th style="text-align:right;padding:6px 8px">누적수익</th>
+            <th style="text-align:right;padding:6px 8px">최종자본</th>
+          </tr></thead>
+          <tbody>
+            ${runs.map(r => `<tr style="border-bottom:1px solid var(--border)">
+              <td style="padding:5px 8px;font-family:monospace;font-size:11px">${escapeHtml((r.run_id||"").slice(-12))}</td>
+              <td style="text-align:right;padding:5px 8px">${r.total_trades??"-"}</td>
+              <td style="text-align:right;padding:5px 8px;${_chgCls(r.sharpe)?`color:${r.sharpe>0?"var(--success)":"var(--failed)"}`:"color:var(--muted)"}">${_num(r.sharpe)}</td>
+              <td style="text-align:right;padding:5px 8px">${_num(r.sortino)}</td>
+              <td style="text-align:right;padding:5px 8px">${_num(r.win_rate)}%</td>
+              <td style="text-align:right;padding:5px 8px;color:var(--failed)">-${_num(r.max_drawdown)}%</td>
+              <td style="text-align:right;padding:5px 8px;font-weight:600;${r.total_return>=0?"color:var(--success)":"color:var(--failed)"}">${_pct(r.total_return)}</td>
+              <td style="text-align:right;padding:5px 8px">${_$(r.final_capital,0)}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB 6: 경제 캘린더
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAnalysisCalendar(container) {
+  const data = state.analysisCalendar || {};
+  const events = data.events || [];
+
+  const loadBtn = `<div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+    <button id="btn-calendar-fetch" class="button button-primary" type="button">📅 캘린더 로드</button>
+  </div>`;
+
+  if (!events.length) {
+    container.innerHTML = loadBtn + `<div class="analysis-loading">FRED 경제 지표 발표 일정을 불러옵니다.</div>`;
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  const rows = events.map(ev => {
+    const upcoming = ev.is_upcoming;
+    const change = ev.change;
+    const changeColor = change == null ? "" : change > 0 ? "color:var(--success)" : change < 0 ? "color:var(--failed)" : "color:var(--muted)";
+
+    return `<div class="calendar-event ${upcoming ? "calendar-upcoming" : ""}">
+      <div class="calendar-icon">${ev.icon}</div>
+      <div class="calendar-main">
+        <div class="calendar-name">${escapeHtml(ev.name)}</div>
+        <div class="calendar-meta">
+          <span class="calendar-freq">${ev.frequency}</span>
+          <span class="calendar-series">${ev.series_id}</span>
+        </div>
+      </div>
+      <div class="calendar-values">
+        <div>최근: <strong>${ev.latest_value != null ? _num(ev.latest_value, 3) : "-"}</strong>
+          ${change != null ? `<span style="${changeColor};font-size:11px;margin-left:4px">(${change >= 0 ? "+" : ""}${_num(change, 3)})</span>` : ""}
+        </div>
+        <div style="font-size:11px;color:var(--muted)">${ev.latest_date || "-"}</div>
+      </div>
+      <div class="calendar-next ${upcoming ? "is-upcoming" : ""}">
+        <div style="font-size:11px;font-weight:600">${upcoming ? "⏳ 예정" : "📆 추정"}</div>
+        <div style="font-size:13px;font-weight:700">${ev.next_estimated || "-"}</div>
+      </div>
+    </div>`;
+  }).join("");
+
+  container.innerHTML = loadBtn + `
+    <section class="panel">
+      <div class="panel-header"><div><h2>📅 주요 경제 지표 발표 일정</h2><p>기준일: ${today} | FRED 최신 데이터 기반, 다음 발표일은 추정치입니다.</p></div></div>
+      <div class="panel-body">
+        <div class="calendar-list">${rows}</div>
+      </div>
+    </section>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SVG Chart Helpers
+// ══════════════════════════════════════════════════════════════════════════════
+
+function _renderDualAxisChart(stockHistory, macroHistory) {
+  const W = 900, H = 260, PL = 60, PR = 65, PT = 20, PB = 40;
+  const innerW = W - PL - PR, innerH = H - PT - PB;
+
+  if (!stockHistory.length) return `<div style="height:200px;display:flex;align-items:center;justify-content:center;color:var(--muted)">데이터 없음</div>`;
+
+  const stockDates = stockHistory.map(d => d.date);
+  const allDates = [...new Set([...stockDates, ...macroHistory.map(d => d.date)])].sort();
+  const xMin = allDates[0], xMax = allDates[allDates.length - 1];
+  const dtX = (d) => { const t = d >= xMax ? 1 : d <= xMin ? 0 : d.localeCompare(xMin) / xMax.localeCompare(xMin); return PL + t * innerW; };
+
+  const sVals = stockHistory.map(d => d.close).filter(v => v!=null && !isNaN(v));
+  const sc = _svgScale(sVals, innerH, 0.08);
+  const sToY = (v) => PT + sc.toY(v);
+
+  const sPts = stockHistory.filter(d => d.close!=null).map(d => `${dtX(d.date).toFixed(1)},${sToY(d.close).toFixed(1)}`);
+  const sAreaPts = [...sPts, `${(PL+innerW).toFixed(1)},${(PT+innerH).toFixed(1)}`, `${PL},${(PT+innerH).toFixed(1)}`].join(" ");
+
+  let macroLine = "", macroAxis = "";
+  const mVals = macroHistory.map(d => d.value).filter(v => v!=null && !isNaN(v));
+  if (mVals.length > 1) {
+    const msc = _svgScale(mVals, innerH, 0.08);
+    const mToY = (v) => PT + msc.toY(v);
+    const mPts = macroHistory.filter(d => d.value!=null && !isNaN(d.value) && d.date>=xMin && d.date<=xMax)
+      .map(d => `${dtX(d.date).toFixed(1)},${mToY(d.value).toFixed(1)}`);
+    if (mPts.length) macroLine = _svgLine(mPts, "#f59e0b", 2, "5,3");
+    for (let i = 0; i <= 4; i++) {
+      const v = msc.min + (i/4)*(msc.max-msc.min);
+      macroAxis += `<text x="${W-PR+7}" y="${(PT+msc.toY(v)).toFixed(1)}" font-size="10" fill="#f59e0b" dominant-baseline="middle">${v.toFixed(2)}</text>`;
+    }
+    macroAxis += `<line x1="${W-PR}" y1="${PT}" x2="${W-PR}" y2="${PT+innerH}" stroke="#f59e0b" stroke-width="0.5" opacity="0.4"/>`;
+  }
+
+  let leftAxis = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = sc.min + (i/4)*(sc.max-sc.min);
+    leftAxis += `<text x="${PL-5}" y="${(PT+sc.toY(v)).toFixed(1)}" font-size="10" fill="#6366f1" text-anchor="end" dominant-baseline="middle">$${v.toFixed(0)}</text>`;
+  }
+  let xAxis = "";
+  const xStep = Math.max(1, Math.floor(allDates.length/5));
+  for (let i = 0; i < allDates.length; i += xStep) {
+    const d = allDates[i];
+    xAxis += `<text x="${dtX(d).toFixed(1)}" y="${PT+innerH+14}" font-size="10" fill="#94a3b8" text-anchor="middle">${d.slice(0,7)}</text>`;
+  }
+
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-height:280px;display:block" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <linearGradient id="sGrad2" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#6366f1" stop-opacity="0.25"/><stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+      </linearGradient>
+      <clipPath id="dualClip"><rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}"/></clipPath>
+    </defs>
+    <rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}" fill="#fafbfc" rx="4"/>
+    ${[0,1,2,3,4].map(i => { const v=sc.min+(i/4)*(sc.max-sc.min); const y=PT+sc.toY(v); return `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${PL+innerW}" y2="${y.toFixed(1)}" stroke="#e2e8f0" stroke-width="1"/>`; }).join("")}
+    <g clip-path="url(#dualClip)">
+      <polygon fill="url(#sGrad2)" points="${sAreaPts}"/>
+      ${_svgLine(sPts, "#6366f1", 2.2)}
+      ${macroLine}
+    </g>
+    <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${PT+innerH}" stroke="#cbd5e1" stroke-width="1"/>
+    <line x1="${PL}" y1="${PT+innerH}" x2="${PL+innerW}" y2="${PT+innerH}" stroke="#cbd5e1" stroke-width="1"/>
+    ${leftAxis}${macroAxis}${xAxis}
+    <text x="${PL+8}" y="${PT+14}" font-size="11" font-weight="600" fill="#6366f1">● 주가 (좌축)</text>
+    ${mVals.length>1?`<text x="${PL+110}" y="${PT+14}" font-size="11" font-weight="600" fill="#f59e0b">--- 경제 지표 (우축)</text>`:""}
+  </svg>`;
+}
+
+function _renderTechnicalCharts(recs, dates) {
+  if (!recs.length) return `<div style="color:var(--muted);padding:16px">데이터 없음</div>`;
+
+  const W = 900;
+  const PL = 62, PR = 10, PT = 10, PB = 24;
+  const innerW = W - PL - PR;
+
+  const dtX = (i) => PL + (i / Math.max(dates.length - 1, 1)) * innerW;
+
+  // ── Panel 1: Price + Bollinger + EMA ─────────────────────
+  const H1 = 220;
+  const closes = recs.map(r => r.close);
+  const bbU = recs.map(r => r.bb_upper);
+  const bbL = recs.map(r => r.bb_lower);
+  const ema20 = recs.map(r => r.ema20);
+  const ema50 = recs.map(r => r.ema50);
+  const ema200 = recs.map(r => r.ema200);
+
+  const allP1 = [...closes, ...bbU.filter(v=>v!=null), ...bbL.filter(v=>v!=null)].filter(v=>v!=null);
+  const sc1 = _svgScale(allP1, H1 - PT - PB, 0.03);
+  const toY1 = (v) => PT + sc1.toY(v);
+
+  const pricePts = closes.map((v,i) => v!=null?`${dtX(i).toFixed(1)},${toY1(v).toFixed(1)}`:null).filter(Boolean);
+  const bbUPts = bbU.map((v,i) => v!=null?`${dtX(i).toFixed(1)},${toY1(v).toFixed(1)}`:null).filter(Boolean);
+  const bbLPts = bbL.map((v,i) => v!=null?`${dtX(i).toFixed(1)},${toY1(v).toFixed(1)}`:null).filter(Boolean);
+  const ema20Pts = ema20.map((v,i) => v!=null?`${dtX(i).toFixed(1)},${toY1(v).toFixed(1)}`:null).filter(Boolean);
+  const ema50Pts = ema50.map((v,i) => v!=null?`${dtX(i).toFixed(1)},${toY1(v).toFixed(1)}`:null).filter(Boolean);
+  const ema200Pts = ema200.map((v,i) => v!=null?`${dtX(i).toFixed(1)},${toY1(v).toFixed(1)}`:null).filter(Boolean);
+
+  let yL1 = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = sc1.min + (i/4)*(sc1.max-sc1.min);
+    yL1 += `<text x="${PL-5}" y="${toY1(v).toFixed(1)}" font-size="10" fill="#94a3b8" text-anchor="end" dominant-baseline="middle">$${v.toFixed(0)}</text>`;
+  }
+
+  // Regime color bars
+  const regimeBars = recs.map((r,i) => {
+    const col = r.regime==="bull"?"rgba(34,197,94,0.12)":r.regime==="bear"?"rgba(239,68,68,0.12)":"rgba(234,179,8,0.08)";
+    const x = dtX(i), nx = dtX(i+1);
+    return `<rect x="${x.toFixed(1)}" y="${PT}" width="${(nx-x).toFixed(1)}" height="${H1-PT-PB}" fill="${col}" opacity="0.7"/>`;
+  }).join("");
+
+  const chart1 = `<svg viewBox="0 0 ${W} ${H1}" style="width:100%;display:block;margin-bottom:4px">
+    <defs>
+      <linearGradient id="p1Grad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#6366f1" stop-opacity="0.2"/><stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+      </linearGradient>
+      <clipPath id="p1Clip"><rect x="${PL}" y="${PT}" width="${innerW}" height="${H1-PT-PB}"/></clipPath>
+    </defs>
+    <rect x="${PL}" y="${PT}" width="${innerW}" height="${H1-PT-PB}" fill="#fafbfc" rx="4"/>
+    <g clip-path="url(#p1Clip)">
+      ${regimeBars}
+      ${_svgLine(bbUPts,"#94a3b8",1,"3,3")}
+      ${_svgLine(bbLPts,"#94a3b8",1,"3,3")}
+      ${_svgArea(pricePts,"url(#p1Grad)")}
+      ${_svgLine(pricePts,"#6366f1",2)}
+      ${_svgLine(ema20Pts,"#f59e0b",1.5)}
+      ${_svgLine(ema50Pts,"#22c55e",1.5)}
+      ${_svgLine(ema200Pts,"#ef4444",1.5,"6,3")}
+    </g>
+    <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${H1-PB}" stroke="#cbd5e1" stroke-width="1"/>
+    <line x1="${PL}" y1="${H1-PB}" x2="${PL+innerW}" y2="${H1-PB}" stroke="#cbd5e1" stroke-width="1"/>
+    ${yL1}
+    <text x="${PL+6}" y="${PT+13}" font-size="10" font-weight="600" fill="#6366f1">● 가격</text>
+    <text x="${PL+55}" y="${PT+13}" font-size="10" font-weight="600" fill="#f59e0b">EMA20</text>
+    <text x="${PL+100}" y="${PT+13}" font-size="10" font-weight="600" fill="#22c55e">EMA50</text>
+    <text x="${PL+148}" y="${PT+13}" font-size="10" font-weight="600" fill="#ef4444">EMA200</text>
+    <text x="${PL+200}" y="${PT+13}" font-size="10" fill="#94a3b8">--- 볼린저 밴드</text>
+  </svg>`;
+
+  // ── Panel 2: MACD ───────────────────────────────────────
+  const H2 = 100;
+  const macdL = recs.map(r => r.macd_line);
+  const macdS = recs.map(r => r.macd_signal);
+  const macdH = recs.map(r => r.macd_hist);
+  const allM = [...macdL,...macdS,...macdH].filter(v=>v!=null&&!isNaN(v));
+  const sc2 = _svgScale(allM, H2 - PT - PB, 0.15);
+  const toY2 = (v) => PT + sc2.toY(v);
+  const zero2 = toY2(0);
+
+  const macdLPts = macdL.map((v,i)=>v!=null?`${dtX(i).toFixed(1)},${toY2(v).toFixed(1)}`:null).filter(Boolean);
+  const macdSPts = macdS.map((v,i)=>v!=null?`${dtX(i).toFixed(1)},${toY2(v).toFixed(1)}`:null).filter(Boolean);
+  const macdBars = macdH.map((v,i)=>{
+    if (v==null) return "";
+    const x=dtX(i), bw=Math.max(innerW/dates.length-1,1), y=Math.min(toY2(v),zero2), h=Math.abs(toY2(v)-zero2);
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(h,0.5).toFixed(1)}" fill="${v>=0?"#22c55e":"#ef4444"}" opacity="0.7"/>`;
+  }).join("");
+
+  const chart2 = `<svg viewBox="0 0 ${W} ${H2}" style="width:100%;display:block;margin-bottom:4px">
+    <defs><clipPath id="macdClip"><rect x="${PL}" y="${PT}" width="${innerW}" height="${H2-PT-PB}"/></clipPath></defs>
+    <rect x="${PL}" y="${PT}" width="${innerW}" height="${H2-PT-PB}" fill="#fafbfc" rx="4"/>
+    <line x1="${PL}" y1="${zero2.toFixed(1)}" x2="${PL+innerW}" y2="${zero2.toFixed(1)}" stroke="#cbd5e1" stroke-width="0.8" stroke-dasharray="3,2"/>
+    <g clip-path="url(#macdClip)">
+      ${macdBars}
+      ${_svgLine(macdLPts,"#6366f1",1.5)}
+      ${_svgLine(macdSPts,"#f59e0b",1.5)}
+    </g>
+    <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${H2-PB}" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="${PL+6}" y="${PT+13}" font-size="10" font-weight="600" fill="#1e293b">MACD</text>
+    <text x="${PL+46}" y="${PT+13}" font-size="10" fill="#6366f1">MACD(12,26)</text>
+    <text x="${PL+120}" y="${PT+13}" font-size="10" fill="#f59e0b">Signal(9)</text>
+  </svg>`;
+
+  // ── Panel 3: RSI ────────────────────────────────────────
+  const H3 = 100;
+  const rsi14 = recs.map(r => r.rsi14);
+  const sc3 = { min: 0, max: 100, toY: (v) => (H3-PT-PB) * (1 - v/100) };
+  const toY3 = (v) => PT + sc3.toY(v);
+  const rsiPts = rsi14.map((v,i)=>v!=null?`${dtX(i).toFixed(1)},${toY3(v).toFixed(1)}`:null).filter(Boolean);
+  const ob = toY3(70), os = toY3(30);
+
+  const chart3 = `<svg viewBox="0 0 ${W} ${H3}" style="width:100%;display:block;margin-bottom:4px">
+    <defs><clipPath id="rsiClip"><rect x="${PL}" y="${PT}" width="${innerW}" height="${H3-PT-PB}"/></clipPath></defs>
+    <rect x="${PL}" y="${PT}" width="${innerW}" height="${H3-PT-PB}" fill="#fafbfc" rx="4"/>
+    <rect x="${PL}" y="${ob.toFixed(1)}" width="${innerW}" height="${(os-ob).toFixed(1)}" fill="rgba(99,102,241,0.04)"/>
+    <line x1="${PL}" y1="${ob.toFixed(1)}" x2="${PL+innerW}" y2="${ob.toFixed(1)}" stroke="#ef4444" stroke-width="0.8" stroke-dasharray="4,3"/>
+    <line x1="${PL}" y1="${os.toFixed(1)}" x2="${PL+innerW}" y2="${os.toFixed(1)}" stroke="#22c55e" stroke-width="0.8" stroke-dasharray="4,3"/>
+    <g clip-path="url(#rsiClip)">${_svgLine(rsiPts,"#6366f1",1.8)}</g>
+    <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${H3-PB}" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="${PL+6}" y="${PT+13}" font-size="10" font-weight="600" fill="#1e293b">RSI(14)</text>
+    <text x="${PL-5}" y="${ob.toFixed(1)}" font-size="9" fill="#ef4444" text-anchor="end">70</text>
+    <text x="${PL-5}" y="${os.toFixed(1)}" font-size="9" fill="#22c55e" text-anchor="end">30</text>
+  </svg>`;
+
+  // ── Panel 4: Volume ─────────────────────────────────────
+  const H4 = 80;
+  const vols = recs.map(r => r.volume);
+  const volMA = recs.map(r => r.vol_ma20);
+  const maxVol = Math.max(...vols.filter(v=>v!=null));
+  const toY4 = (v) => PT + (H4-PT-PB) * (1 - v/maxVol);
+  const bw4 = Math.max(innerW/dates.length-0.5, 1);
+  const volBars = vols.map((v,i)=>v!=null?`<rect x="${dtX(i).toFixed(1)}" y="${toY4(v).toFixed(1)}" width="${bw4.toFixed(1)}" height="${(H4-PB-toY4(v)).toFixed(1)}" fill="#6366f1" opacity="0.35"/>` : "").join("");
+  const volMAPts = volMA.map((v,i)=>v!=null?`${dtX(i).toFixed(1)},${toY4(v).toFixed(1)}`:null).filter(Boolean);
+
+  // X-axis labels (shared)
+  const step = Math.max(1, Math.floor(dates.length/5));
+  let xL = "";
+  for (let i = 0; i < dates.length; i += step) {
+    xL += `<text x="${dtX(i).toFixed(1)}" y="${H4-PB+14}" font-size="10" fill="#94a3b8" text-anchor="middle">${dates[i].slice(0,7)}</text>`;
+  }
+
+  const chart4 = `<svg viewBox="0 0 ${W} ${H4}" style="width:100%;display:block">
+    <defs><clipPath id="volClip"><rect x="${PL}" y="${PT}" width="${innerW}" height="${H4-PT-PB}"/></clipPath></defs>
+    <rect x="${PL}" y="${PT}" width="${innerW}" height="${H4-PT-PB}" fill="#fafbfc" rx="4"/>
+    <g clip-path="url(#volClip)">
+      ${volBars}
+      ${_svgLine(volMAPts,"#f59e0b",1.5)}
+    </g>
+    <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${H4-PB}" stroke="#cbd5e1" stroke-width="1"/>
+    <line x1="${PL}" y1="${H4-PB}" x2="${PL+innerW}" y2="${H4-PB}" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="${PL+6}" y="${PT+13}" font-size="10" font-weight="600" fill="#1e293b">Volume</text>
+    <text x="${PL+60}" y="${PT+13}" font-size="10" fill="#f59e0b">MA20</text>
+    ${xL}
+  </svg>`;
+
+  return chart1 + chart2 + chart3 + chart4;
+}
+
+
+  const data = state.analysis || {};
+  const stock = data.stock || {};
+  const macro = data.macro || {};
+  const news = data.news || [];
+  const toss = data.toss || {};
+
+  const tickers = ["SOXL","TQQQ","TSLA","AAPL","NVDA","NVDL","IONQ","QBTS","QQQ","SPY","MSFT","GOOGL"];
+  const macroSeries = [
+    { id: "FEDFUNDS", label: "기준금리 (Fed Funds Rate)" },
+    { id: "CPIAUCSNS", label: "소비자물가지수 (CPI)" },
+    { id: "UNRATE", label: "실업률 (Unemployment Rate)" },
+    { id: "T10Y2Y", label: "10년-2년 국채 스프레드" },
+    { id: "GDPC1", label: "실질 GDP (Real GDP)" },
+    { id: "M2SL", label: "M2 통화량" },
+    { id: "BAMLH0A0HYM2", label: "하이일드 스프레드" },
+  ];
+  const periods = [
+    { id: "1m", label: "1개월" }, { id: "3m", label: "3개월" }, { id: "6m", label: "6개월" },
+    { id: "1y", label: "1년" }, { id: "2y", label: "2년" }, { id: "5y", label: "5년" }, { id: "10y", label: "10년" },
+  ];
+
+  const selectedTicker = state.analysisTicker || "SOXL";
+  const selectedMacro = state.analysisMacro || "FEDFUNDS";
+  const selectedPeriod = state.analysisPeriod || "2y";
+
+  const priceFmt = (v) => v == null ? "-" : (typeof v === "number" ? `$${v.toFixed(2)}` : String(v));
+  const pctFmt = (v) => v == null ? "-" : `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
+  const numFmt = (v, d = 2) => v == null ? "-" : Number(v).toFixed(d);
+
+  const changeCls = (v) => v > 0 ? "analysis-positive" : v < 0 ? "analysis-negative" : "";
+
+  // Build SVG chart
+  const chartHtml = renderAnalysisChart(stock.history || [], macro.history || []);
+
+  // Build Toss positions table
+  let tossHtml = "";
+  if (toss.positions && toss.positions.length) {
+    tossHtml = `
+    <section class="panel" style="margin-top:14px">
+      <div class="panel-header"><div><h2>📊 Toss 보유 종목</h2><p>계좌 번호: ${escapeHtml(toss.account_no || "-")}</p></div></div>
+      <div class="panel-body" style="overflow-x:auto">
+        <table class="analysis-table" style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="border-bottom:2px solid var(--border)">
+            <th style="text-align:left;padding:8px 10px">종목</th>
+            <th style="text-align:right;padding:8px 10px">수량</th>
+            <th style="text-align:right;padding:8px 10px">매수가</th>
+            <th style="text-align:right;padding:8px 10px">현재가</th>
+            <th style="text-align:right;padding:8px 10px">손익</th>
+            <th style="text-align:right;padding:8px 10px">수익률</th>
+          </tr></thead>
+          <tbody>
+            ${toss.positions.map(pos => {
+              const plr = parseFloat(pos.profit_loss_rate || 0);
+              return `<tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:7px 10px;font-weight:600">${escapeHtml(pos.symbol || "-")}</td>
+                <td style="text-align:right;padding:7px 10px">${pos.qty ?? "-"}</td>
+                <td style="text-align:right;padding:7px 10px">$${numFmt(pos.buy_price)}</td>
+                <td style="text-align:right;padding:7px 10px">$${numFmt(pos.current_price)}</td>
+                <td style="text-align:right;padding:7px 10px;${plr >= 0 ? "color:var(--success)" : "color:var(--failed)"}">${numFmt(pos.profit_loss)}</td>
+                <td style="text-align:right;padding:7px 10px;font-weight:600;${plr >= 0 ? "color:var(--success)" : "color:var(--failed)"}">${pctFmt(plr)}</td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+  }
+
+  // News sentiment
+  const sentimentBadge = (s) => {
+    if (s === "Positive") return `<span class="analysis-badge-pos">▲ 긍정</span>`;
+    if (s === "Negative") return `<span class="analysis-badge-neg">▼ 부정</span>`;
+    return `<span class="analysis-badge-neu">— 중립</span>`;
+  };
+  const newsHtml = news.length ? news.map(n => `
+    <article class="analysis-news-item">
+      <div class="analysis-news-meta">
+        ${sentimentBadge(n.sentiment)}
+        <span class="analysis-news-source">${escapeHtml(n.source || "-")}</span>
+        <span class="analysis-news-date">${n.published_at ? n.published_at.slice(0,10) : "-"}</span>
+      </div>
+      <a class="analysis-news-title" href="${escapeHtml(n.url || "#")}" target="_blank" rel="noopener">${escapeHtml(n.headline || "제목 없음")}</a>
+    </article>`) .join("") : `<p style="color:var(--text-muted);padding:16px 0">뉴스 API 키가 설정되어 있지 않거나 데이터가 없습니다.</p>`;
+
+  els.root.innerHTML = `
+    <div class="page-heading">
+      <div>
+        <h1>📈 주식 & 경제 분석</h1>
+        <p>Yahoo Finance, FRED 경제 데이터, 뉴스 감성 분석을 통합하여 주식과 거시경제 지표를 한눈에 확인합니다.</p>
+      </div>
+    </div>
+
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>조회 설정</h2><p>종목, 경제 지표, 기간을 선택하면 차트와 데이터가 자동 갱신됩니다.</p></div></div>
+      <div class="panel-body">
+        <div class="analysis-controls">
+          <div class="analysis-control-group">
+            <label for="analysis-ticker">종목 (Ticker)</label>
+            <select id="analysis-ticker" class="analysis-select">
+              ${tickers.map(t => `<option value="${t}" ${t === selectedTicker ? "selected" : ""}>${t}</option>`).join("")}
+            </select>
+          </div>
+          <div class="analysis-control-group">
+            <label for="analysis-macro">경제 지표 (FRED)</label>
+            <select id="analysis-macro" class="analysis-select">
+              ${macroSeries.map(s => `<option value="${s.id}" ${s.id === selectedMacro ? "selected" : ""}>${s.label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="analysis-control-group">
+            <label for="analysis-period">기간</label>
+            <select id="analysis-period" class="analysis-select">
+              ${periods.map(p => `<option value="${p.id}" ${p.id === selectedPeriod ? "selected" : ""}>${p.label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="analysis-control-group" style="align-self:flex-end">
+            <button id="btn-analysis-fetch" class="button button-primary" type="button" style="height:38px;min-width:100px">
+              📊 조회
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    ${stock.error ? `<section class="panel"><div class="panel-body"><p style="color:var(--failed)">${escapeHtml(stock.error)}</p></div></section>` : `
+    <section class="metric-grid" style="margin-bottom:14px">
+      <div class="metric-card">
+        <span class="metric-label">현재가</span>
+        <span class="metric-value" style="font-size:22px">${priceFmt(stock.latest_price)}</span>
+        <span class="metric-sub">${escapeHtml(stock.ticker || selectedTicker)}</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">전일 대비</span>
+        <span class="metric-value ${changeCls(stock.change_pct)}" style="font-size:22px">${pctFmt(stock.change_pct)}</span>
+        <span class="metric-sub">일간 수익률</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">52주 최고가</span>
+        <span class="metric-value">${priceFmt(stock.fifty_two_week_high)}</span>
+        <span class="metric-sub">기간 내 최고</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">52주 최저가</span>
+        <span class="metric-value">${priceFmt(stock.fifty_two_week_low)}</span>
+        <span class="metric-sub">기간 내 최저</span>
+      </div>
+      ${!macro.error ? `
+      <div class="metric-card">
+        <span class="metric-label">${escapeHtml((macro.name || selectedMacro).slice(0, 30))}</span>
+        <span class="metric-value">${numFmt(macro.latest_value, 2)}</span>
+        <span class="metric-sub">${escapeHtml(macro.latest_date || "-")}</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">경제 지표 변화</span>
+        <span class="metric-value ${changeCls(macro.change)}">${macro.change != null ? (macro.change >= 0 ? "+" : "") + numFmt(macro.change, 3) : "-"}</span>
+        <span class="metric-sub">전기 대비</span>
+      </div>` : ""}
+    </section>
+    `}
+
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header"><div><h2>가격 & 경제 지표 차트</h2><p>주식 종가(왼쪽 축)와 선택한 FRED 경제 시리즈(오른쪽 축)를 이중 축으로 표시합니다.</p></div></div>
+      <div class="panel-body" style="padding:0 4px">
+        ${chartHtml}
+      </div>
+    </section>
+
+    ${tossHtml}
+
+    <section class="panel" style="margin-top:14px">
+      <div class="panel-header"><div><h2>📰 최근 뉴스 & 감성 분석</h2><p>Finnhub 또는 Alpha Vantage에서 수집한 최근 30일 뉴스와 AI 감성 평가입니다.</p></div></div>
+      <div class="panel-body">
+        <div class="analysis-news-list">${newsHtml}</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderAnalysisChart(stockHistory, macroHistory) {
+  const W = 900, H = 260, PL = 60, PR = 65, PT = 20, PB = 40;
+  const innerW = W - PL - PR;
+  const innerH = H - PT - PB;
+
+  if (!stockHistory.length) {
+    return `<div style="height:260px;display:flex;align-items:center;justify-content:center;color:var(--text-muted)">주가 데이터를 불러오는 중...</div>`;
+  }
+
+  // X-axis dates span (using stock dates as anchor)
+  const stockDates = stockHistory.map(d => d.date);
+  const allDates = [...new Set([...stockDates, ...macroHistory.map(d => d.date)])].sort();
+  const xMin = allDates[0], xMax = allDates[allDates.length - 1];
+  const dateToX = (d) => {
+    const t = (d >= xMax ? 1 : d <= xMin ? 0 : (d.localeCompare(xMin)) / (xMax.localeCompare(xMin)));
+    return PL + t * innerW;
+  };
+
+  // Y-axis for stock
+  const stockVals = stockHistory.map(d => d.close).filter(v => v != null && !isNaN(v));
+  const sMin = Math.min(...stockVals), sMax = Math.max(...stockVals);
+  const sPad = (sMax - sMin) * 0.08 || 1;
+  const stockToY = (v) => PT + innerH - ((v - (sMin - sPad)) / ((sMax + sPad) - (sMin - sPad))) * innerH;
+
+  // Y-axis for macro
+  const macroVals = macroHistory.map(d => d.value).filter(v => v != null && !isNaN(v));
+  let macroLine = "";
+  let macroAxisHtml = "";
+  if (macroVals.length > 1) {
+    const mMin = Math.min(...macroVals), mMax = Math.max(...macroVals);
+    const mPad = (mMax - mMin) * 0.08 || 0.1;
+    const macroToY = (v) => PT + innerH - ((v - (mMin - mPad)) / ((mMax + mPad) - (mMin - mPad))) * innerH;
+    const macroPoints = macroHistory
+      .filter(d => d.value != null && !isNaN(d.value) && d.date >= xMin && d.date <= xMax)
+      .map(d => `${dateToX(d.date).toFixed(1)},${macroToY(d.value).toFixed(1)}`).join(" ");
+    if (macroPoints) {
+      macroLine = `<polyline fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5,3" opacity="0.85" points="${macroPoints}"/>`;
+    }
+    // Right Y-axis labels
+    const mTicks = 4;
+    for (let i = 0; i <= mTicks; i++) {
+      const v = mMin - mPad + (i / mTicks) * ((mMax + mPad) - (mMin - mPad));
+      const y = macroToY(v);
+      macroAxisHtml += `<text x="${W - PR + 8}" y="${y.toFixed(1)}" font-size="10" fill="#f59e0b" dominant-baseline="middle">${v.toFixed(2)}</text>`;
+    }
+    macroAxisHtml += `<line x1="${W - PR}" y1="${PT}" x2="${W - PR}" y2="${PT + innerH}" stroke="#f59e0b" stroke-width="0.5" opacity="0.4"/>`;
+  }
+
+  // Stock line & area
+  const stockPoints = stockHistory
+    .filter(d => d.close != null && !isNaN(d.close))
+    .map(d => `${dateToX(d.date).toFixed(1)},${stockToY(d.close).toFixed(1)}`).join(" ");
+  const stockAreaPoints = stockHistory
+    .filter(d => d.close != null && !isNaN(d.close))
+    .map(d => `${dateToX(d.date).toFixed(1)},${stockToY(d.close).toFixed(1)}`).join(" ")
+    + ` ${(PL + innerW).toFixed(1)},${(PT + innerH).toFixed(1)} ${PL},${(PT + innerH).toFixed(1)}`;
+
+  // Left Y-axis labels
+  let leftAxisHtml = "";
+  const sTicks = 4;
+  for (let i = 0; i <= sTicks; i++) {
+    const v = (sMin - sPad) + (i / sTicks) * ((sMax + sPad) - (sMin - sPad));
+    const y = stockToY(v);
+    leftAxisHtml += `<text x="${PL - 6}" y="${y.toFixed(1)}" font-size="10" fill="#6366f1" text-anchor="end" dominant-baseline="middle">$${v.toFixed(0)}</text>`;
+  }
+
+  // X-axis labels (5 evenly spaced)
+  let xAxisHtml = "";
+  const xStep = Math.max(1, Math.floor(allDates.length / 5));
+  for (let i = 0; i < allDates.length; i += xStep) {
+    const d = allDates[i];
+    const x = dateToX(d);
+    xAxisHtml += `<text x="${x.toFixed(1)}" y="${(PT + innerH + 14).toFixed(1)}" font-size="10" fill="#94a3b8" text-anchor="middle">${d.slice(0,7)}</text>`;
+  }
+
+  // Grid lines
+  let gridHtml = "";
+  for (let i = 0; i <= sTicks; i++) {
+    const v = (sMin - sPad) + (i / sTicks) * ((sMax + sPad) - (sMin - sPad));
+    const y = stockToY(v);
+    gridHtml += `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${PL + innerW}" y2="${y.toFixed(1)}" stroke="#e2e8f0" stroke-width="1"/>`;
+  }
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-height:280px;display:block" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <linearGradient id="stockGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#6366f1" stop-opacity="0.25"/>
+          <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+        </linearGradient>
+        <clipPath id="chartClip">
+          <rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}"/>
+        </clipPath>
+      </defs>
+      <rect x="${PL}" y="${PT}" width="${innerW}" height="${innerH}" fill="white" rx="4"/>
+      ${gridHtml}
+      <g clip-path="url(#chartClip)">
+        ${stockAreaPoints ? `<polygon fill="url(#stockGrad)" points="${stockAreaPoints}"/>` : ""}
+        ${stockPoints ? `<polyline fill="none" stroke="#6366f1" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="${stockPoints}"/>` : ""}
+        ${macroLine}
+      </g>
+      <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${PT + innerH}" stroke="#cbd5e1" stroke-width="1"/>
+      <line x1="${PL}" y1="${PT + innerH}" x2="${PL + innerW}" y2="${PT + innerH}" stroke="#cbd5e1" stroke-width="1"/>
+      ${leftAxisHtml}
+      ${macroAxisHtml}
+      ${xAxisHtml}
+      <text x="${PL + 8}" y="${PT + 14}" font-size="11" font-weight="600" fill="#6366f1">● 주가 (좌축 $)</text>
+      ${macroVals.length > 1 ? `<text x="${PL + 120}" y="${PT + 14}" font-size="11" font-weight="600" fill="#f59e0b">--- 경제 지표 (우축)</text>` : ""}
+    </svg>`;
+}

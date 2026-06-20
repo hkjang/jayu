@@ -257,6 +257,7 @@ class Settings(BaseModel):
     toss_api_key: SecretStr | None = None
     toss_secret_key: SecretStr | None = None
     toss_account: SecretStr | None = None
+    toss_oauth_auth_style: Literal["auto", "basic", "body"] = "auto"
     kakao_access_token: SecretStr | None = None
     kakao_refresh_token: SecretStr | None = None
     kakao_rest_api_key: SecretStr | None = None
@@ -381,6 +382,8 @@ ENV_ALIAS_KEYS = {
     "JAYU_TOSS_API_" + "KEY": "toss_api_" + "key",
     "JAYU_TOSS_SECRET_" + "KEY": "toss_secret_" + "key",
     "JAYU_TOSS_ACCOUNT": "toss_account",
+    "TS_OAUTH_AUTH_STYLE": "toss_oauth_auth_style",
+    "JAYU_TOSS_OAUTH_AUTH_STYLE": "toss_oauth_auth_style",
     # Tiingo
     "JAYU_TIINGO_API_KEY": "tiingo_api_key",
     "TIINGO_API_KEY": "tiingo_api_key",

@@ -8,8 +8,9 @@ import jayu.yahoo as yahoo
 class _FakeSession:
     """Stand-in for curl_cffi Session so the test never opens a connection."""
 
-    def __init__(self, verify):
-        self.verify = verify
+    def __init__(self, *args, **kwargs):
+        self.verify = kwargs.get("verify")
+        self.impersonate = kwargs.get("impersonate")
 
 
 def _patch(tmp_path, monkeypatch, *, source_text="NEW-CA"):
@@ -32,6 +33,7 @@ def test_first_call_copies_ca_and_sets_verify(tmp_path, monkeypatch):
     assert ca_path.read_text(encoding="utf-8") == "NEW-CA"
     # Session verifies against the ASCII-safe copied bundle.
     assert session.verify == str(ca_path)
+    assert session.impersonate == "chrome"
 
 
 def test_fresh_ca_is_not_recopied(tmp_path, monkeypatch):

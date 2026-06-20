@@ -42,6 +42,7 @@ def test_sample_config_contains_every_non_secret_top_level_setting():
         "toss_api_key",
         "toss_secret_key",
         "toss_account",
+        "toss_oauth_auth_style",
         "kakao_access_token",
         "kakao_refresh_token",
         "kakao_rest_api_key",

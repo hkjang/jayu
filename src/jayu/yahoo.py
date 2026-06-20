@@ -15,4 +15,4 @@ def get_yahoo_session():
     if not ca_path.exists() or ca_path.stat().st_mtime < source.stat().st_mtime:
         ca_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, ca_path)
-    return requests.Session(verify=str(ca_path))
+    return requests.Session(impersonate="chrome", verify=str(ca_path))

@@ -38,6 +38,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `toss_api_key` | `string | null` | `null` | `{}` |
 | `toss_secret_key` | `string | null` | `null` | `{}` |
 | `toss_account` | `string | null` | `null` | `{}` |
+| `toss_oauth_auth_style` | `string` | `"auto"` | `{"enum": ["auto", "basic", "body"]}` |
 | `kakao_access_token` | `string | null` | `null` | `{}` |
 | `kakao_refresh_token` | `string | null` | `null` | `{}` |
 | `kakao_rest_api_key` | `string | null` | `null` | `{}` |

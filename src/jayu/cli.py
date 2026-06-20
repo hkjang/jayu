@@ -136,6 +136,7 @@ def _toss_client(config: Path | None) -> TossInvestClient:
         secret_key,
         account=_secret_value(settings.toss_account),
         policy=provider_policy(settings, "toss"),
+        auth_style=settings.toss_oauth_auth_style,
     )
 
 
@@ -198,7 +199,45 @@ def _apply_risk(
     signals: dict[str, dict[str, Any]],
     context: RunContext,
 ) -> dict[str, dict[str, Any]]:
-    if not paths.portfolio_file.exists():
+    mapping = load_portfolio_mapping(paths.portfolio_mapping_file)
+    fx_rates = get_fx_rates(["USD", "EUR", "JPY", "HKD"])
+
+    toss_snap_file = paths.state_dir / "toss_account_snapshot.json"
+    toss_positions = None
+    toss_cash_total = None
+    toss_used = False
+
+    if toss_snap_file.exists():
+        try:
+            toss_evidence = read_json(toss_snap_file)
+            if toss_evidence and not toss_evidence.get("errors", {}).get("holdings") and not toss_evidence.get("errors", {}).get("buying_power_krw"):
+                from .toss import load_live_toss_positions
+                toss_positions = load_live_toss_positions(toss_evidence, mapping, fx_rates["USD"])
+                toss_cash_krw = float(toss_evidence.get("buying_power_krw", {}).get("amount") or toss_evidence.get("buying_power_krw", {}).get("buyingPower") or 0.0)
+                toss_cash_usd = float(toss_evidence.get("buying_power_usd", {}).get("amount") or toss_evidence.get("buying_power_usd", {}).get("buyingPower") or 0.0)
+                toss_cash_total = toss_cash_krw + (toss_cash_usd * fx_rates["USD"])
+                toss_used = True
+        except Exception:
+            pass
+
+    if toss_used and toss_positions is not None:
+        portfolio = portfolio_summary(
+            toss_positions,
+            account_value_krw=None,
+            cash_balance_krw=toss_cash_total,
+        )
+    elif paths.portfolio_file.exists():
+        portfolio = portfolio_summary(
+            load_portfolio(
+                paths.portfolio_file,
+                fx_rates["USD"],
+                mapping=mapping,
+                fx_rates=fx_rates,
+            ),
+            account_value_krw=settings.account_value_krw,
+            cash_balance_krw=settings.cash_balance_krw,
+        )
+    else:
         context.record_data(
             "portfolio_snapshot",
             data_hash=stable_hash({"available": False}),
@@ -224,48 +263,64 @@ def _apply_risk(
                     ],
                 }
         evaluated = signals
-    else:
-        mapping = load_portfolio_mapping(paths.portfolio_mapping_file)
-        fx_rates = get_fx_rates(["USD", "EUR", "JPY", "HKD"])
-        portfolio = portfolio_summary(
-            load_portfolio(
-                paths.portfolio_file,
-                fx_rates["USD"],
-                mapping=mapping,
-                fx_rates=fx_rates,
-            ),
-            account_value_krw=settings.account_value_krw,
-            cash_balance_krw=settings.cash_balance_krw,
+        return apply_data_trust(
+            evaluated,
+            price_trust=context.price_trust,
+            reference_audits=context.reference_audits,
+            event_notes=context.event_notes,
+            require_verified_price=settings.data.require_verified_price_for_eligibility,
+            reference_conflict_policy=settings.data.reference_conflict_policy,
         )
-        ensure_contract(
-            "portfolio_snapshot",
-            validate_portfolio_snapshot_contract(
-                {
-                    "account_value_krw": portfolio.get("account_value_krw"),
-                    "cash_balance_krw": portfolio.get("cash_balance_krw", 0.0),
-                }
-            ),
-        )
-        context.record_data(
-            "portfolio_snapshot",
-            data_hash=stable_hash(portfolio),
-            quality_report={
-                "kind": "portfolio_snapshot",
-                "available": True,
-                "valid": True,
-                "position_count": len(portfolio.get("positions", [])),
-            },
-        )
-        atomic_write_json(
-            paths.state_dir / "portfolio_unmapped_tickers.json",
-            unmapped_ticker_report(portfolio),
-        )
-        portfolio["risk_status"] = record_portfolio_snapshot(
-            paths.state_dir / "portfolio_snapshots.jsonl",
-            account_value_krw=float(portfolio["account_value_krw"]),
-            cash_balance_krw=float(portfolio["cash_balance_krw"]),
-        )
-        evaluated = apply_portfolio_risk(signals, portfolio, settings.risk, mapping=mapping)
+
+    ensure_contract(
+        "portfolio_snapshot",
+        validate_portfolio_snapshot_contract(
+            {
+                "account_value_krw": portfolio.get("account_value_krw"),
+                "cash_balance_krw": portfolio.get("cash_balance_krw", 0.0),
+            }
+        ),
+    )
+    context.record_data(
+        "portfolio_snapshot",
+        data_hash=stable_hash(portfolio),
+        quality_report={
+            "kind": "portfolio_snapshot",
+            "available": True,
+            "valid": True,
+            "position_count": len(portfolio.get("positions", [])),
+        },
+    )
+    atomic_write_json(
+        paths.state_dir / "portfolio_unmapped_tickers.json",
+        unmapped_ticker_report(portfolio),
+    )
+    portfolio["risk_status"] = record_portfolio_snapshot(
+        paths.state_dir / "portfolio_snapshots.jsonl",
+        account_value_krw=float(portfolio["account_value_krw"]),
+        cash_balance_krw=float(portfolio["cash_balance_krw"]),
+    )
+    evaluated = apply_portfolio_risk(signals, portfolio, settings.risk, mapping=mapping)
+
+    import time
+    decision_tree = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "portfolio_source": "toss_live" if toss_used else "portfolio_csv",
+        "toss_evidence_attached": toss_used,
+        "cash_balance_krw": portfolio.get("cash_balance_krw"),
+        "account_value_krw": portfolio.get("account_value_krw"),
+        "positions": [pos["ticker"] for pos in portfolio.get("positions", [])],
+        "signals_eligibility": {
+            ticker: {
+                "eligible": sig.get("eligible"),
+                "approved_pct": sig.get("approved_position_pct"),
+                "violations": sig.get("risk", {}).get("violations", []) if isinstance(sig.get("risk"), dict) else [],
+            }
+            for ticker, sig in evaluated.items()
+        }
+    }
+    atomic_write_json(paths.state_dir / "risk_decision_tree.json", decision_tree)
+
     return apply_data_trust(
         evaluated,
         price_trust=context.price_trust,
@@ -1037,6 +1092,7 @@ def signal(
     config: Annotated[Path | None, typer.Option("--config")] = None,
     seed: Annotated[int | None, typer.Option("--seed", min=0)] = None,
     mode: Annotated[str | None, typer.Option("--mode")] = None,
+    attach_toss_readiness: Annotated[bool, typer.Option("--attach-toss-readiness")] = False,
 ) -> None:
     if mode is not None and mode not in {"signal", "shadow", "paper", "live"}:
         raise typer.BadParameter("signal --mode must be signal, shadow, paper, or live")
@@ -1055,6 +1111,12 @@ def signal(
         replay=replay,
         execution_mode=cast(ExecutionMode, mode) if mode is not None else None,
     )
+    if attach_toss_readiness:
+        client = _toss_client(config)
+        _, paths = _load(config)
+        from .toss import attach_toss_readiness_to_signals
+        res = attach_toss_readiness_to_signals(client, paths)
+        _echo_json(res)
 
 
 @app.command()
@@ -1146,6 +1208,18 @@ def portfolio_analyze(
             sorted(exposures.items(), key=lambda item: item[1], reverse=True)[:top]
         )
     typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+@portfolio_app.command("reconcile-toss")
+def portfolio_reconcile_toss(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Reconcile portfolio.csv with Toss live holdings, showing differences and unmapped tickers."""
+    settings, paths = _load(config)
+    client = _toss_client(config)
+    from .toss import reconcile_portfolio_with_toss
+    report = reconcile_portfolio_with_toss(client, paths)
+    _echo_json(report)
 
 
 @experiments_app.callback(invoke_without_command=True)
@@ -1351,20 +1425,56 @@ def promotion_status(
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+@toss_app.command("doctor")
+def toss_doctor(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Diagnose Toss credentials and connection status, showing formatting report."""
+    settings, paths = _load(config)
+    client = _toss_client(config)
+    from .toss import doctor_diagnose
+    report = doctor_diagnose(client, paths)
+    _echo_json(report)
+
+
 @toss_app.command("endpoints")
-def toss_endpoints() -> None:
-    """List implemented Toss Open API GET endpoints."""
-    _echo_json(
-        [
-            {
-                "operation_id": endpoint.operation_id,
-                "method": "GET",
-                "path": endpoint.path,
-                "requires_account": endpoint.requires_account,
-            }
-            for endpoint in TOSS_GET_ENDPOINTS
-        ]
-    )
+def toss_endpoints(
+    sync_check: Annotated[bool, typer.Option("--sync-check")] = False,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """List implemented Toss Open API GET endpoints, with optional sync status check."""
+    if sync_check:
+        settings, paths = _load(config)
+        client = _toss_client(config)
+        from .toss import sync_endpoints
+        report = sync_endpoints(client, paths)
+        _echo_json(report)
+    else:
+        _echo_json(
+            [
+                {
+                    "operation_id": endpoint.operation_id,
+                    "method": "GET",
+                    "path": endpoint.path,
+                    "requires_account": endpoint.requires_account,
+                }
+                for endpoint in TOSS_GET_ENDPOINTS
+            ]
+        )
+
+
+@toss_app.command("snapshot")
+def toss_snapshot(
+    redact: Annotated[bool, typer.Option("--redact/--no-redact")] = True,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Query live account metadata, balances, and calendar, and create snapshot."""
+    settings, paths = _load(config)
+    client = _toss_client(config)
+    from .toss import create_snapshot
+    snapshot = create_snapshot(client, paths, redact=redact)
+    _echo_json(snapshot)
+
 
 
 @toss_app.command("orderbook")

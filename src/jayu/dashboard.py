@@ -683,6 +683,22 @@ def build_dashboard_toss_status(paths: RuntimePaths) -> dict[str, Any]:
     }
 
 
+def _resolve_toss_account_seq(
+    accounts: Sequence[Mapping[str, Any]],
+    *,
+    requested: str | None,
+) -> str | None:
+    if not requested or not accounts:
+        return None
+    req = str(requested).strip()
+    for account in accounts:
+        seq = str(account.get("account_seq") or "").strip()
+        no = str(account.get("account_no") or "").strip()
+        if req in (seq, no):
+            return seq or no
+    return None
+
+
 def build_dashboard_toss_accounts(
     paths: RuntimePaths,
     *,
@@ -712,11 +728,16 @@ def build_dashboard_toss_accounts(
             "error": result.get("message"),
         }
     accounts = _normalize_toss_accounts(result.get("payload"), configured_account)
+    redacted_accounts = []
+    for acc in accounts:
+        acc_copy = dict(acc)
+        acc_copy.pop("account_no", None)
+        redacted_accounts.append(acc_copy)
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "success",
         "read_only": True,
-        "accounts": accounts,
+        "accounts": redacted_accounts,
         "default_account_seq": configured_account,
         "auto_select_account_seq": accounts[0]["account_seq"] if len(accounts) == 1 else None,
         "permissions": {
@@ -803,12 +824,20 @@ def build_dashboard_toss_portfolio(
             name for name, section in sections.items() if _mapping(section).get("status") == "failed"
         ],
     )
+    redacted_accounts = []
+    for acc in accounts:
+        acc_copy = dict(acc)
+        acc_copy.pop("account_no", None)
+        redacted_accounts.append(acc_copy)
+    redacted_selected = dict(selected)
+    redacted_selected.pop("account_no", None)
+
     return {
         "schema_version": SCHEMA_VERSION,
         "status": summary["status"],
         "read_only": True,
-        "accounts": accounts,
-        "selected_account": selected,
+        "accounts": redacted_accounts,
+        "selected_account": redacted_selected,
         "auto_select_account_seq": selected_seq,
         "holdings": holdings,
         "allocation": [
@@ -871,14 +900,24 @@ def build_dashboard_toss_market_snapshot(
     }
     account_sections: dict[str, Any] = {}
     if include_account:
+        real_account = account
+        if account:
+            try:
+                accs_res = resolved_client.accounts()
+                accs = _normalize_toss_accounts(accs_res, None)
+                resolved = _resolve_toss_account_seq(accs, requested=account)
+                if resolved:
+                    real_account = resolved
+            except Exception:
+                pass
         account_sections = {
             "holdings": _toss_call(
                 "getHoldings",
-                lambda: resolved_client.holdings(account=account, symbol=symbol_code),
+                lambda: resolved_client.holdings(account=real_account, symbol=symbol_code),
             ),
             "sellable_quantity": _toss_call(
                 "getSellableQuantity",
-                lambda: resolved_client.sellable_quantity(symbol_code, account=account),
+                lambda: resolved_client.sellable_quantity(symbol_code, account=real_account),
             ),
         }
     successful = sum(item.get("status") == "success" for item in sections.values())
@@ -902,6 +941,85 @@ def build_dashboard_toss_market_snapshot(
             "review_warnings",
         ],
     }
+
+
+def build_dashboard_toss_reconciliation(
+    paths: RuntimePaths,
+    *,
+    account: str | None = None,
+) -> dict[str, Any]:
+    """Reconcile local portfolio CSV with Toss live holdings and return differences."""
+    settings = _load_dashboard_settings(paths)
+    status = build_dashboard_toss_status(paths)
+    if status["status"] != "configured":
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "missing_credentials",
+            "read_only": True,
+            "differences": [],
+            "unmapped_tickers": [],
+            "message": "Toss credentials are not configured",
+        }
+    try:
+        client = _dashboard_toss_client(settings)
+        from .toss import reconcile_portfolio_with_toss
+        report = reconcile_portfolio_with_toss(client, paths, account=account)
+        return {
+            "schema_version": SCHEMA_VERSION,
+            **report,
+        }
+    except Exception as exc:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "failed",
+            "message": str(exc),
+            "differences": [],
+            "unmapped_tickers": [],
+        }
+
+
+def build_dashboard_toss_order_plan(paths: RuntimePaths) -> dict[str, Any]:
+    """Load and return manual order plan, stock warnings, market session status, and today's signals."""
+    order_plan = {}
+    if (paths.state_dir / "order_plan.json").exists():
+        try:
+            with open(paths.state_dir / "order_plan.json", "r", encoding="utf-8") as f:
+                order_plan = json.load(f)
+        except Exception:
+            pass
+
+    warnings_gate = {}
+    if (paths.state_dir / "stock_warning_gate.json").exists():
+        try:
+            with open(paths.state_dir / "stock_warning_gate.json", "r", encoding="utf-8") as f:
+                warnings_gate = json.load(f)
+        except Exception:
+            pass
+
+    market_session = {}
+    if (paths.state_dir / "market_session_status.json").exists():
+        try:
+            with open(paths.state_dir / "market_session_status.json", "r", encoding="utf-8") as f:
+                market_session = json.load(f)
+        except Exception:
+            pass
+
+    today_signals = {}
+    if paths.signal_file.exists():
+        try:
+            with open(paths.signal_file, "r", encoding="utf-8") as f:
+                today_signals = json.load(f)
+        except Exception:
+            pass
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "order_plan": order_plan,
+        "warnings_gate": warnings_gate,
+        "market_session": market_session,
+        "today_signals": today_signals,
+    }
+
 
 
 def _load_recent_api_logs(paths: RuntimePaths) -> list[dict[str, Any]]:
@@ -1245,7 +1363,8 @@ def test_provider_connection(paths: RuntimePaths, provider: str) -> dict[str, An
         if provider == "yahoo":
             try:
                 import yfinance as yf
-                ticker = yf.Ticker("SOXL")
+                from .yahoo import get_yahoo_session
+                ticker = yf.Ticker("SOXL", session=get_yahoo_session())
                 history = ticker.history(period="1d")
                 if history.empty:
                     raise ValueError("Yahoo Finance returned empty history")
@@ -1509,6 +1628,44 @@ def _dashboard_handler(
                     if segments[4] == "trader-lens":
                         self._json(build_dashboard_trader_lens(paths, run_id=run_id))
                         return
+                if parsed.path == "/api/v1/analysis":
+                    query = parse_qs(parsed.query)
+                    ticker = query.get("ticker", ["SOXL"])[0].upper()
+                    macro_series = query.get("macro_series", ["FEDFUNDS"])[0].upper()
+                    period = query.get("period", ["2y"])[0]
+                    self._json(
+                        build_dashboard_analysis(
+                            paths,
+                            ticker=ticker,
+                            macro_series=macro_series,
+                            period=period,
+                        )
+                    )
+                    return
+                if parsed.path == "/api/v1/analysis/technical":
+                    query = parse_qs(parsed.query)
+                    ticker = query.get("ticker", ["SOXL"])[0].upper()
+                    period = query.get("period", ["1y"])[0]
+                    self._json(build_analysis_technical(ticker=ticker, period=period))
+                    return
+                if parsed.path == "/api/v1/analysis/market-overview":
+                    self._json(build_analysis_market_overview())
+                    return
+                if parsed.path == "/api/v1/analysis/multi-compare":
+                    query = parse_qs(parsed.query)
+                    raw_tickers = query.get("tickers", ["SOXL,TQQQ,NVDA,QQQ,SPY"])[0]
+                    tickers_list = [t.strip().upper() for t in raw_tickers.split(",") if t.strip()]
+                    period = query.get("period", ["1y"])[0]
+                    self._json(build_analysis_multi_compare(tickers=tickers_list, period=period))
+                    return
+                if parsed.path == "/api/v1/analysis/portfolio-stats":
+                    query = parse_qs(parsed.query)
+                    run_id = query.get("run_id", [None])[0]
+                    self._json(build_analysis_portfolio_stats(paths, run_id=run_id))
+                    return
+                if parsed.path == "/api/v1/analysis/economic-calendar":
+                    self._json(build_analysis_economic_calendar())
+                    return
                 if parsed.path == "/api/v1/promotion":
                     self._json(build_dashboard_promotion(paths))
                     return
@@ -1543,6 +1700,14 @@ def _dashboard_handler(
                         )
                     )
                     return
+                if parsed.path == "/api/v1/toss/reconciliation":
+                    query = parse_qs(parsed.query)
+                    account = query.get("account", [None])[0]
+                    self._json(build_dashboard_toss_reconciliation(paths, account=account))
+                    return
+                if parsed.path == "/api/v1/toss/order-plan":
+                    self._json(build_dashboard_toss_order_plan(paths))
+                    return
                 if parsed.path == "/api/v1/api-monitoring":
                     self._json(build_dashboard_api_monitoring(paths))
                     return
@@ -1572,6 +1737,21 @@ def _dashboard_handler(
                 if parsed.path == "/api/v1/api-monitoring/clear-cache":
                     cache_type = payload.get("cache_type")
                     result = clear_provider_cache(paths, cache_type)
+                    self._json(result)
+                    return
+                if parsed.path == "/api/v1/toss/reconciliation/sync":
+                    settings = _load_dashboard_settings(paths)
+                    status = build_dashboard_toss_status(paths)
+                    if status["status"] != "configured":
+                        self._json({
+                            "status": "failed",
+                            "message": "Toss credentials are not configured"
+                        })
+                        return
+                    client = _dashboard_toss_client(settings)
+                    account = payload.get("account")
+                    from .toss import sync_portfolio_from_toss
+                    result = sync_portfolio_from_toss(client, paths, account=account)
                     self._json(result)
                     return
                 self._json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)
@@ -1722,6 +1902,7 @@ def _dashboard_toss_client(settings: Settings) -> TossInvestClient:
         secret_key,
         account=_secret_value(settings.toss_account),
         policy=provider_policy(settings, "toss"),
+        auth_style=settings.toss_oauth_auth_style,
     )
 
 
@@ -1769,12 +1950,12 @@ def _normalize_toss_accounts(payload: Any, default_account_seq: str | None) -> l
         )
         account_no = _first_text(
             row,
-            "maskedAccountNo",
-            "masked_account_no",
             "accountNo",
             "account_no",
             "accountNumber",
             "account_number",
+            "maskedAccountNo",
+            "masked_account_no",
         )
         display_name = _first_text(
             row,
@@ -1791,6 +1972,7 @@ def _normalize_toss_accounts(payload: Any, default_account_seq: str | None) -> l
                 "account_seq": account_seq,
                 "display_name": display_name or f"Toss account {index + 1}",
                 "masked_account_no": _mask_account_text(account_no or account_seq),
+                "account_no": account_no,
                 "account_type": _first_text(row, "accountType", "account_type", "type"),
                 "currency": _first_text(row, "currency", "baseCurrency", "base_currency"),
                 "is_default": bool(default_seq and account_seq == default_seq),
@@ -3742,3 +3924,830 @@ def _sequence(value: Any) -> Sequence[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return value
     return []
+
+
+def build_dashboard_analysis(
+    paths: RuntimePaths,
+    ticker: str = "SOXL",
+    macro_series: str = "FEDFUNDS",
+    period: str = "2y",
+) -> dict[str, Any]:
+    import yfinance as yf
+    import pandas as pd
+    import requests
+    from datetime import date, datetime, timedelta
+    from io import StringIO
+    from .yahoo import get_yahoo_session
+    from .settings import load_settings
+
+    # 1. Fetch Stock Data
+    yf_period = period
+    if period.endswith("m"):
+        yf_period = period.replace("m", "mo")
+
+    stock_data = {}
+    try:
+        session = get_yahoo_session()
+        stock_df = yf.download(ticker, period=yf_period, session=session, auto_adjust=True, progress=False)
+        if stock_df.empty:
+            stock_data = {"error": f"No price data found for ticker {ticker}"}
+        else:
+            history = []
+            close_prices = []
+            for date_idx, row in stock_df.iterrows():
+                date_str = date_idx.strftime("%Y-%m-%d")
+                
+                # Retrieve Close / Open / High / Low / Volume robustly (handling MultiIndex columns)
+                try:
+                    if hasattr(stock_df.columns, "levels"):
+                        close_val = float(row[("Close", ticker)]) if ("Close", ticker) in row else float(row["Close"].iloc[0])
+                        open_val = float(row[("Open", ticker)]) if ("Open", ticker) in row else float(row["Open"].iloc[0])
+                        high_val = float(row[("High", ticker)]) if ("High", ticker) in row else float(row["High"].iloc[0])
+                        low_val = float(row[("Low", ticker)]) if ("Low", ticker) in row else float(row["Low"].iloc[0])
+                        vol_val = float(row[("Volume", ticker)]) if ("Volume", ticker) in row else float(row["Volume"].iloc[0])
+                    else:
+                        close_val = float(row["Close"])
+                        open_val = float(row["Open"])
+                        high_val = float(row["High"])
+                        low_val = float(row["Low"])
+                        vol_val = float(row["Volume"])
+                except Exception:
+                    close_val = float(row.iloc[0])
+                    open_val = float(row.iloc[0])
+                    high_val = float(row.iloc[0])
+                    low_val = float(row.iloc[0])
+                    vol_val = 0.0
+
+                close_prices.append(close_val)
+                history.append({
+                    "date": date_str,
+                    "open": open_val,
+                    "high": high_val,
+                    "low": low_val,
+                    "close": close_val,
+                    "volume": vol_val
+                })
+
+            latest_price = close_prices[-1] if close_prices else 0.0
+            prev_price = close_prices[-2] if len(close_prices) > 1 else latest_price
+            change_pct = ((latest_price - prev_price) / prev_price * 100) if prev_price else 0.0
+            
+            fifty_two_week_high = max(close_prices) if close_prices else 0.0
+            fifty_two_week_low = min(close_prices) if close_prices else 0.0
+
+            stock_data = {
+                "ticker": ticker,
+                "latest_price": latest_price,
+                "change_pct": change_pct,
+                "fifty_two_week_high": fifty_two_week_high,
+                "fifty_two_week_low": fifty_two_week_low,
+                "history": history
+            }
+    except Exception as exc:
+        stock_data = {"error": f"Failed to fetch stock data: {str(exc)}"}
+
+    # 2. Fetch FRED macroeconomic data
+    macro_data = {}
+    try:
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={macro_series}"
+        res = requests.get(url, timeout=15)
+        res.raise_for_status()
+        csv_data = StringIO(res.text)
+        macro_df = pd.read_csv(csv_data)
+        
+        macro_df["date_dt"] = pd.to_datetime(macro_df["observation_date"])
+        
+        now_dt = datetime.now()
+        if period == "1m":
+            start_dt = now_dt - timedelta(days=30)
+        elif period == "3m":
+            start_dt = now_dt - timedelta(days=90)
+        elif period == "6m":
+            start_dt = now_dt - timedelta(days=180)
+        elif period == "1y":
+            start_dt = now_dt - timedelta(days=365)
+        elif period == "2y":
+            start_dt = now_dt - timedelta(days=365 * 2)
+        elif period == "5y":
+            start_dt = now_dt - timedelta(days=365 * 5)
+        else: # 10y
+            start_dt = now_dt - timedelta(days=365 * 10)
+            
+        filtered_df = macro_df[macro_df["date_dt"] >= start_dt]
+        
+        history = []
+        values = []
+        for _, row in filtered_df.iterrows():
+            val_str = str(row[macro_series]).strip()
+            if val_str == "." or not val_str:
+                continue
+            try:
+                val = float(val_str)
+            except ValueError:
+                continue
+            
+            values.append(val)
+            history.append({
+                "date": row["observation_date"],
+                "value": val
+            })
+            
+        latest_val = values[-1] if values else 0.0
+        prev_val = values[-2] if len(values) > 1 else latest_val
+        change = latest_val - prev_val
+        
+        macro_names = {
+            "FEDFUNDS": "Federal Funds Effective Rate",
+            "CPIAUCSNS": "Consumer Price Index (CPI)",
+            "UNRATE": "Civilian Unemployment Rate",
+            "GDPC1": "Real Gross Domestic Product (GDP)",
+            "T10Y2Y": "10-Year Treasury Minus 2-Year Treasury",
+            "BAMLH0A0HYM2": "ICE BofA US High Yield Index Option-Adjusted Spread",
+            "M2SL": "M2 Money Supply",
+        }
+        series_name = macro_names.get(macro_series, f"FRED Series {macro_series}")
+        
+        macro_data = {
+            "series_id": macro_series,
+            "name": series_name,
+            "latest_value": latest_val,
+            "latest_date": history[-1]["date"] if history else "-",
+            "change": change,
+            "history": history
+        }
+    except Exception as exc:
+        macro_data = {"error": f"Failed to fetch FRED data: {str(exc)}"}
+
+    # 3. Fetch News/Sentiment from Finnhub or Alpha Vantage
+    news_data = []
+    try:
+        settings = load_settings(paths.config_file if paths.config_file.exists() else None)
+        finnhub_key = settings.finnhub_api_key.get_secret_value() if settings.finnhub_api_key else None
+        av_key = settings.alpha_vantage_api_key.get_secret_value() if settings.alpha_vantage_api_key else None
+        
+        end_date = date.today()
+        start_date = end_date - timedelta(days=30)
+        
+        if finnhub_key:
+            try:
+                from .supplemental_data import FinnhubEventProvider
+                finnhub = FinnhubEventProvider(paths.cache_dir, finnhub_key)
+                raw_news = finnhub.company_news(ticker, start=start_date, end=end_date)
+                for item in raw_news[:12]:
+                    news_data.append({
+                        "headline": item.get("headline"),
+                        "source": item.get("source"),
+                        "url": item.get("url"),
+                        "published_at": item.get("published_at"),
+                        "sentiment": "Neutral"
+                    })
+            except Exception:
+                pass
+                
+        if not news_data and av_key:
+            try:
+                from .supplemental_data import AlphaVantageNewsProvider
+                av = AlphaVantageNewsProvider(paths.cache_dir, av_key)
+                raw_news = av.fetch(ticker, limit=12)
+                for item in raw_news:
+                    score = item.get("sentiment_score")
+                    sentiment = "Neutral"
+                    if score is not None:
+                        if score > 0.15:
+                            sentiment = "Positive"
+                        elif score < -0.15:
+                            sentiment = "Negative"
+                    news_data.append({
+                        "headline": item.get("title"),
+                        "source": item.get("source"),
+                        "url": item.get("url"),
+                        "published_at": item.get("published_at"),
+                        "sentiment": sentiment
+                    })
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 4. Fetch Toss portfolio metrics if configured
+    toss_portfolio = {}
+    try:
+        from .toss import TossInvestClient
+        api_key = settings.toss_api_key.get_secret_value() if settings.toss_api_key else None
+        secret_key = settings.toss_secret_key.get_secret_value() if settings.toss_secret_key else None
+        if api_key and secret_key:
+            client = TossInvestClient(api_key=api_key, secret_key=secret_key)
+            accounts = client.accounts()
+            if accounts:
+                acc_no = accounts[0]["account_no"]
+                positions = client.positions(acc_no)
+                toss_portfolio = {
+                    "account_no": acc_no,
+                    "positions": [
+                        {
+                            "symbol": pos.get("symbol"),
+                            "qty": pos.get("quantity"),
+                            "buy_price": pos.get("buy_price"),
+                            "current_price": pos.get("current_price"),
+                            "profit_loss": pos.get("profit_loss"),
+                            "profit_loss_rate": pos.get("profit_loss_rate")
+                        }
+                        for pos in positions
+                    ]
+                }
+    except Exception:
+        pass
+
+    return {
+        "stock": stock_data,
+        "macro": macro_data,
+        "news": news_data,
+        "toss": toss_portfolio
+    }
+
+
+# ─── Technical Indicators ──────────────────────────────────────────────────────
+
+def _compute_rsi(closes: list[float], period: int = 14) -> list[float | None]:
+    """Wilder's RSI."""
+    results: list[float | None] = [None] * len(closes)
+    if len(closes) < period + 1:
+        return results
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [max(d, 0.0) for d in deltas]
+    losses = [abs(min(d, 0.0)) for d in deltas]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(closes)):
+        idx = i - 1  # index in deltas
+        avg_gain = (avg_gain * (period - 1) + gains[idx]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[idx]) / period
+        rs = avg_gain / avg_loss if avg_loss else float("inf")
+        results[i] = round(100.0 - 100.0 / (1.0 + rs), 2)
+    return results
+
+
+def _compute_ema(closes: list[float], period: int) -> list[float | None]:
+    results: list[float | None] = [None] * len(closes)
+    if len(closes) < period:
+        return results
+    k = 2.0 / (period + 1)
+    ema = sum(closes[:period]) / period
+    results[period - 1] = round(ema, 4)
+    for i in range(period, len(closes)):
+        ema = closes[i] * k + ema * (1 - k)
+        results[i] = round(ema, 4)
+    return results
+
+
+def _compute_macd(
+    closes: list[float],
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    ema_fast = _compute_ema(closes, fast)
+    ema_slow = _compute_ema(closes, slow)
+    macd_line: list[float | None] = []
+    for f, s in zip(ema_fast, ema_slow):
+        if f is None or s is None:
+            macd_line.append(None)
+        else:
+            macd_line.append(round(f - s, 6))
+    # signal line: EMA of macd values (only where not None)
+    valid_macd = [(i, v) for i, v in enumerate(macd_line) if v is not None]
+    sig_line: list[float | None] = [None] * len(macd_line)
+    hist: list[float | None] = [None] * len(macd_line)
+    if len(valid_macd) >= signal:
+        vals = [v for _, v in valid_macd]
+        ema_sig = _compute_ema(vals, signal)
+        for j, (orig_i, _) in enumerate(valid_macd):
+            if ema_sig[j] is not None:
+                sig_line[orig_i] = round(ema_sig[j], 6)
+                if macd_line[orig_i] is not None:
+                    hist[orig_i] = round(macd_line[orig_i] - ema_sig[j], 6)  # type: ignore[operator]
+    return macd_line, sig_line, hist
+
+
+def _compute_bollinger(
+    closes: list[float], period: int = 20, std_dev: float = 2.0
+) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    upper: list[float | None] = [None] * len(closes)
+    mid: list[float | None] = [None] * len(closes)
+    lower: list[float | None] = [None] * len(closes)
+    for i in range(period - 1, len(closes)):
+        window = closes[i - period + 1 : i + 1]
+        avg = sum(window) / period
+        variance = sum((x - avg) ** 2 for x in window) / period
+        sd = variance ** 0.5
+        upper[i] = round(avg + std_dev * sd, 4)
+        mid[i] = round(avg, 4)
+        lower[i] = round(avg - std_dev * sd, 4)
+    return upper, mid, lower
+
+
+def _compute_atr(
+    highs: list[float], lows: list[float], closes: list[float], period: int = 14
+) -> list[float | None]:
+    results: list[float | None] = [None] * len(closes)
+    if len(closes) < period + 1:
+        return results
+    trs = []
+    for i in range(1, len(closes)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        trs.append(tr)
+    atr = sum(trs[:period]) / period
+    results[period] = round(atr, 4)
+    for i in range(period + 1, len(closes)):
+        atr = (atr * (period - 1) + trs[i - 1]) / period
+        results[i] = round(atr, 4)
+    return results
+
+
+def build_analysis_technical(
+    ticker: str = "SOXL",
+    period: str = "1y",
+) -> dict[str, Any]:
+    """Return OHLCV history plus RSI/MACD/Bollinger/EMA/ATR/Volume-MA for charting."""
+    import yfinance as yf
+    from .yahoo import get_yahoo_session
+
+    yf_period = period.replace("m", "mo") if period.endswith("m") else period
+
+    try:
+        session = get_yahoo_session()
+        df = yf.download(ticker, period=yf_period, session=session, auto_adjust=True, progress=False)
+        if df.empty:
+            return {"error": f"No data for {ticker}"}
+
+        def _col(df, name: str) -> list[float]:
+            if hasattr(df.columns, "levels"):
+                try:
+                    return [float(v) for v in df[(name, ticker)]]
+                except Exception:
+                    return [float(v) for v in df[name].iloc[:, 0]]
+            return [float(v) for v in df[name]]
+
+        dates = [d.strftime("%Y-%m-%d") for d in df.index]
+        opens = _col(df, "Open")
+        highs = _col(df, "High")
+        lows = _col(df, "Low")
+        closes = _col(df, "Close")
+        volumes = _col(df, "Volume")
+
+        rsi14 = _compute_rsi(closes, 14)
+        rsi2 = _compute_rsi(closes, 2)
+        ema20 = _compute_ema(closes, 20)
+        ema50 = _compute_ema(closes, 50)
+        ema200 = _compute_ema(closes, 200)
+        macd_l, macd_s, macd_h = _compute_macd(closes)
+        bb_u, bb_m, bb_l = _compute_bollinger(closes)
+        atr14 = _compute_atr(highs, lows, closes, 14)
+
+        # Volume MA20
+        vol_ma20: list[float | None] = [None] * len(volumes)
+        for i in range(19, len(volumes)):
+            vol_ma20[i] = round(sum(volumes[i - 19 : i + 1]) / 20, 0)
+
+        # Market regime from EMA200
+        regimes: list[str] = []
+        for i, c in enumerate(closes):
+            e200 = ema200[i]
+            if e200 is None:
+                regimes.append("unknown")
+            elif c > e200 * 1.02:
+                regimes.append("bull")
+            elif c < e200 * 0.98:
+                regimes.append("bear")
+            else:
+                regimes.append("sideways")
+
+        # Latest values summary
+        latest = len(closes) - 1
+        latest_price = closes[latest]
+        prev_price = closes[latest - 1] if latest > 0 else latest_price
+        change_pct = (latest_price - prev_price) / prev_price * 100 if prev_price else 0.0
+
+        records = [
+            {
+                "date": dates[i],
+                "open": opens[i],
+                "high": highs[i],
+                "low": lows[i],
+                "close": closes[i],
+                "volume": volumes[i],
+                "rsi14": rsi14[i],
+                "rsi2": rsi2[i],
+                "ema20": ema20[i],
+                "ema50": ema50[i],
+                "ema200": ema200[i],
+                "macd_line": macd_l[i],
+                "macd_signal": macd_s[i],
+                "macd_hist": macd_h[i],
+                "bb_upper": bb_u[i],
+                "bb_mid": bb_m[i],
+                "bb_lower": bb_l[i],
+                "atr14": atr14[i],
+                "vol_ma20": vol_ma20[i],
+                "regime": regimes[i],
+            }
+            for i in range(len(dates))
+        ]
+
+        return {
+            "ticker": ticker,
+            "period": period,
+            "latest_price": round(latest_price, 2),
+            "change_pct": round(change_pct, 2),
+            "latest_rsi": rsi14[latest],
+            "latest_regime": regimes[latest],
+            "latest_ema20": ema20[latest],
+            "latest_ema50": ema50[latest],
+            "latest_ema200": ema200[latest],
+            "latest_atr": atr14[latest],
+            "records": records,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ─── Market Overview ───────────────────────────────────────────────────────────
+
+def build_analysis_market_overview() -> dict[str, Any]:
+    """Return major index, sector ETF, and volatility snapshot."""
+    import yfinance as yf
+    from .yahoo import get_yahoo_session
+
+    INDEX_TICKERS = {
+        "^GSPC": "S&P 500",
+        "^IXIC": "NASDAQ",
+        "^DJI": "DOW",
+        "^RUT": "Russell 2000",
+        "^VIX": "VIX",
+        "GLD": "Gold (GLD)",
+        "TLT": "20Y Treasury (TLT)",
+        "DXY=F": "US Dollar (DXY)",
+        "BTC-USD": "Bitcoin",
+    }
+
+    SECTOR_TICKERS = {
+        "XLK": "기술",
+        "XLF": "금융",
+        "XLE": "에너지",
+        "XLV": "헬스케어",
+        "XLI": "산업재",
+        "XLY": "임의소비재",
+        "XLP": "필수소비재",
+        "XLU": "유틸리티",
+        "XLB": "소재",
+        "XLRE": "부동산",
+        "XLC": "커뮤니케이션",
+    }
+
+    try:
+        session = get_yahoo_session()
+        all_tickers = list(INDEX_TICKERS.keys()) + list(SECTOR_TICKERS.keys())
+
+        raw = yf.download(
+            all_tickers,
+            period="5d",
+            session=session,
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
+        )
+
+        def _last_two(ticker: str) -> tuple[float, float]:
+            try:
+                if hasattr(raw.columns, "levels"):
+                    col = raw[(ticker, "Close")].dropna()
+                else:
+                    col = raw["Close"][ticker].dropna()
+                if len(col) < 2:
+                    return col.iloc[-1], col.iloc[-1]
+                return float(col.iloc[-2]), float(col.iloc[-1])
+            except Exception:
+                return 0.0, 0.0
+
+        def _sparkline(ticker: str, n: int = 5) -> list[float]:
+            try:
+                if hasattr(raw.columns, "levels"):
+                    col = raw[(ticker, "Close")].dropna().tail(n)
+                else:
+                    col = raw["Close"][ticker].dropna().tail(n)
+                return [round(float(v), 4) for v in col]
+            except Exception:
+                return []
+
+        indices = []
+        for sym, name in INDEX_TICKERS.items():
+            prev, latest = _last_two(sym)
+            chg = (latest - prev) / prev * 100 if prev else 0.0
+            indices.append({
+                "symbol": sym,
+                "name": name,
+                "price": round(latest, 2),
+                "change_pct": round(chg, 2),
+                "sparkline": _sparkline(sym),
+            })
+
+        sectors = []
+        for sym, name in SECTOR_TICKERS.items():
+            prev, latest = _last_two(sym)
+            chg = (latest - prev) / prev * 100 if prev else 0.0
+            sectors.append({
+                "symbol": sym,
+                "name": name,
+                "price": round(latest, 2),
+                "change_pct": round(chg, 2),
+            })
+
+        # VIX-based fear & greed approximation
+        vix_val = next((i["price"] for i in indices if i["symbol"] == "^VIX"), 20.0)
+        if vix_val <= 12:
+            fg_level, fg_label = 85, "극단적 탐욕"
+        elif vix_val <= 15:
+            fg_level, fg_label = 70, "탐욕"
+        elif vix_val <= 20:
+            fg_level, fg_label = 55, "중립"
+        elif vix_val <= 25:
+            fg_level, fg_label = 40, "공포"
+        elif vix_val <= 35:
+            fg_level, fg_label = 25, "극단적 공포"
+        else:
+            fg_level, fg_label = 10, "패닉"
+
+        return {
+            "indices": indices,
+            "sectors": sectors,
+            "fear_greed": {"value": fg_level, "label": fg_label, "vix": vix_val},
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ─── Multi-Ticker Comparison ───────────────────────────────────────────────────
+
+def build_analysis_multi_compare(
+    tickers: list[str],
+    period: str = "1y",
+) -> dict[str, Any]:
+    """Return normalized (base=100) cumulative return curves for multiple tickers."""
+    import yfinance as yf
+    from .yahoo import get_yahoo_session
+
+    tickers = [t.upper() for t in tickers[:6]]  # max 6
+    yf_period = period.replace("m", "mo") if period.endswith("m") else period
+
+    try:
+        session = get_yahoo_session()
+        df = yf.download(
+            tickers,
+            period=yf_period,
+            session=session,
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
+        )
+
+        dates: list[str] = []
+        series: dict[str, list[float | None]] = {t: [] for t in tickers}
+
+        if len(tickers) == 1:
+            ticker = tickers[0]
+            if hasattr(df.columns, "levels"):
+                closes = df[(ticker, "Close")].dropna()
+            else:
+                closes = df["Close"].dropna()
+            base = float(closes.iloc[0]) if not closes.empty else 1.0
+            dates = [d.strftime("%Y-%m-%d") for d in closes.index]
+            series[ticker] = [round(float(v) / base * 100, 2) for v in closes]
+        else:
+            for ticker in tickers:
+                try:
+                    if hasattr(df.columns, "levels"):
+                        closes = df[(ticker, "Close")].dropna()
+                    else:
+                        closes = df["Close"][ticker].dropna()
+                    if dates == []:
+                        dates = [d.strftime("%Y-%m-%d") for d in closes.index]
+                    base = float(closes.iloc[0]) if not closes.empty else 1.0
+                    # reindex to common dates
+                    normed = closes / base * 100
+                    date_map = {d.strftime("%Y-%m-%d"): round(float(v), 2) for d, v in zip(closes.index, normed)}
+                    series[ticker] = [date_map.get(dt) for dt in dates]
+                except Exception:
+                    series[ticker] = [None] * len(dates)
+
+        # Latest return summary
+        summary = []
+        for ticker in tickers:
+            vals = [v for v in series[ticker] if v is not None]
+            if vals:
+                latest_norm = vals[-1]
+                total_return = round(latest_norm - 100, 2)
+                summary.append({"ticker": ticker, "total_return_pct": total_return, "latest_norm": latest_norm})
+            else:
+                summary.append({"ticker": ticker, "total_return_pct": None, "latest_norm": None})
+
+        summary.sort(key=lambda x: x["total_return_pct"] or -999, reverse=True)
+
+        return {
+            "tickers": tickers,
+            "period": period,
+            "dates": dates,
+            "series": series,
+            "summary": summary,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ─── Portfolio Stats (from run data) ──────────────────────────────────────────
+
+def build_analysis_portfolio_stats(paths: RuntimePaths, run_id: str | None = None) -> dict[str, Any]:
+    """Aggregate Sharpe/Sortino/MDD/win-rate from recent run data."""
+    from .performance import calc_metrics, equity_curve_records
+
+    runs_dir = paths.runs_dir
+    if not runs_dir.exists():
+        return {"error": "runs 디렉터리가 없습니다.", "runs": []}
+
+    run_dirs = sorted(
+        [d for d in runs_dir.iterdir() if d.is_dir()],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+
+    results = []
+    equity_curve: list[dict[str, Any]] = []
+
+    for run_dir in run_dirs[:10]:
+        try:
+            manifest_path = run_dir / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            manifest = read_json(manifest_path) or {}
+            rid = manifest.get("run_id", run_dir.name)
+
+            trades_path = run_dir / "trades.json"
+            if not trades_path.exists():
+                continue
+            trades = read_json(trades_path) or []
+            if not isinstance(trades, list):
+                continue
+
+            capital_history = manifest.get("capital_history", [])
+            final_capital = manifest.get("final_capital", 0.0)
+            initial_capital = capital_history[0] if capital_history else 10000.0
+
+            metrics = calc_metrics(trades, final_capital, capital_history, min_trades=1)
+            if metrics is None:
+                continue
+
+            run_result: dict[str, Any] = {
+                "run_id": rid,
+                "command": manifest.get("command", "-"),
+                "status": manifest.get("status", "-"),
+                "started_at": manifest.get("started_at", "-"),
+                "finished_at": manifest.get("finished_at", "-"),
+                "total_trades": len(trades),
+                "sharpe": metrics.get("sharpe"),
+                "sortino": metrics.get("sortino"),
+                "calmar": metrics.get("calmar"),
+                "fitness": metrics.get("fitness"),
+                "win_rate": metrics.get("win_rate"),
+                "profit_factor": metrics.get("profit_factor"),
+                "rr_ratio": metrics.get("rr_ratio"),
+                "max_drawdown": metrics.get("max_drawdown"),
+                "mdd_peak": metrics.get("mdd_peak"),
+                "mdd_trough": metrics.get("mdd_trough"),
+                "mdd_duration_days": metrics.get("mdd_duration_days"),
+                "total_return": metrics.get("total_return"),
+                "annualized_return": metrics.get("annualized_return"),
+                "initial_capital": initial_capital,
+                "final_capital": final_capital,
+            }
+            results.append(run_result)
+
+            # Attach equity curve of the most recent or requested run
+            if not equity_curve:
+                if run_id is None or rid == run_id:
+                    equity_curve = equity_curve_records(trades, capital_history)[:500]
+
+        except Exception:
+            continue
+
+    # Aggregate across runs
+    def _avg(field: str) -> float | None:
+        vals = [r[field] for r in results if r.get(field) is not None]
+        return round(sum(vals) / len(vals), 4) if vals else None
+
+    aggregate = {
+        "run_count": len(results),
+        "avg_sharpe": _avg("sharpe"),
+        "avg_sortino": _avg("sortino"),
+        "avg_win_rate": _avg("win_rate"),
+        "avg_profit_factor": _avg("profit_factor"),
+        "avg_max_drawdown": _avg("max_drawdown"),
+        "avg_total_return": _avg("total_return"),
+        "avg_annualized_return": _avg("annualized_return"),
+    }
+
+    return {
+        "aggregate": aggregate,
+        "runs": results,
+        "equity_curve": equity_curve,
+    }
+
+
+# ─── Economic Calendar ─────────────────────────────────────────────────────────
+
+def build_analysis_economic_calendar() -> dict[str, Any]:
+    """Return recent and upcoming major economic release dates."""
+    import requests
+    from datetime import date, timedelta, datetime
+
+    CALENDAR_SERIES = {
+        "FEDFUNDS": {"name": "FOMC 기준금리 결정", "icon": "🏛️", "frequency": "월별"},
+        "CPIAUCSL": {"name": "소비자물가지수 (CPI)", "icon": "🛒", "frequency": "월별"},
+        "PPIFIS": {"name": "생산자물가지수 (PPI)", "icon": "🏭", "frequency": "월별"},
+        "PAYEMS": {"name": "비농업 고용 (NFP)", "icon": "👷", "frequency": "월별"},
+        "GDPC1": {"name": "실질 GDP 성장률", "icon": "📊", "frequency": "분기별"},
+        "UNRATE": {"name": "실업률", "icon": "📉", "frequency": "월별"},
+        "HOUST": {"name": "주택착공 건수", "icon": "🏠", "frequency": "월별"},
+        "RSAFS": {"name": "소매판매 (Retail Sales)", "icon": "🛍️", "frequency": "월별"},
+        "INDPRO": {"name": "산업생산 지수", "icon": "⚙️", "frequency": "월별"},
+    }
+
+    events = []
+    today = date.today()
+
+    for series_id, meta in CALENDAR_SERIES.items():
+        try:
+            url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+            res = requests.get(url, timeout=10)
+            res.raise_for_status()
+            lines = [l for l in res.text.strip().splitlines() if l and not l.startswith("observation_date")]
+            if not lines:
+                continue
+            # Last 3 actual releases
+            last_releases = []
+            for line in lines[-3:]:
+                parts = line.split(",")
+                if len(parts) >= 2:
+                    d_str, val_str = parts[0].strip(), parts[1].strip()
+                    if val_str == ".":
+                        continue
+                    try:
+                        d_obj = date.fromisoformat(d_str)
+                        last_releases.append({"date": d_str, "value": float(val_str)})
+                    except Exception:
+                        continue
+
+            latest_release_date = date.fromisoformat(last_releases[-1]["date"]) if last_releases else None
+            latest_value = last_releases[-1]["value"] if last_releases else None
+            prev_value = last_releases[-2]["value"] if len(last_releases) >= 2 else None
+
+            # Estimate next release (approx 1 month or 3 months later)
+            if latest_release_date:
+                if meta["frequency"] == "분기별":
+                    next_est = latest_release_date + timedelta(days=92)
+                else:
+                    next_est = latest_release_date + timedelta(days=33)
+                next_str = next_est.isoformat()
+            else:
+                next_str = None
+
+            change = None
+            if latest_value is not None and prev_value is not None:
+                change = round(latest_value - prev_value, 4)
+
+            events.append({
+                "series_id": series_id,
+                "name": meta["name"],
+                "icon": meta["icon"],
+                "frequency": meta["frequency"],
+                "latest_date": last_releases[-1]["date"] if last_releases else None,
+                "latest_value": latest_value,
+                "prev_value": prev_value,
+                "change": change,
+                "next_estimated": next_str,
+                "is_upcoming": next_str is not None and date.fromisoformat(next_str) >= today,
+            })
+        except Exception:
+            events.append({
+                "series_id": series_id,
+                "name": meta["name"],
+                "icon": meta["icon"],
+                "frequency": meta["frequency"],
+                "latest_date": None,
+                "latest_value": None,
+                "prev_value": None,
+                "change": None,
+                "next_estimated": None,
+                "is_upcoming": False,
+            })
+
+    events.sort(key=lambda e: e.get("next_estimated") or "9999", )
+    return {"events": events, "generated_at": date.today().isoformat()}

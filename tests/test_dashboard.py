@@ -19,6 +19,8 @@ from jayu.dashboard import (
     build_dashboard_toss_market_snapshot,
     build_dashboard_toss_portfolio,
     build_dashboard_toss_status,
+    build_dashboard_toss_reconciliation,
+    build_dashboard_toss_order_plan,
     create_dashboard_server,
     dashboard_static_dir,
     list_dashboard_runs,
@@ -758,3 +760,183 @@ def test_dashboard_http_server_serves_static_page_and_api(tmp_path: Path):
     assert trader_lens["summary"]["average_reward_to_risk"] == 2.25
     assert promotion["summary"]["status"] == "blocked"
     assert validation["mode"] == "shadow"
+
+
+def test_dashboard_toss_reconciliation_missing_credentials(tmp_path: Path, monkeypatch):
+    paths = _paths(tmp_path)
+    monkeypatch.setattr("jayu.dashboard._load_dashboard_settings", lambda p: type("Settings", (), {
+        "toss_api_key": None,
+        "toss_secret_key": None,
+        "toss_account": None,
+    })())
+    report = build_dashboard_toss_reconciliation(paths)
+    assert report["status"] == "missing_credentials"
+
+
+
+def test_dashboard_toss_order_plan(tmp_path: Path):
+    paths = _paths(tmp_path)
+    paths.state_dir.mkdir(parents=True, exist_ok=True)
+    paths.signals_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(paths.state_dir / "order_plan.json", {"orders": [{"ticker": "AAPL", "action": "BUY"}]})
+    atomic_write_json(paths.state_dir / "stock_warning_gate.json", {"AAPL": {"has_warning": False}})
+    atomic_write_json(paths.state_dir / "market_session_status.json", {"US": {"open": True}})
+    atomic_write_json(paths.signal_file, {"AAPL": {"eligible": True}})
+
+    report = build_dashboard_toss_order_plan(paths)
+    assert report["order_plan"]["orders"][0]["ticker"] == "AAPL"
+    assert report["warnings_gate"]["AAPL"]["has_warning"] is False
+    assert report["market_session"]["US"]["open"] is True
+    assert report["today_signals"]["AAPL"]["eligible"] is True
+
+
+def test_dashboard_toss_reconciliation_with_account(tmp_path: Path, monkeypatch):
+    paths = _paths(tmp_path)
+    (tmp_path / "config.json").write_text(
+        json.dumps({
+            "toss_api_key": "mock-key",
+            "toss_secret_key": "mock-secret",
+            "toss_account": "1",
+        }),
+        encoding="utf-8",
+    )
+    
+    received_account = []
+    def mock_reconcile(client, paths, *, account=None):
+        received_account.append(account)
+        return {"status": "success", "differences": [], "unmapped_tickers": []}
+        
+    monkeypatch.setattr("jayu.toss.reconcile_portfolio_with_toss", mock_reconcile)
+    
+    build_dashboard_toss_reconciliation(paths, account="custom-acc-seq")
+    assert received_account == ["custom-acc-seq"]
+
+
+def test_dashboard_toss_reconciliation_sync_endpoint_with_account(tmp_path: Path, monkeypatch):
+    from urllib.request import Request
+    paths = _paths(tmp_path)
+    _write_run(paths)
+    (tmp_path / "config.json").write_text(
+        json.dumps({
+            "toss_api_key": "mock-key",
+            "toss_secret_key": "mock-secret",
+            "toss_account": "1",
+        }),
+        encoding="utf-8",
+    )
+    
+    received_account = []
+    def mock_sync(client, paths, *, account=None):
+        received_account.append(account)
+        return {"status": "success", "message": "synced successfully"}
+        
+    monkeypatch.setattr("jayu.toss.sync_portfolio_from_toss", mock_sync)
+    
+    server = create_dashboard_server(paths, port=0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    
+    try:
+        req = Request(
+            f"http://127.0.0.1:{port}/api/v1/toss/reconciliation/sync",
+            data=json.dumps({"account": "custom-sync-acc-seq"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        with urlopen(req, timeout=5) as response:
+            res = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        
+    assert res["status"] == "success"
+    assert res["message"] == "synced successfully"
+    assert received_account == ["custom-sync-acc-seq"]
+
+
+def test_build_dashboard_analysis_structure(tmp_path, monkeypatch):
+    """build_dashboard_analysis returns required top-level keys and nested data."""
+    from jayu.dashboard import build_dashboard_analysis
+
+    paths = _paths(tmp_path)
+
+    # Mock yfinance.download to return a simple DataFrame
+    import pandas as pd
+    import numpy as np
+
+    fake_dates = pd.date_range("2025-01-01", periods=5, freq="D")
+    fake_df = pd.DataFrame(
+        {
+            "Open":  [100.0, 102.0, 101.0, 103.0, 105.0],
+            "High":  [110.0, 112.0, 111.0, 113.0, 115.0],
+            "Low":   [ 99.0, 101.0, 100.0, 102.0, 104.0],
+            "Close": [105.0, 107.0, 106.0, 108.0, 110.0],
+            "Volume": [1e6, 1.1e6, 0.9e6, 1.2e6, 1.3e6],
+        },
+        index=fake_dates,
+    )
+    import jayu.dashboard as dash_module
+    monkeypatch.setattr("yfinance.download", lambda *a, **kw: fake_df)
+
+    # Mock requests.get for FRED public CSV
+    class FakeResp:
+        status_code = 200
+        text = "observation_date,FEDFUNDS\n2025-01-01,5.33\n2025-02-01,5.33\n2025-03-01,5.08\n"
+        def raise_for_status(self): pass
+    import requests as req_module
+    monkeypatch.setattr(req_module, "get", lambda *a, **kw: FakeResp())
+
+    result = build_dashboard_analysis(paths, ticker="SOXL", macro_series="FEDFUNDS", period="2y")
+
+    # Required top-level keys
+    assert "stock" in result
+    assert "macro" in result
+    assert "news" in result
+    assert "toss" in result
+
+    # Stock data
+    stock = result["stock"]
+    assert "ticker" in stock
+    assert "latest_price" in stock
+    assert "change_pct" in stock
+    assert "fifty_two_week_high" in stock
+    assert "fifty_two_week_low" in stock
+    assert isinstance(stock["history"], list)
+    assert len(stock["history"]) == 5
+    row = stock["history"][0]
+    assert "date" in row and "open" in row and "close" in row
+
+    # Macro data
+    macro = result["macro"]
+    assert "series_id" in macro
+    assert "name" in macro
+    assert "latest_value" in macro
+    assert isinstance(macro["history"], list)
+    assert len(macro["history"]) == 3
+    assert macro["history"][0]["value"] == 5.33
+
+    # News is empty list (no API keys configured in test)
+    assert isinstance(result["news"], list)
+
+    # Toss portfolio is empty dict (no credentials)
+    assert isinstance(result["toss"], dict)
+
+
+def test_build_dashboard_analysis_bad_ticker(tmp_path, monkeypatch):
+    """When yfinance returns empty data, stock.error is set."""
+    from jayu.dashboard import build_dashboard_analysis
+    import pandas as pd
+
+    paths = _paths(tmp_path)
+    monkeypatch.setattr("yfinance.download", lambda *a, **kw: pd.DataFrame())
+
+    class FakeResp:
+        status_code = 200
+        text = "observation_date,FEDFUNDS\n2025-01-01,5.33\n"
+        def raise_for_status(self): pass
+    import requests as req_module
+    monkeypatch.setattr(req_module, "get", lambda *a, **kw: FakeResp())
+
+    result = build_dashboard_analysis(paths, ticker="BADTICKER", macro_series="FEDFUNDS", period="1y")
+    assert "error" in result["stock"]
