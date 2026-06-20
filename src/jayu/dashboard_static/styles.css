@@ -1480,3 +1480,108 @@ tbody tr:last-child td {
   font-size: 12px;
   color: var(--text);
 }
+
+/* --- API Monitoring Connection Test & Cache Action Styling --- */
+.pmc-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.btn-pm-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+}
+
+.btn-pm-action:hover {
+  background: #f0f3f7;
+  border-color: #344054;
+}
+
+.btn-pm-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-pm-action.btn-test {
+  border-color: #d0d5dd;
+  background: #ffffff;
+}
+
+.btn-pm-action.btn-clear-cache {
+  border-color: #fda29b;
+  background: #fffbfa;
+  color: #b54708;
+}
+
+.btn-pm-action.btn-clear-cache:hover {
+  background: #fee4e2;
+  border-color: #d92d20;
+  color: #b42318;
+}
+
+.pmc-test-result {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.pmc-test-result.success {
+  color: var(--success);
+}
+
+.pmc-test-result.failed {
+  color: var(--failed);
+  font-size: 10px;
+}
+
+.cache-action-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* --- API Monitoring Enhancements (Auto Refresh, Ping All, Success rate progress bar, and Log Filter) --- */
+.auto-refresh-control select:focus,
+#log-search-input:focus,
+#log-level-filter:focus {
+  outline: none;
+  border-color: #175cd3;
+  box-shadow: 0 0 0 2px rgba(23, 92, 211, 0.15);
+}
+
+.pmc-success-bar-track {
+  position: relative;
+}
+
+.pmc-success-bar-fill {
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#log-search-input {
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+#btn-ping-all {
+  transition: background-color 0.15s, opacity 0.15s;
+}
+
+#btn-ping-all:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}

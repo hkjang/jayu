@@ -904,8 +904,47 @@ def build_dashboard_toss_market_snapshot(
     }
 
 
+def _load_recent_api_logs(paths: RuntimePaths) -> list[dict[str, Any]]:
+    run_dir = _resolve_run_dir(paths, "latest")
+    if not run_dir:
+        return []
+    log_file = run_dir / "logs" / "events.jsonl"
+    if not log_file.exists():
+        return []
+    logs: list[dict[str, Any]] = []
+    try:
+        with open(log_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            for line in reversed(lines):
+                if len(logs) >= 30:
+                    break
+                try:
+                    data = json.loads(line)
+                    level = str(data.get("level", "INFO")).upper()
+                    event = str(data.get("event", ""))
+                    msg = str(data.get("message", ""))
+                    is_api_related = any(
+                        x in event.lower() or x in msg.lower()
+                        for x in ["api", "provider", "request", "http", "fetch", "cache"]
+                    )
+                    if level in {"WARNING", "ERROR", "CRITICAL"} or is_api_related:
+                        logs.append({
+                            "timestamp": data.get("timestamp"),
+                            "level": level,
+                            "event": event,
+                            "message": msg,
+                            "details": {k: v for k, v in data.items() if k not in {"timestamp", "level", "event", "message", "logger"}},
+                        })
+                except (json.JSONDecodeError, ValueError):
+                    continue
+    except OSError:
+        pass
+    return logs
+
+
 def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
     settings = _load_dashboard_settings(paths)
+
     now = datetime.now(UTC)
 
     # --- Credential status (never expose values) ---
@@ -915,7 +954,7 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
         "tiingo": bool(_secret_value(settings.tiingo_api_key)),
         "sec_edgar": bool(_secret_value(settings.sec_user_agent)),
         "fred": bool(_secret_value(settings.fred_api_key)),
-        "openfigi": True,  # works without key (lower rate limit)
+        "openfigi": bool(_secret_value(settings.openfigi_api_key)),
         "alpha_vantage_news": bool(_secret_value(settings.alpha_vantage_api_key)),
         "finnhub_events": bool(_secret_value(settings.finnhub_api_key)),
         "toss": bool(
@@ -1193,7 +1232,213 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
             "supplemental_failure_policy": settings.data.supplemental_failure_policy,
             "price_disagreement_policy": settings.data.price_disagreement_policy,
         },
+        "api_logs": _load_recent_api_logs(paths),
     }
+
+
+
+def test_provider_connection(paths: RuntimePaths, provider: str) -> dict[str, Any]:
+    settings = _load_dashboard_settings(paths)
+    start_time = time.perf_counter()
+
+    def _run() -> dict[str, Any]:
+        if provider == "yahoo":
+            try:
+                import yfinance as yf
+                ticker = yf.Ticker("SOXL")
+                history = ticker.history(period="1d")
+                if history.empty:
+                    raise ValueError("Yahoo Finance returned empty history")
+                return {"status": "success", "message": "Yahoo Finance connection test passed"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+        elif provider == "massive":
+            key = _secret_value(settings.massive_api_key)
+            if not key:
+                return {"status": "failed", "message": "Massive API key is not configured"}
+            try:
+                import requests
+                headers = {"Authorization": f"Bearer {key}"}
+                res = requests.get("https://api.massive.com/v2/market/status", headers=headers, timeout=10)
+                if res.status_code in {401, 403}:
+                    return {"status": "failed", "message": "Unauthorized: Invalid API key"}
+                return {"status": "success", "message": f"Massive API connection test passed (HTTP {res.status_code})"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+        elif provider == "tiingo":
+            key = _secret_value(settings.tiingo_api_key)
+            if not key:
+                return {"status": "failed", "message": "Tiingo API key is not configured"}
+            try:
+                import requests
+                headers = {"Content-Type": "application/json", "Authorization": f"Token {key}"}
+                res = requests.get("https://api.tiingo.com/tiingo/daily/SOXL", headers=headers, timeout=10)
+                if res.status_code != 200:
+                    return {"status": "failed", "message": f"Tiingo API returned error: HTTP {res.status_code} - {res.text[:100]}"}
+                return {"status": "success", "message": "Tiingo API connection test passed"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+        elif provider == "sec_edgar":
+            user_agent = _secret_value(settings.sec_user_agent)
+            if not user_agent:
+                return {"status": "failed", "message": "SEC EDGAR User-Agent is not configured"}
+            try:
+                import requests
+                headers = {"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"}
+                res = requests.get("https://www.sec.gov/files/company_tickers.json", headers=headers, timeout=10)
+                if res.status_code != 200:
+                    return {"status": "failed", "message": f"SEC EDGAR returned error: HTTP {res.status_code}"}
+                return {"status": "success", "message": "SEC EDGAR connection test passed"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+        elif provider == "fred":
+            key = _secret_value(settings.fred_api_key)
+            if not key:
+                return {"status": "failed", "message": "FRED API key is not configured"}
+            try:
+                import requests
+                params = {
+                    "series_id": "FEDFUNDS",
+                    "api_key": key,
+                    "file_type": "json",
+                    "limit": 1
+                }
+                res = requests.get("https://api.stlouisfed.org/fred/series/observations", params=params, timeout=10)
+                if res.status_code != 200:
+                    return {"status": "failed", "message": f"FRED API returned error: HTTP {res.status_code} - {res.text[:100]}"}
+                return {"status": "success", "message": "FRED API connection test passed"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+        elif provider == "openfigi":
+            key = _secret_value(settings.openfigi_api_key)
+            try:
+                import requests
+                headers = {"Content-Type": "application/json"}
+                if key:
+                    headers["X-OPENFIGI-APIKEY"] = key
+                job = {"idType": "TICKER", "idValue": "SOXL", "exchCode": "US"}
+                res = requests.post("https://api.openfigi.com/v3/mapping", headers=headers, json=[job], timeout=10)
+                if res.status_code != 200:
+                    return {"status": "failed", "message": f"OpenFIGI returned error: HTTP {res.status_code} - {res.text[:100]}"}
+                return {"status": "success", "message": "OpenFIGI connection test passed"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+        elif provider == "alpha_vantage_news":
+            key = _secret_value(settings.alpha_vantage_api_key)
+            if not key:
+                return {"status": "failed", "message": "Alpha Vantage API key is not configured"}
+            try:
+                import requests
+                params = {
+                    "function": "NEWS_SENTIMENT",
+                    "tickers": "SOXL",
+                    "limit": 1,
+                    "apikey": key,
+                }
+                res = requests.get("https://www.alphavantage.co/query", params=params, timeout=10)
+                if res.status_code != 200:
+                    return {"status": "failed", "message": f"Alpha Vantage returned error: HTTP {res.status_code}"}
+                data = res.json()
+                if "Error Message" in data:
+                    return {"status": "failed", "message": data["Error Message"]}
+                if "Note" in data:
+                    return {"status": "failed", "message": f"Rate limit reached: {data['Note']}"}
+                return {"status": "success", "message": "Alpha Vantage connection test passed"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+        elif provider == "finnhub_events":
+            key = _secret_value(settings.finnhub_api_key)
+            if not key:
+                return {"status": "failed", "message": "Finnhub API key is not configured"}
+            try:
+                import requests
+                params = {"symbol": "SOXL", "token": key}
+                res = requests.get("https://finnhub.io/api/v1/company-news", params=params, timeout=10)
+                if res.status_code != 200:
+                    return {"status": "failed", "message": f"Finnhub returned error: HTTP {res.status_code} - {res.text[:100]}"}
+                return {"status": "success", "message": "Finnhub connection test passed"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+        elif provider == "toss":
+            api_key = _secret_value(settings.toss_api_key)
+            secret_key = _secret_value(settings.toss_secret_key)
+            if not api_key or not secret_key:
+                return {"status": "failed", "message": "Toss credentials are not configured"}
+            try:
+                client = _dashboard_toss_client(settings)
+                accounts = client.accounts()
+                if "result" not in accounts:
+                    return {"status": "failed", "message": "Toss API returned empty or invalid response"}
+                return {"status": "success", "message": "Toss API connection test passed"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+        elif provider == "kakao":
+            access_token = _secret_value(settings.kakao_access_token)
+            if not access_token:
+                kakao_tokens = read_json(paths.state_dir / "kakao_tokens.json", default={})
+                access_token = kakao_tokens.get("access_token")
+            if not access_token:
+                return {"status": "failed", "message": "Kakao Access Token is not configured"}
+            try:
+                import requests
+                headers = {"Authorization": f"Bearer {access_token}"}
+                res = requests.get("https://kapi.kakao.com/v1/user/access_token_info", headers=headers, timeout=10)
+                if res.status_code != 200:
+                    return {"status": "failed", "message": f"Kakao API returned error: HTTP {res.status_code} - {res.text[:100]}"}
+                return {"status": "success", "message": "Kakao API token is active and valid"}
+            except Exception as exc:
+                return {"status": "failed", "message": str(exc)}
+
+        return {"status": "failed", "message": f"Unknown provider: {provider}"}
+
+    res = _run()
+    res["latency_ms"] = int((time.perf_counter() - start_time) * 1000)
+    return res
+
+
+
+def clear_provider_cache(paths: RuntimePaths, cache_type: str) -> dict[str, Any]:
+    if not paths.cache_dir.exists():
+        return {"status": "success", "message": "Cache directory does not exist", "file_count": 0, "total_bytes": 0}
+    try:
+        deleted_count = 0
+        deleted_bytes = 0
+        if cache_type == "all":
+            targets = [paths.cache_dir]
+        else:
+            target_sub = paths.cache_dir / cache_type
+            if target_sub.exists() and target_sub.is_dir():
+                targets = [target_sub]
+            else:
+                targets = []
+        for target in targets:
+            files = list(target.rglob("*"))
+            for f in files:
+                if f.is_file():
+                    try:
+                        size = f.stat().st_size
+                        f.unlink()
+                        deleted_count += 1
+                        deleted_bytes += size
+                    except OSError:
+                        pass
+        new_count = 0
+        new_bytes = 0
+        if cache_type != "all" and (paths.cache_dir / cache_type).exists():
+            sub = paths.cache_dir / cache_type
+            sub_files = list(sub.rglob("*"))
+            new_count = sum(1 for f in sub_files if f.is_file())
+            new_bytes = sum(f.stat().st_size for f in sub_files if f.is_file())
+        return {
+            "status": "success",
+            "message": f"Deleted {deleted_count} files ({deleted_bytes} bytes) from cache",
+            "deleted_count": deleted_count,
+            "deleted_bytes": deleted_bytes,
+            "new_count": new_count,
+            "new_bytes": new_bytes,
+        }
+    except Exception as exc:
+        return {"status": "failed", "message": str(exc)}
 
 
 def serve_dashboard(
@@ -1305,6 +1550,31 @@ def _dashboard_handler(
                     self._json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)
                     return
                 self._static(parsed.path)
+            except ValueError as exc:
+                self._json({"error": "invalid_request", "message": str(exc)}, status=400)
+            except Exception as exc:
+                self._json(
+                    {"error": "internal_error", "message": str(exc)},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            try:
+                content_length = int(self.headers.get("Content-Length", 0))
+                post_data = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else ""
+                payload = json.loads(post_data) if post_data else {}
+                if parsed.path == "/api/v1/api-monitoring/test-connection":
+                    provider = payload.get("provider")
+                    result = test_provider_connection(paths, provider)
+                    self._json(result)
+                    return
+                if parsed.path == "/api/v1/api-monitoring/clear-cache":
+                    cache_type = payload.get("cache_type")
+                    result = clear_provider_cache(paths, cache_type)
+                    self._json(result)
+                    return
+                self._json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)
             except ValueError as exc:
                 self._json({"error": "invalid_request", "message": str(exc)}, status=400)
             except Exception as exc:

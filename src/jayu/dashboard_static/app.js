@@ -17,6 +17,8 @@ const state = {
   apiMonitoring: null,
   tossAccountRegion: localStorage.getItem("jayu.toss.accountRegion") || "ALL",
   selectedTossAccount: localStorage.getItem("jayu.toss.selectedAccount") || "",
+  apiMonitoringRefreshSec: localStorage.getItem("jayu.apiMonitoring.refresh") || "off",
+  autoRefreshTimer: null,
 };
 
 const els = {
@@ -238,6 +240,7 @@ async function loadPage() {
     }
     updateContext();
     render();
+    setupApiMonitoringRefreshTimer();
     setLoading(false);
     els.liveRegion.textContent = `${pageTitle(state.page)} 화면을 갱신했습니다.`;
   } catch (error) {
@@ -1526,13 +1529,26 @@ function renderApiMonitoring() {
     failed: "실패한 데이터 출처가 있습니다",
   }[summary.status] || "상태 확인 필요";
 
+  const selectedRefresh = state.apiMonitoringRefreshSec || "off";
+
   els.root.innerHTML = `
-    <div class="page-heading">
+    <div class="page-heading" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
       <div>
         <h1>API 데이터 출처 모니터링</h1>
         <p>프로젝트에서 사용하는 모든 외부 API 데이터 출처의 상태, 자격증명, 정책, 캐시, 최근 활동을 확인합니다.</p>
       </div>
-      ${statusBadge(summary.status)}
+      <div style="display:flex; align-items:center; gap:12px;">
+        <div class="auto-refresh-control" style="display:flex; align-items:center; gap:6px; font-size:12px; background:#ffffff; padding:6px 12px; border-radius:6px; border:1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <span style="font-weight:600; color:var(--text-muted);">자동 갱신</span>
+          <select id="select-auto-refresh" style="font-size:12px; padding:2px 6px; border-radius:4px; border:1px solid var(--border); background:#ffffff; cursor:pointer;">
+            <option value="off" ${selectedRefresh === "off" ? "selected" : ""}>꺼짐</option>
+            <option value="10" ${selectedRefresh === "10" ? "selected" : ""}>10초</option>
+            <option value="30" ${selectedRefresh === "30" ? "selected" : ""}>30초</option>
+          </select>
+        </div>
+        <button class="button button-primary" id="btn-ping-all" type="button" style="padding: 8px 14px; font-size: 12px; font-weight:600; display:inline-flex; align-items:center; gap:6px;">모든 API 연결 테스트</button>
+        ${statusBadge(summary.status)}
+      </div>
     </div>
     <section class="status-banner status-${statusClass(summary.status)}">
       <div>${statusBadge(summary.status)}</div>
@@ -1578,10 +1594,13 @@ function renderApiMonitoring() {
       </section>
     </div>
     ${renderCacheStatsPanel(cacheStats)}
+    ${renderEnvTemplatePanel(providers, kakao)}
+    ${renderApiLogsPanel(data.api_logs || [])}
     ${disagreements.length ? renderDisagreementsPanel(disagreements) : ""}
     ${notifFailures.length ? renderNotificationFailuresPanel(notifFailures) : ""}
   `;
 }
+
 
 function renderProviderCards(providers, categories) {
   const grouped = {};
@@ -1629,7 +1648,10 @@ function renderProviderCard(p) {
   }[recent.status] || "미사용";
 
   const credClass = p.credential_configured ? "is-set" : "is-missing";
-  const credLabel = p.credential_configured ? "인증 설정됨" : "인증 미설정";
+  let credLabel = p.credential_configured ? "인증 설정됨" : "인증 미설정";
+  if (p.name === "openfigi") {
+    credLabel = p.credential_configured ? "인증 설정됨 (제한 완화)" : "인증 미설정 (기본 한도)";
+  }
 
   const envTags = (p.env_names || []).length
     ? `<div class="pmc-env-list">${p.env_names.map((e) => `<span class="pmc-env-tag">${escapeHtml(e)}</span>`).join("")}</div>`
@@ -1640,6 +1662,46 @@ function renderProviderCard(p) {
       ? `${(policy.cache_ttl_seconds / 3600).toFixed(1)}h`
       : `${Math.round(policy.cache_ttl_seconds / 60)}m`
     : "-";
+
+  // Calculate Success Rate
+  const totalRequests = (recent.success_count || 0) + (recent.failed_count || 0);
+  const successRate = totalRequests > 0
+    ? Math.round((recent.success_count || 0) / totalRequests * 100)
+    : 100;
+
+  let successRateColor = "var(--success)";
+  if (recent.status === "unused") {
+    successRateColor = "var(--border-strong)";
+  } else if (successRate < 100 && successRate > 0) {
+    successRateColor = "var(--warning)";
+  } else if (successRate === 0 && totalRequests > 0) {
+    successRateColor = "var(--failed)";
+  }
+
+  const showProgressBar = recent.status !== "unused" && totalRequests > 0;
+  const progressHtml = showProgressBar
+    ? `
+      <div class="pmc-success-bar-container" style="margin: 10px 0 6px 0;">
+        <div class="pmc-success-bar-header" style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:4px;">
+          <span style="color:var(--text-muted)">수집 성공률</span>
+          <strong style="color:${successRateColor}">${successRate}%</strong>
+        </div>
+        <div class="pmc-success-bar-track" style="height:6px; background:#f0f3f7; border-radius:3px; overflow:hidden; border: 1px solid var(--border);">
+          <div class="pmc-success-bar-fill" style="height:100%; width:${successRate}%; background-color:${successRateColor}; border-radius:3px; transition:width 0.3s ease;"></div>
+        </div>
+      </div>
+    `
+    : `
+      <div class="pmc-success-bar-container" style="margin: 10px 0 6px 0;">
+        <div class="pmc-success-bar-header" style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:4px;">
+          <span style="color:var(--text-muted)">수집 기록 없음 (미사용)</span>
+          <strong style="color:var(--text-muted)">-</strong>
+        </div>
+        <div class="pmc-success-bar-track" style="height:6px; background:#f0f3f7; border-radius:3px; overflow:hidden; border: 1px solid var(--border);">
+          <div class="pmc-success-bar-fill" style="height:100%; width:0%; background-color:var(--border-strong); border-radius:3px;"></div>
+        </div>
+      </div>
+    `;
 
   return `
     <article class="provider-monitor-card ${statusCls}">
@@ -1660,6 +1722,7 @@ function renderProviderCard(p) {
         ${!p.enabled ? '<span class="policy-tag" style="color:var(--failed);border-color:var(--failed)">비활성</span>' : ""}
       </div>
       ${envTags}
+      ${progressHtml}
       <div class="pmc-activity">
         <div class="pmc-activity-item">
           <span>최근 상태</span>
@@ -1678,6 +1741,10 @@ function renderProviderCard(p) {
           <strong>${(recent.sources || []).length}</strong>
         </div>
       </div>
+      <div class="pmc-footer">
+        <button class="btn-pm-action btn-test" data-test-provider="${escapeHtml(p.name)}" type="button">연결 테스트</button>
+        <span class="pmc-test-result" id="test-result-${escapeHtml(p.name)}"></span>
+      </div>
     </article>
   `;
 }
@@ -1694,13 +1761,19 @@ function renderCacheStatsPanel(cacheStats) {
   }
   return `
     <section class="panel" style="margin-bottom:14px">
-      <div class="panel-header"><div><h2>캐시 상태</h2><p>provider별 캐시 디렉터리의 파일 수와 용량입니다.</p></div></div>
+      <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <div><h2>캐시 상태</h2><p>provider별 캐시 디렉터리의 파일 수와 용량입니다.</p></div>
+        <button class="btn-pm-action btn-clear-cache" data-clear-cache="all" type="button">전체 캐시 비우기</button>
+      </div>
       <div class="panel-body">
         <div class="cache-stat-grid">
           ${entries.map(([name, stat]) => `
-            <div class="cache-stat-card">
-              <strong>${escapeHtml(name)}</strong>
-              <span>${stat.file_count ?? 0}개 파일 · ${formatBytes(stat.total_bytes ?? 0)}</span>
+            <div class="cache-stat-card" style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+              <div>
+                <strong>${escapeHtml(name)}</strong>
+                <span>${stat.file_count ?? 0}개 파일 · ${formatBytes(stat.total_bytes ?? 0)}</span>
+              </div>
+              <button class="btn-pm-action btn-clear-cache" data-clear-cache="${escapeHtml(name)}" style="padding: 2px 8px; font-size: 10px;" type="button">비우기</button>
             </div>
           `).join("")}
         </div>
@@ -1708,6 +1781,113 @@ function renderCacheStatsPanel(cacheStats) {
     </section>
   `;
 }
+
+
+function renderEnvTemplatePanel(providers, kakao) {
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h2>환경 변수 (.env) 구성 도우미</h2>
+          <p>프로젝트 루트의 <code>.env</code> 파일에 설정할 수 있는 환경 변수 템플릿입니다. 미설정된 키를 입력하여 환경을 완성하세요.</p>
+        </div>
+        <button class="btn-pm-action btn-test" id="btn-copy-env-template" type="button">템플릿 복사</button>
+      </div>
+      <div class="panel-body">
+        <pre class="code-block" style="background:#1e1e1e; color:#d4d4d4; padding:16px; border-radius:6px; font-family:'Cascadia Code',Consolas,monospace; font-size:12px; line-height:1.6; overflow-x:auto; margin:0;" id="env-template-text">${renderEnvTemplateText(providers, kakao)}</pre>
+      </div>
+    </section>
+  `;
+}
+
+function renderEnvTemplateText(providers, kakao) {
+  let text = "";
+  const toss = providers.find(p => p.name === "toss") || {};
+  text += `# --- Toss Securities ---\n`;
+  text += `TS_API_KEY=${toss.credential_configured ? "******** # ✓ 설정됨" : "your_toss_api_key"}\n`;
+  text += `TS_SECRET_KEY=${toss.credential_configured ? "******** # ✓ 설정됨" : "your_toss_secret_key"}\n`;
+  text += `TS_ACCOUNT=\n\n`;
+
+  const pKeys = {
+    tiingo: { key: "TIINGO_API_KEY", label: "Tiingo API Key" },
+    alpha_vantage_news: { key: "ALPHA_VANTAGE_KEY", label: "Alpha Vantage API Key" },
+    finnhub_events: { key: "FINNHUB_API", label: "Finnhub API Key" },
+    openfigi: { key: "OPEN_FIGI", label: "OpenFIGI API Key (선택)" },
+    fred: { key: "FRED_API_KEY", label: "FRED (stlouisfed) API Key" },
+    sec_edgar: { key: "SEC_USER_AGENT", label: "SEC EDGAR User-Agent (이름/이메일)" },
+    massive: { key: "MASSIVE_API_KEY", label: "Massive API Key" },
+  };
+
+  text += `# --- Price & Supplemental Data ---\n`;
+  for (const [name, info] of Object.entries(pKeys)) {
+    const p = providers.find(item => item.name === name) || {};
+    text += `# ${info.label}\n`;
+    text += `${info.key}=${p.credential_configured ? "******** # ✓ 설정됨" : ""}\n`;
+  }
+  text += `\n`;
+
+  text += `# --- Kakao Notification ---\n`;
+  text += `JAYU_KAKAO_REST_API_KEY=${kakao.has_rest_api_key ? "******** # ✓ 설정됨" : ""}\n`;
+  text += `JAYU_KAKAO_CLIENT_SECRET=${kakao.has_client_secret ? "******** # ✓ 설정됨" : ""}\n`;
+
+  return text;
+}
+
+function renderApiLogsPanel(logs) {
+  if (!logs.length) {
+    return `
+      <section class="panel" style="margin-bottom:14px" id="api-logs-section">
+        <div class="panel-header"><div><h2>최근 연동 에러/경고 로그</h2><p>최근 run에서 기록된 API 연동 관련 로그가 없습니다.</p></div></div>
+        <div class="panel-body"><div class="empty-state"><strong>기록된 로그 없음</strong>모든 연동 요청이 경고 없이 수행되었습니다.</div></div>
+      </section>
+    `;
+  }
+  return `
+    <section class="panel" style="margin-bottom:14px" id="api-logs-section">
+      <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <div>
+          <h2>최근 연동 에러/경고 로그</h2>
+          <p>최근 run의 로그 파일(events.jsonl)에서 추출한 에러/경고 및 연동 관련 로그 목록입니다. (최대 30건)</p>
+        </div>
+        <div class="log-filters-container" style="display:flex; align-items:center; gap:8px;">
+          <input type="text" id="log-search-input" placeholder="이벤트, 메시지 검색..." style="font-size:12px; padding:6px 10px; border-radius:4px; border:1px solid var(--border); width:200px;" autocomplete="off">
+          <select id="log-level-filter" style="font-size:12px; padding:6px 8px; border-radius:4px; border:1px solid var(--border); background:var(--bg);">
+            <option value="ALL">모든 레벨</option>
+            <option value="ERROR">ERROR / CRITICAL</option>
+            <option value="WARNING">WARNING</option>
+          </select>
+          <span class="muted" id="filtered-log-count">${logs.length}건</span>
+        </div>
+      </div>
+      <div class="table-wrap"><table class="logs-table" id="api-logs-table">
+        <thead><tr>
+          <th style="width: 140px;">시각</th>
+          <th style="width: 80px;">레벨</th>
+          <th style="width: 150px;">이벤트</th>
+          <th>로그 메시지</th>
+        </tr></thead>
+        <tbody>
+          ${logs.map((log) => {
+            const levelCls = {
+              ERROR: "negative",
+              CRITICAL: "negative",
+              WARNING: "warning",
+            }[log.level] || "";
+            return `
+              <tr class="log-row" data-level="${escapeHtml(log.level)}">
+                <td style="font-size: 11px; white-space: nowrap;">${formatDate(log.timestamp)}</td>
+                <td><span class="status-label status-${levelCls || "not-evaluated"}" style="padding: 1px 6px; font-size: 9px; line-height:1.2;">${escapeHtml(log.level)}</span></td>
+                <td class="code log-event-cell" style="font-size: 11px;">${escapeHtml(log.event)}</td>
+                <td class="log-message-cell" style="font-size: 11px; white-space: pre-wrap; line-height: 1.4; text-align: left;">${escapeHtml(log.message)}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table></div>
+    </section>
+  `;
+}
+
 
 function formatBytes(bytes) {
   if (bytes === 0) return "0 B";
@@ -1841,10 +2021,213 @@ function bindPageActions() {
       els.liveRegion.textContent = feedback.textContent;
     });
   }
+
+  // API Connection Test action
+  document.querySelectorAll("[data-test-provider]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const provider = button.dataset.testProvider;
+      const resultSpan = document.querySelector(`#test-result-${provider}`);
+      if (!resultSpan) return;
+      button.disabled = true;
+      resultSpan.className = "pmc-test-result";
+      resultSpan.textContent = "테스트 중...";
+      try {
+        const res = await fetch("/api/v1/api-monitoring/test-connection", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider }),
+        });
+        const data = await res.json();
+        if (data.status === "success") {
+          resultSpan.className = "pmc-test-result success";
+          resultSpan.textContent = `✓ 연결 성공 (${data.latency_ms}ms)`;
+        } else {
+          resultSpan.className = "pmc-test-result failed";
+          resultSpan.textContent = `✗ 실패 (${data.latency_ms}ms): ${data.message || "오류"}`;
+        }
+      } catch (err) {
+        resultSpan.className = "pmc-test-result failed";
+        resultSpan.textContent = `✗ 에러: ${err.message}`;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+
+  // Clear Cache action
+  document.querySelectorAll("[data-clear-cache]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const cacheType = button.dataset.clearCache;
+      const confirmMsg = cacheType === "all"
+        ? "정말로 모든 API 캐시를 삭제하시겠습니까?"
+        : `정말로 ${cacheType} 캐시를 삭제하시겠습니까?`;
+      if (!confirm(confirmMsg)) return;
+      button.disabled = true;
+      try {
+        const res = await fetch("/api/v1/api-monitoring/clear-cache", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cache_type: cacheType }),
+        });
+        const data = await res.json();
+        if (data.status === "success") {
+          alert(data.message);
+          // Reload the page data to update stats
+          state.apiMonitoring = null;
+          loadPage();
+        } else {
+          alert(`캐시 삭제 실패: ${data.message}`);
+        }
+      } catch (err) {
+        alert(`캐시 삭제 에러: ${err.message}`);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+
+  // Copy Env Template action
+  const btnCopyTemplate = document.querySelector("#btn-copy-env-template");
+  if (btnCopyTemplate) {
+    btnCopyTemplate.addEventListener("click", async () => {
+      const templatePre = document.querySelector("#env-template-text");
+      if (!templatePre) return;
+      try {
+        await navigator.clipboard.writeText(templatePre.textContent);
+        btnCopyTemplate.textContent = "복사 완료 ✓";
+        setTimeout(() => { btnCopyTemplate.textContent = "템플릿 복사"; }, 2000);
+      } catch (err) {
+        alert(`복사 실패: ${err.message}`);
+      }
+    });
+  }
+
+  // Auto refresh select change
+  const selectAutoRefresh = document.querySelector("#select-auto-refresh");
+  if (selectAutoRefresh) {
+    selectAutoRefresh.addEventListener("change", () => {
+      const val = selectAutoRefresh.value;
+      state.apiMonitoringRefreshSec = val;
+      localStorage.setItem("jayu.apiMonitoring.refresh", val);
+      setupApiMonitoringRefreshTimer();
+    });
+  }
+
+  // Ping All action
+  const btnPingAll = document.querySelector("#btn-ping-all");
+  if (btnPingAll) {
+    btnPingAll.addEventListener("click", async () => {
+      btnPingAll.disabled = true;
+      btnPingAll.textContent = "연결 테스트 중...";
+      const buttons = Array.from(document.querySelectorAll("[data-test-provider]"));
+
+      const promises = buttons.map(async (btn) => {
+        const provider = btn.dataset.testProvider;
+        const resultSpan = document.querySelector(`#test-result-${provider}`);
+        if (!resultSpan) return;
+        btn.disabled = true;
+        resultSpan.className = "pmc-test-result";
+        resultSpan.textContent = "테스트 중...";
+        try {
+          const res = await fetch("/api/v1/api-monitoring/test-connection", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider }),
+          });
+          const data = await res.json();
+          if (data.status === "success") {
+            resultSpan.className = "pmc-test-result success";
+            resultSpan.textContent = `✓ 연결 성공 (${data.latency_ms}ms)`;
+          } else {
+            resultSpan.className = "pmc-test-result failed";
+            resultSpan.textContent = `✗ 실패 (${data.latency_ms}ms): ${data.message || "오류"}`;
+          }
+        } catch (err) {
+          resultSpan.className = "pmc-test-result failed";
+          resultSpan.textContent = `✗ 에러: ${err.message}`;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      await Promise.all(promises);
+      btnPingAll.disabled = false;
+      btnPingAll.textContent = "모든 API 연결 테스트";
+    });
+  }
+
+  // Logs filtering
+  const logSearchInput = document.querySelector("#log-search-input");
+  const logLevelFilter = document.querySelector("#log-level-filter");
+  const filteredLogCount = document.querySelector("#filtered-log-count");
+  if (logSearchInput && logLevelFilter) {
+    const filterLogs = () => {
+      const query = logSearchInput.value.toLowerCase().trim();
+      const level = logLevelFilter.value;
+      let visibleCount = 0;
+      const rows = document.querySelectorAll("#api-logs-table tbody .log-row");
+      rows.forEach((row) => {
+        const rowLevel = row.dataset.level || "";
+        const eventText = row.querySelector(".log-event-cell")?.textContent.toLowerCase() || "";
+        const messageText = row.querySelector(".log-message-cell")?.textContent.toLowerCase() || "";
+
+        const matchLevel = (level === "ALL") ||
+                           (level === "ERROR" && (rowLevel === "ERROR" || rowLevel === "CRITICAL")) ||
+                           (level === "WARNING" && rowLevel === "WARNING");
+        const matchSearch = !query || eventText.includes(query) || messageText.includes(query);
+
+        if (matchLevel && matchSearch) {
+          row.style.display = "";
+          visibleCount++;
+        } else {
+          row.style.display = "none";
+        }
+      });
+      if (filteredLogCount) {
+        filteredLogCount.textContent = `${visibleCount}건`;
+      }
+    };
+    logSearchInput.addEventListener("input", filterLogs);
+    logLevelFilter.addEventListener("change", filterLogs);
+  }
+}
+
+
+
+function clearApiMonitoringRefreshTimer() {
+  if (state.autoRefreshTimer) {
+    clearInterval(state.autoRefreshTimer);
+    state.autoRefreshTimer = null;
+  }
+}
+
+function setupApiMonitoringRefreshTimer() {
+  clearApiMonitoringRefreshTimer();
+  if (state.page !== "api-monitoring") return;
+  const refreshSec = state.apiMonitoringRefreshSec || "off";
+  if (refreshSec === "off") return;
+
+  const sec = parseInt(refreshSec, 10);
+  if (Number.isNaN(sec)) return;
+
+  state.autoRefreshTimer = setInterval(async () => {
+    if (state.page === "api-monitoring") {
+      try {
+        const run = encodeURIComponent(state.runId);
+        state.decision = await api(`/api/v1/decision?run_id=${run}`);
+        state.overview = await api(`/api/v1/overview?run_id=${run}`);
+        state.apiMonitoring = await api("/api/v1/api-monitoring");
+        updateContext();
+        render();
+      } catch (err) {
+        console.error("Auto refresh failed", err);
+      }
+    }
+  }, sec * 1000);
 }
 
 function navigate(page) {
   if (!["overview", "data-quality", "risk", "signals", "trader-lens", "promotion", "settings", "toss-account", "toss", "api-monitoring"].includes(page)) return;
+  clearApiMonitoringRefreshTimer();
   state.page = page;
   localStorage.setItem("jayu.dashboard.activePage", page);
   document.querySelectorAll(".nav-item").forEach((item) => {
