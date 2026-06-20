@@ -94,6 +94,48 @@ def test_resize_enforcement_sets_resized_flag():
     assert 0.0 < decision.approved_position_pct < 0.10
 
 
+def test_portfolio_type_policy_adds_capital_limits_to_risk_gate():
+    portfolio = {
+        "account_value_krw": 100_000_000,
+        "cash_known": True,
+        "cash_pct": 0.50,
+        "invested_pct": 0.50,
+        "daily_turnover_pct": 0.03,
+        "adjusted_gross_exposure": 0.20,
+        "leveraged_etf_value_pct": 0.10,
+        "underlying_exposure_pct": {"semiconductors": 0.10},
+        "sector_exposure_pct": {"semiconductors": 0.10},
+        "factor_exposure_pct": {},
+        "positions": [],
+    }
+    settings = RiskSettings(
+        max_underlying_exposure=1.0,
+        max_sector_exposure=1.0,
+        max_leveraged_etf_value=1.0,
+        max_adjusted_gross_exposure=3.0,
+        max_factor_exposure=3.0,
+        portfolio_policy={
+            "short_term": {
+                "target_position_pct": 0.03,
+                "max_position_pct": 0.04,
+                "min_cash_pct": 0.25,
+                "max_daily_turnover_pct": 0.08,
+            }
+        },
+    )
+
+    decision = evaluate_signal_risk("SOXL", 0.06, portfolio, settings)
+
+    assert decision.eligible is False
+    assert decision.approved_position_pct == 0
+    assert decision.policy["types"] == ["short_term", "swing"]
+    assert decision.policy["max_position_pct"] == 0.04
+    assert decision.policy["max_daily_turnover_pct"] == 0.08
+    codes = {detail["code"] for detail in decision.violation_details}
+    assert "SINGLE_POSITION_EXCEEDED" in codes
+    assert "PORTFOLIO_POLICY_TURNOVER_EXCEEDED" in codes
+
+
 def test_unmapped_ticker_is_flagged_as_warning():
     portfolio = {
         "adjusted_gross_exposure": 0.0,

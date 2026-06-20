@@ -66,6 +66,31 @@ const STATUS_LABELS = {
   hold: "대기",
 };
 
+const ACTION_QUEUE_STATUS_LABELS = {
+  new: "신규",
+  reviewing: "확인 중",
+  deferred: "보류",
+  done: "완료",
+  ignored: "무시",
+};
+
+const ACTION_TYPE_LABELS = {
+  data_check: "데이터 확인",
+  risk_review: "리스크 점검",
+  buy_review: "매수 검토",
+  sell_review: "매도 검토",
+  dividend_review: "배당 점검",
+  order_prepare: "주문 준비",
+  broker_warning: "매수 유의",
+};
+
+const RECONCILIATION_ISSUE_LABELS = {
+  unmapped: "매핑 미등록",
+  missing_type: "운용 타입 미지정",
+  missing_sector: "섹터 미지정",
+  overweight: "한도 초과",
+};
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -514,6 +539,7 @@ function renderTodayBoard(board) {
     ["risky_stocks", "위험 종목", "차단·경고·데이터 확인 대상", "today_signals.json · risk gate status"],
     ["buy_candidates", "매수 후보", "리스크 게이트 통과 후보", "today_signals.json"],
     ["sell_candidates", "매도 후보", "축소 또는 청산 검토 후보", "today_signals.json"],
+    ["order_prepares", "주문 준비", "매수 후보가 있으면 OrderIntent 전 검증", "today_signals.json · OrderIntent validation queue"],
     ["dividend_reviews", "배당 점검", "배당 타입 보유·관심 종목", "portfolio_mapping.json"],
   ];
   return `
@@ -558,10 +584,18 @@ function renderTodayBoardItem(item, fallbackSource) {
     item.stop_price != null ? `손절 ${formatNumber(item.stop_price, 2)}` : "",
     item.target_price != null ? `목표 ${formatNumber(item.target_price, 2)}` : "",
   ].filter(Boolean);
+  const queueStatus = item.queue_status || "new";
+  const actionType = item.action_type || "";
+  const tags = [
+    ACTION_QUEUE_STATUS_LABELS[queueStatus] || queueStatus,
+    ACTION_TYPE_LABELS[actionType] || actionType,
+    item.priority ? `P${item.priority}` : "",
+  ].filter(Boolean);
   return `
     <div class="today-item status-${statusClass(item.status || "not_evaluated")}">
       <div class="today-item-main">
         <strong>${escapeHtml(item.label || item.ticker || "-")}</strong>
+        ${tags.length ? `<div class="today-item-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
         <span>${escapeHtml(item.detail || "")}</span>
         ${priceBits.length ? `<small>${escapeHtml(priceBits.join(" · "))}</small>` : ""}
       </div>
@@ -1095,6 +1129,7 @@ function renderReconciliation(reconciliation) {
   const status = recon.status || "unknown";
   const differences = recon.differences || [];
   const unmapped = recon.unmapped_tickers || [];
+  const reviewHtml = renderReconciliationReview(recon);
 
   let statusHtml = "";
   if (status === "synchronized") {
@@ -1211,6 +1246,7 @@ function renderReconciliation(reconciliation) {
 
   return `
     ${statusHtml}
+    ${reviewHtml}
     <section class="panel">
       <div class="panel-header" style="align-items: center;">
         <div><h2>보유 종목 대조 상세</h2><p>Local portfolio.csv와 Toss 실계좌 수량을 비교한 내역입니다.</p></div>
@@ -1223,6 +1259,70 @@ function renderReconciliation(reconciliation) {
       ${renderSourceCaption("portfolio.csv · Toss holdings GET")}
     </section>
     ${unmappedHtml}
+  `;
+}
+
+function renderReconciliationReview(recon) {
+  const summary = recon.review_summary || {};
+  const issues = recon.mapping_issues || [];
+  const typeTotals = recon.portfolio_type_totals || [];
+  const reviewSource = recon.review_source || "portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json";
+  const issueStatus = issues.length ? "warning" : "success";
+  const issuesHtml = issues.length ? `
+    <div class="table-wrap reconciliation-issue-table"><table>
+      <thead>
+        <tr>
+          <th>종목</th>
+          <th>이슈</th>
+          <th>운용 타입</th>
+          <th>상세</th>
+          <th class="numeric">현재/한도</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${issues.map((issue) => {
+          const observedLimit = issue.observed != null || issue.limit != null
+            ? `${issue.observed != null ? formatPercent(issue.observed, 1) : "-"} / ${issue.limit != null ? formatPercent(issue.limit, 1) : "-"}`
+            : "-";
+          return `
+            <tr>
+              <td class="ticker-cell">${escapeHtml(issue.ticker || "-")}</td>
+              <td>${statusBadge(issue.severity === "blocked" ? "blocked" : "warning", issue.label || RECONCILIATION_ISSUE_LABELS[issue.issue_type] || issue.issue_type || "점검")}</td>
+              <td>${escapeHtml(issue.portfolio_type_label || issue.portfolio_type || "-")}</td>
+              <td>${escapeHtml(issue.detail || "")}</td>
+              <td class="numeric">${escapeHtml(observedLimit)}</td>
+            </tr>`;
+        }).join("")}
+      </tbody>
+    </table></div>
+  ` : `
+    <div class="empty-state">
+      <strong>매핑/정책 이슈가 없습니다.</strong>
+      <span>portfolio_mapping.json, portfolio_type_overrides.json, 타입별 리스크 정책 기준으로 추가 점검할 항목이 없습니다.</span>
+    </div>
+  `;
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>매핑/정책 점검</h2><p>수량 동기화 전 운용 타입, 섹터, 타입별 단일종목 한도를 확인합니다.</p></div>
+        ${statusBadge(issueStatus, issues.length ? `${issues.length}건 점검` : "정상")}
+      </div>
+      <div class="visual-grid" style="margin-bottom:14px">
+        ${metricCard("전체 이슈", summary.issue_count || 0, issueStatus, "매핑·타입·섹터·한도")}
+        ${metricCard("매핑 미등록", summary.unmapped_count || 0, summary.unmapped_count ? "blocked" : "success", "portfolio_mapping.json")}
+        ${metricCard("타입/섹터 누락", Number(summary.missing_type_count || 0) + Number(summary.missing_sector_count || 0), Number(summary.missing_type_count || 0) + Number(summary.missing_sector_count || 0) ? "warning" : "success", "mapping/override 보강")}
+        ${metricCard("한도 초과", summary.overweight_count || 0, summary.overweight_count ? "warning" : "success", "risk.portfolio_policy")}
+      </div>
+      ${issuesHtml}
+      ${renderSourceCaption(reviewSource)}
+    </section>
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>운용 타입별 대조 비중</h2><p>로컬 portfolio.csv를 운용 타입 정책 기준으로 다시 집계한 비중입니다.</p></div>
+      </div>
+      ${renderPortfolioTypeCards(typeTotals)}
+      ${renderSourceCaption("portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json")}
+    </section>
   `;
 }
 
@@ -4655,6 +4755,7 @@ function renderPortfolioHub() {
     </div>
 
     ${renderHubTodayChecklist(checklist)}
+    ${renderHubSignalConflictPanel(data?.signal_conflicts)}
 
     <div class="hub-ticker-input-row">
       <label for="hub-tickers-input" style="font-size:13px;font-weight:600;color:#475569">종목 직접 입력 (선택사항)</label>
@@ -4676,15 +4777,18 @@ function renderPortfolioHub() {
 
 function renderHubTodayChecklist(checklist) {
   if (!checklist) return "";
-  const { buy_candidates = [], sell_candidates = [], risk_items = [], dividend_items = [] } = checklist;
-  if (!buy_candidates.length && !sell_candidates.length && !risk_items.length && !dividend_items.length) return "";
+  const { buy_candidates = [], sell_candidates = [], risk_items = [], dividend_items = [], conflict_items = [] } = checklist;
+  if (!buy_candidates.length && !sell_candidates.length && !risk_items.length && !dividend_items.length && !conflict_items.length) return "";
 
+  const checklistReason = (item) => Array.isArray(item.reasons)
+    ? (item.reasons[0] || "")
+    : (item.reason || "");
   const renderItems = (items) => items.map(item => `
     <div class="hub-checklist-item">
       <span class="hub-checklist-signal">${hubSignalBadge(item.signal)}</span>
       <span class="hub-checklist-ticker">${escapeHtml(item.ticker)}</span>
       <span class="hub-checklist-type">${escapeHtml(item.portfolio_type_label || "")}</span>
-      <span class="hub-checklist-reason">${escapeHtml((item.reasons || item.reason || [])[0] || "")}</span>
+      <span class="hub-checklist-reason">${escapeHtml(checklistReason(item))}</span>
     </div>`).join("");
 
   return `
@@ -4711,8 +4815,76 @@ function renderHubTodayChecklist(checklist) {
           <div class="hub-checklist-group-title" style="color:#16a34a">💰 배당락 임박 (${dividend_items.length})</div>
           ${renderItems(dividend_items)}
         </div>` : ""}
+        ${conflict_items.length ? `
+        <div class="hub-checklist-group">
+          <div class="hub-checklist-group-title" style="color:#b42318">⚠️ 신호 충돌 (${conflict_items.length})</div>
+          ${renderItems(conflict_items)}
+        </div>` : ""}
       </div>
+      ${renderSourceCaption("portfolio_hub.py · Yahoo Finance OHLCV · portfolio_mapping.json")}
     </section>`;
+}
+
+function renderHubSignalConflictPanel(conflicts) {
+  if (!conflicts) return "";
+  const summary = conflicts.summary || {};
+  const items = conflicts.items || [];
+  const source = conflicts.source || summary.source || "portfolio_hub.py · Yahoo Finance OHLCV · portfolio_mapping.json";
+  const tone = summary.high_count ? "blocked" : summary.medium_count || summary.watch_count ? "warning" : "success";
+  const levelLabel = { high: "강한 충돌", medium: "시간축 충돌", watch: "주의", aligned: "정렬" };
+  const actionLabel = {
+    defer_order: "주문 보류",
+    timeframe_review: "시간축 분리",
+    risk_review: "리스크 점검",
+    proceed_review: "일반 검토",
+  };
+  const itemHtml = items.length ? `
+    <div class="hub-conflict-list">
+      ${items.slice(0, 8).map((item) => `
+        <article class="hub-conflict-card level-${escapeHtml(item.level || "watch")}">
+          <div class="hub-conflict-head">
+            <strong>${escapeHtml(item.ticker || "-")}</strong>
+            ${statusBadge(item.level === "high" ? "blocked" : "warning", levelLabel[item.level] || item.level || "주의")}
+          </div>
+          <p>${escapeHtml(item.summary || "")}</p>
+          <div class="hub-conflict-signals">
+            ${(item.active_signals || []).map((signal) => `
+              <span>
+                <b>${escapeHtml(signal.portfolio_type_label || signal.portfolio_type || "-")}</b>
+                ${hubSignalBadge(signal.signal || "hold")}
+              </span>
+            `).join("")}
+          </div>
+          <small>${escapeHtml(actionLabel[item.primary_action] || item.primary_action || "검토")} · ${escapeHtml(item.recommendation || "")}</small>
+          ${renderSourceLabel(item.source || source)}
+        </article>
+      `).join("")}
+    </div>
+  ` : `
+    <div class="hub-conflict-empty">
+      <strong>신호 충돌 없음</strong>
+      <span>활성 운용 타입 기준으로 매수/매도 결론이 크게 엇갈리지 않습니다.</span>
+    </div>
+  `;
+  return `
+    <section class="hub-conflict-section">
+      <div class="hub-conflict-section-head">
+        <div>
+          <h2>신호 충돌 해석</h2>
+          <p>단타 · 중타 · 장타 · 배당 신호가 서로 다른 결론을 낼 때 주문 보류 또는 시간축 분리를 제안합니다.</p>
+        </div>
+        ${statusBadge(tone, items.length ? `${items.length}건` : "정렬")}
+      </div>
+      <div class="hub-conflict-summary">
+        <div><strong>${formatNumber(summary.high_count || 0, 0)}</strong><span>강한 충돌</span></div>
+        <div><strong>${formatNumber(summary.medium_count || 0, 0)}</strong><span>시간축 충돌</span></div>
+        <div><strong>${formatNumber(summary.watch_count || 0, 0)}</strong><span>주의</span></div>
+        <div><strong>${formatNumber(summary.aligned_count || 0, 0)}</strong><span>정렬</span></div>
+      </div>
+      ${itemHtml}
+      ${renderSourceCaption(source)}
+    </section>
+  `;
 }
 
 function renderHubTickerCard(tab, item) {

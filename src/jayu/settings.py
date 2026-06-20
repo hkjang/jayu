@@ -45,10 +45,75 @@ class RiskSettings(BaseModel):
     min_dollar_volume: float = Field(default=10_000_000, ge=0)
     block_unmapped_tickers: bool = True
     enforcement: Literal["block", "resize", "warn"] = "block"
+    portfolio_policy: dict[str, "PortfolioTypePolicySettings"] = Field(
+        default_factory=lambda: {
+            "short_term": PortfolioTypePolicySettings(
+                target_position_pct=0.03,
+                max_position_pct=0.05,
+                min_cash_pct=0.25,
+                max_invested_pct=0.75,
+                daily_loss_limit=0.02,
+                weekly_loss_limit=0.04,
+                monthly_mdd_limit=0.08,
+                max_daily_turnover_pct=0.20,
+            ),
+            "swing": PortfolioTypePolicySettings(
+                target_position_pct=0.05,
+                max_position_pct=0.08,
+                min_cash_pct=0.18,
+                max_invested_pct=0.82,
+                daily_loss_limit=0.025,
+                weekly_loss_limit=0.05,
+                monthly_mdd_limit=0.10,
+                max_daily_turnover_pct=0.12,
+            ),
+            "long_term": PortfolioTypePolicySettings(
+                target_position_pct=0.08,
+                max_position_pct=0.12,
+                min_cash_pct=0.10,
+                max_invested_pct=0.90,
+                daily_loss_limit=0.03,
+                weekly_loss_limit=0.06,
+                monthly_mdd_limit=0.15,
+                max_daily_turnover_pct=0.06,
+            ),
+            "dividend": PortfolioTypePolicySettings(
+                target_position_pct=0.06,
+                max_position_pct=0.10,
+                min_cash_pct=0.12,
+                max_invested_pct=0.88,
+                daily_loss_limit=0.025,
+                weekly_loss_limit=0.05,
+                monthly_mdd_limit=0.12,
+                max_daily_turnover_pct=0.05,
+            ),
+        }
+    )
 
     @model_validator(mode="after")
     def validate_cash_limits(self) -> "RiskSettings":
         if self.max_invested_pct > 1 - self.min_cash_pct:
+            raise ValueError("max_invested_pct must not exceed 1 - min_cash_pct")
+        return self
+
+
+class PortfolioTypePolicySettings(BaseModel):
+    target_position_pct: float | None = Field(default=None, ge=0, le=1)
+    max_position_pct: float | None = Field(default=None, gt=0, le=1)
+    min_cash_pct: float | None = Field(default=None, ge=0, le=1)
+    max_invested_pct: float | None = Field(default=None, ge=0, le=1)
+    daily_loss_limit: float | None = Field(default=None, ge=0, le=1)
+    weekly_loss_limit: float | None = Field(default=None, ge=0, le=1)
+    monthly_mdd_limit: float | None = Field(default=None, ge=0, le=1)
+    max_daily_turnover_pct: float | None = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_cash_limits(self) -> "PortfolioTypePolicySettings":
+        if (
+            self.min_cash_pct is not None
+            and self.max_invested_pct is not None
+            and self.max_invested_pct > 1 - self.min_cash_pct
+        ):
             raise ValueError("max_invested_pct must not exceed 1 - min_cash_pct")
         return self
 

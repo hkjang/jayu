@@ -22,7 +22,7 @@ from .io import read_json, stable_hash
 from .metric_dictionary import metric_dictionary_payload
 from .paper_trading import OrderApproval, OrderIntent, OrderPlan
 from .paths import RuntimePaths
-from .portfolio import load_portfolio_mapping
+from .portfolio import load_portfolio, load_portfolio_mapping
 from .provider_factory import build_provider_registry, provider_configuration_audit, provider_policy
 from .safety import evaluate_shadow_promotion
 from .settings import Settings, load_settings
@@ -206,6 +206,7 @@ def build_dashboard_overview(
     promotion = _mapping(read_json(run_dir / "promotion.json", default={}))
     if not promotion:
         promotion = _mapping(read_json(paths.state_dir / "promotion.json", default={}))
+    stock_warning_gate = _mapping(read_json(paths.state_dir / "stock_warning_gate.json", default={}))
     signals = _signal_map(run_dir)
     execution_status = _execution_status(manifest)
     safety_decision = str(
@@ -270,7 +271,13 @@ def build_dashboard_overview(
             **counts,
             "rows": signal_rows,
         },
-        "today_board": _today_board(signal_rows, reasons, recommended_actions, paths),
+        "today_board": _today_board(
+            signal_rows,
+            reasons,
+            recommended_actions,
+            paths,
+            stock_warning_gate,
+        ),
         "metric_dictionary": metric_dictionary_payload("overview"),
         "health": {
             "score": health_score,
@@ -1034,6 +1041,7 @@ def build_dashboard_toss_reconciliation(
         client = _dashboard_toss_client(settings)
         from .toss import reconcile_portfolio_with_toss
         report = reconcile_portfolio_with_toss(client, paths, account=account)
+        report = _augment_toss_reconciliation_report(report, paths, settings)
         return {
             "schema_version": SCHEMA_VERSION,
             **report,
@@ -1046,6 +1054,214 @@ def build_dashboard_toss_reconciliation(
             "differences": [],
             "unmapped_tickers": [],
         }
+
+
+def _augment_toss_reconciliation_report(
+    report: Mapping[str, Any],
+    paths: RuntimePaths,
+    settings: Settings,
+) -> dict[str, Any]:
+    enriched = dict(report)
+    default = _empty_toss_reconciliation_review()
+    enriched.update({key: enriched.get(key, value) for key, value in default.items()})
+    if not paths.portfolio_file.exists():
+        return enriched
+    try:
+        mapping = _load_dashboard_portfolio_mapping(paths)
+        portfolio_mapping = mapping or load_portfolio_mapping(paths.portfolio_mapping_file)
+        positions = load_portfolio(
+            paths.portfolio_file,
+            usd_krw=1350.0,
+            mapping=portfolio_mapping,
+            fx_rates={"KRW": 1.0, "USD": 1350.0},
+        )
+    except Exception as exc:
+        enriched["review_status"] = "failed"
+        enriched["review_message"] = f"Local portfolio policy review failed: {exc}"
+        return enriched
+
+    overrides = _load_portfolio_type_overrides(paths)
+    local_rows: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    position_checks: list[dict[str, Any]] = []
+    total_value = sum(float(position.market_value_krw or 0.0) for position in positions)
+    existing_unmapped = {str(item).upper() for item in _sequence(enriched.get("unmapped_tickers"))}
+
+    for position in positions:
+        row = _reconciliation_position_row(position)
+        lookup = _portfolio_mapping_lookup(portfolio_mapping, row)
+        override = _portfolio_type_override_for_holding(overrides, row)
+        type_keys, reason, source, override_info = _portfolio_type_keys_for_holding(
+            row,
+            lookup,
+            overrides,
+        )
+        primary = type_keys[0] if type_keys else "long_term"
+        profile = PORTFOLIO_TYPE_PROFILES[primary]
+        weight = (float(position.market_value_krw or 0.0) / total_value) if total_value else 0.0
+        policy = _portfolio_policy_for_type(settings, primary)
+        max_position_pct = _float_or_none(getattr(policy, "max_position_pct", None))
+
+        row.update(
+            {
+                "portfolio_types": type_keys,
+                "portfolio_type_labels": [
+                    PORTFOLIO_TYPE_PROFILES[key]["label"] for key in type_keys
+                ],
+                "primary_portfolio_type": primary,
+                "primary_portfolio_type_label": profile["label"],
+                "portfolio_type_reason": reason,
+                "portfolio_type_source": source,
+                "portfolio_type_override": override_info,
+                "weight": _round_or_none(weight, 6),
+                "source": "portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json",
+            }
+        )
+        local_rows.append(row)
+
+        issue_context = {
+            "ticker": row["symbol"],
+            "portfolio_type": primary,
+            "portfolio_type_label": profile["label"],
+            "source": "portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json",
+        }
+        lookup_mapped = bool(getattr(lookup, "mapped", False))
+        explicit_types = _normalize_portfolio_type_keys(
+            getattr(getattr(lookup, "mapping", None), "portfolio_types", ())
+        )
+        mapping_sector = str(getattr(getattr(lookup, "mapping", None), "sector", "") or "").strip()
+
+        if not lookup_mapped or row["symbol"].upper() in existing_unmapped:
+            issues.append(
+                {
+                    **issue_context,
+                    "issue_type": "unmapped",
+                    "severity": "blocked",
+                    "label": "매핑 미등록",
+                    "detail": "portfolio_mapping.json에 종목 레버리지, 섹터, 팩터, 운용 타입을 등록하세요.",
+                }
+            )
+        if lookup_mapped and not explicit_types and override is None:
+            issues.append(
+                {
+                    **issue_context,
+                    "issue_type": "missing_type",
+                    "severity": "warning",
+                    "label": "운용 타입 미지정",
+                    "detail": "portfolio_mapping.json 또는 portfolio_type_overrides.json에 단타/중타/장타/배당 타입을 명시하세요.",
+                }
+            )
+        if not lookup_mapped or mapping_sector.lower() in {"", "other", "unknown", "none"}:
+            issues.append(
+                {
+                    **issue_context,
+                    "issue_type": "missing_sector",
+                    "severity": "warning",
+                    "label": "섹터 미지정",
+                    "detail": "섹터 노출과 타입별 리스크 집계를 위해 portfolio_mapping.json의 sector를 보강하세요.",
+                }
+            )
+        if max_position_pct is not None and weight > max_position_pct:
+            issues.append(
+                {
+                    **issue_context,
+                    "issue_type": "overweight",
+                    "severity": "warning",
+                    "label": "타입별 단일종목 한도 초과",
+                    "detail": (
+                        f"{profile['label']} 정책의 단일종목 한도 {max_position_pct:.1%}를 "
+                        f"현재 비중 {weight:.1%}가 초과합니다."
+                    ),
+                    "observed": _round_or_none(weight, 6),
+                    "limit": _round_or_none(max_position_pct, 6),
+                }
+            )
+        position_checks.append(
+            {
+                "ticker": row["symbol"],
+                "weight": _round_or_none(weight, 6),
+                "portfolio_type": primary,
+                "portfolio_type_label": profile["label"],
+                "max_position_pct": _round_or_none(max_position_pct, 6),
+                "status": "warning"
+                if max_position_pct is not None and weight > max_position_pct
+                else "success",
+                "source": "portfolio.csv · risk.portfolio_policy",
+            }
+        )
+
+    enriched["mapping_issues"] = sorted(
+        issues,
+        key=lambda item: (
+            0 if item.get("severity") == "blocked" else 1,
+            str(item.get("issue_type")),
+            str(item.get("ticker")),
+        ),
+    )
+    enriched["position_policy_checks"] = position_checks
+    enriched["portfolio_type_totals"] = _toss_portfolio_type_totals(local_rows)
+    enriched["review_summary"] = _toss_reconciliation_review_summary(enriched["mapping_issues"])
+    enriched["review_status"] = "needs_review" if enriched["mapping_issues"] else "clean"
+    enriched["review_source"] = (
+        "portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json · "
+        "risk.portfolio_policy · Toss holdings GET"
+    )
+    return enriched
+
+
+def _empty_toss_reconciliation_review() -> dict[str, Any]:
+    return {
+        "review_status": "not_evaluated",
+        "review_summary": {
+            "issue_count": 0,
+            "blocked_count": 0,
+            "warning_count": 0,
+            "unmapped_count": 0,
+            "missing_type_count": 0,
+            "missing_sector_count": 0,
+            "overweight_count": 0,
+        },
+        "mapping_issues": [],
+        "position_policy_checks": [],
+        "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
+        "review_source": "portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json",
+    }
+
+
+def _reconciliation_position_row(position: Any) -> dict[str, Any]:
+    symbol = str(getattr(position, "ticker", "") or "").strip().upper()
+    return {
+        "symbol": symbol,
+        "ticker": symbol,
+        "name": str(getattr(position, "name", "") or symbol),
+        "quantity": _round_or_none(_float_or_none(getattr(position, "quantity", None)), 6),
+        "market_value_krw": _round_or_none(
+            _float_or_none(getattr(position, "market_value_krw", None)),
+            4,
+        ),
+        "sector": str(getattr(position, "sector", "") or ""),
+        "currency": str(getattr(position, "currency", "") or ""),
+        "warning_count": 0,
+    }
+
+
+def _portfolio_policy_for_type(settings: Settings, portfolio_type: str) -> Any | None:
+    policies = getattr(getattr(settings, "risk", None), "portfolio_policy", {}) or {}
+    return policies.get(portfolio_type)
+
+
+def _toss_reconciliation_review_summary(
+    issues: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    return {
+        "issue_count": len(issues),
+        "blocked_count": sum(item.get("severity") == "blocked" for item in issues),
+        "warning_count": sum(item.get("severity") == "warning" for item in issues),
+        "unmapped_count": sum(item.get("issue_type") == "unmapped" for item in issues),
+        "missing_type_count": sum(item.get("issue_type") == "missing_type" for item in issues),
+        "missing_sector_count": sum(item.get("issue_type") == "missing_sector" for item in issues),
+        "overweight_count": sum(item.get("issue_type") == "overweight" for item in issues),
+    }
 
 
 def build_dashboard_toss_order_plan(paths: RuntimePaths) -> dict[str, Any]:
@@ -4228,19 +4444,25 @@ def _top_reason_counts(checks: Sequence[Mapping[str, Any]]) -> list[dict[str, An
 
 
 def _empty_today_board() -> dict[str, list[dict[str, Any]]]:
+    default_task = {
+        "label": "최근 실행 생성",
+        "detail": "완료된 run이 없어 오늘 확인할 운영 데이터가 없습니다.",
+        "status": "not_evaluated",
+        "page": "overview",
+        "source": "runs/*/manifest.json",
+        "action_type": "data_check",
+        "queue_status": "new",
+        "priority": 1,
+        "queue_id": "task-no-run",
+    }
     return {
-        "tasks": [
-            {
-                "label": "최근 실행 생성",
-                "detail": "완료된 run이 없어 오늘 확인할 운영 데이터가 없습니다.",
-                "status": "not_evaluated",
-                "source": "runs/*/manifest.json",
-            }
-        ],
+        "tasks": [default_task],
         "risky_stocks": [],
         "buy_candidates": [],
         "sell_candidates": [],
         "dividend_reviews": [],
+        "order_prepares": [],
+        "action_queue": [default_task],
     }
 
 
@@ -4249,13 +4471,24 @@ def _today_board(
     reasons: Sequence[Mapping[str, Any]],
     actions: Sequence[Mapping[str, Any]],
     paths: RuntimePaths,
+    stock_warning_gate: Mapping[str, Any] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     board = _empty_today_board()
+    warning_gate = stock_warning_gate or {}
     board["tasks"] = _today_task_items(actions, reasons)
-    board["risky_stocks"] = _today_risky_stock_items(signal_rows, reasons)
+    board["risky_stocks"] = _today_risky_stock_items(signal_rows, reasons, warning_gate)
     board["buy_candidates"] = _today_signal_items(
-        [row for row in signal_rows if row.get("action") == "buy" and row.get("eligible") is True],
+        [
+            row
+            for row in signal_rows
+            if row.get("action") == "buy"
+            and row.get("eligible") is True
+            and _stock_warning_for_ticker(warning_gate, str(row.get("ticker") or "")) is None
+        ],
         fallback_detail="리스크 게이트를 통과한 매수 후보입니다.",
+        action_type="buy_review",
+        queue_prefix="buy",
+        priority=2,
     )
     board["sell_candidates"] = _today_signal_items(
         [
@@ -4264,8 +4497,13 @@ def _today_board(
             if row.get("action") == "sell" or str(row.get("signal") or "").lower() == "sell"
         ],
         fallback_detail="매도 또는 축소 검토 신호입니다.",
+        action_type="sell_review",
+        queue_prefix="sell",
+        priority=2,
     )
     board["dividend_reviews"] = _today_dividend_review_items(paths)
+    board["order_prepares"] = _today_order_prepare_items(board["buy_candidates"])
+    board["action_queue"] = _today_action_queue(board)
     return board
 
 
@@ -4274,17 +4512,26 @@ def _today_task_items(
     reasons: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     if actions:
-        return [
-            {
-                "label": str(action.get("label") or "검토"),
-                "detail": "차단 사유를 먼저 확인하세요.",
-                "status": "blocked" if reasons else "success",
-                "page": action.get("page"),
-                "command": action.get("command"),
-                "source": "safety_verdict.json · recommended_actions",
-            }
-            for action in actions[:5]
-        ]
+        items = []
+        for index, action in enumerate(actions[:5], start=1):
+            page = action.get("page")
+            command = action.get("command")
+            priority = _queue_priority(action.get("priority"), index)
+            items.append(
+                {
+                    "label": str(action.get("label") or "검토"),
+                    "detail": "차단 사유를 먼저 확인하세요.",
+                    "status": "blocked" if reasons else "success",
+                    "page": page,
+                    "command": command,
+                    "source": "safety_verdict.json · recommended_actions",
+                    "action_type": _today_action_type_for_target(page, command),
+                    "queue_status": "new",
+                    "priority": priority,
+                    "queue_id": str(action.get("id") or _queue_id("task", page or command or index)),
+                }
+            )
+        return items
     return [
         {
             "label": "오늘 리포트 확인",
@@ -4292,6 +4539,10 @@ def _today_task_items(
             "status": "success",
             "page": "signals",
             "source": "latest run manifest · today_signals.json",
+            "action_type": "data_check",
+            "queue_status": "new",
+            "priority": 1,
+            "queue_id": "task-review-report",
         }
     ]
 
@@ -4299,9 +4550,32 @@ def _today_task_items(
 def _today_risky_stock_items(
     signal_rows: Sequence[Mapping[str, Any]],
     reasons: Sequence[Mapping[str, Any]],
+    stock_warning_gate: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
+    for ticker, raw_warning in sorted((stock_warning_gate or {}).items()):
+        warning = _mapping(raw_warning)
+        if not _has_stock_warning(warning):
+            continue
+        symbol = str(ticker or "").upper()
+        if not symbol:
+            continue
+        seen.add(symbol)
+        items.append(
+            {
+                "ticker": symbol,
+                "label": symbol,
+                "detail": _stock_warning_message(warning),
+                "status": "blocked",
+                "page": "toss-account",
+                "source": "stock_warning_gate.json · Toss /api/v1/stocks/{symbol}/warnings",
+                "action_type": "broker_warning",
+                "queue_status": "new",
+                "priority": 1,
+                "queue_id": _queue_id("broker-warning", symbol),
+            }
+        )
     for row in signal_rows:
         ticker = str(row.get("ticker") or "").upper()
         if not ticker or ticker in seen:
@@ -4319,6 +4593,10 @@ def _today_risky_stock_items(
                 "status": str(row.get("status") or "warning"),
                 "page": "risk",
                 "source": "today_signals.json · risk gate status",
+                "action_type": "risk_review",
+                "queue_status": "new",
+                "priority": 1,
+                "queue_id": _queue_id("risk", ticker),
             }
         )
     for reason in reasons:
@@ -4327,23 +4605,96 @@ def _today_risky_stock_items(
             if not ticker or ticker in seen:
                 continue
             seen.add(ticker)
+            component = str(reason.get("component"))
             items.append(
                 {
                     "ticker": ticker,
                     "label": ticker,
                     "detail": str(reason.get("message") or reason.get("code") or "검토 필요"),
                     "status": "blocked",
-                    "page": _action_for_component(str(reason.get("component"))).get("page"),
+                    "page": _action_for_component(component).get("page"),
                     "source": "safety_verdict.json · provider/risk summaries",
+                    "action_type": _today_action_type_for_component(component),
+                    "queue_status": "new",
+                    "priority": 1,
+                    "queue_id": _queue_id("reason", reason.get("code") or component, ticker),
                 }
             )
     return items[:8]
+
+
+def _stock_warning_for_ticker(
+    stock_warning_gate: Mapping[str, Any],
+    ticker: str,
+) -> Mapping[str, Any] | None:
+    symbol = str(ticker or "").strip().upper()
+    if not symbol:
+        return None
+    candidates = [symbol]
+    if "." in symbol:
+        candidates.append(symbol.split(".", 1)[0])
+    if symbol.isdigit() and len(symbol) == 6:
+        candidates.extend([f"{symbol}.KS", f"{symbol}.KQ"])
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        warning = _mapping(stock_warning_gate.get(candidate))
+        if _has_stock_warning(warning):
+            return warning
+    return None
+
+
+def _has_stock_warning(warning: Mapping[str, Any]) -> bool:
+    if warning.get("has_warning") is True:
+        return True
+    payload = warning.get("warnings")
+    if isinstance(payload, Mapping):
+        result = payload.get("result")
+        if isinstance(result, Sequence) and not isinstance(result, str):
+            return bool(result)
+        if isinstance(result, Mapping):
+            warning_type = str(result.get("warningType") or result.get("warning") or "").upper()
+            suspended = (
+                result.get("suspended")
+                or result.get("isSuspended")
+                or result.get("tradeSuspended")
+            )
+            return bool(suspended) or warning_type not in {"", "NONE", "NORMAL"}
+    return False
+
+
+def _stock_warning_message(warning: Mapping[str, Any]) -> str:
+    message = str(warning.get("message") or "").strip()
+    if message:
+        return message
+    payload = warning.get("warnings")
+    if isinstance(payload, Mapping):
+        result = payload.get("result")
+        if isinstance(result, Sequence) and not isinstance(result, str):
+            warning_types = [
+                str(item.get("warningType") or item.get("warning") or item.get("type") or "")
+                for item in result
+                if isinstance(item, Mapping)
+            ]
+            warning_types = [item for item in warning_types if item]
+            if warning_types:
+                return " · ".join(warning_types[:3])
+        if isinstance(result, Mapping):
+            warning_type = str(result.get("warningType") or result.get("warning") or "").strip()
+            if warning_type:
+                return f"Broker warning flag: {warning_type}"
+    return "Toss 매수 유의사항이 있는 종목입니다."
 
 
 def _today_signal_items(
     rows: Sequence[Mapping[str, Any]],
     *,
     fallback_detail: str,
+    action_type: str,
+    queue_prefix: str,
+    priority: int,
 ) -> list[dict[str, Any]]:
     items = []
     for row in rows[:8]:
@@ -4361,6 +4712,10 @@ def _today_signal_items(
                 "target_price": row.get("target_price"),
                 "page": "signals",
                 "source": "today_signals.json · signal publication sidecar",
+                "action_type": action_type,
+                "queue_status": "new",
+                "priority": priority,
+                "queue_id": _queue_id(queue_prefix, ticker),
             }
         )
     return items
@@ -4399,9 +4754,96 @@ def _today_dividend_review_items(paths: RuntimePaths) -> list[dict[str, Any]]:
                 "status": "watch",
                 "page": "toss-account",
                 "source": f"{mapping.source} · portfolio_types",
+                "action_type": "dividend_review",
+                "queue_status": "new",
+                "priority": 4,
+                "queue_id": _queue_id("dividend", ticker),
             }
         )
     return rows[:8]
+
+
+def _today_order_prepare_items(
+    buy_candidates: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    if not buy_candidates:
+        return []
+    return [
+        {
+            "label": "매수 후보 주문 검증",
+            "detail": f"매수 후보 {len(buy_candidates)}건을 OrderIntent로 넘기기 전 현금·수량·Toss 유의사항을 확인하세요.",
+            "status": "not_evaluated",
+            "page": "toss-account",
+            "source": "today_signals.json · OrderIntent validation queue",
+            "action_type": "order_prepare",
+            "queue_status": "new",
+            "priority": 3,
+            "queue_id": "order-prepare-buy-candidates",
+        }
+    ]
+
+
+def _today_action_queue(board: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[dict[str, Any]]:
+    queue: list[dict[str, Any]] = []
+    sections = [
+        "tasks",
+        "risky_stocks",
+        "buy_candidates",
+        "sell_candidates",
+        "order_prepares",
+        "dividend_reviews",
+    ]
+    for section in sections:
+        for index, item in enumerate(_sequence(board.get(section)), start=1):
+            if not isinstance(item, Mapping):
+                continue
+            queued = dict(item)
+            queued.setdefault("queue_status", "new")
+            queued.setdefault("priority", index)
+            queued.setdefault(
+                "queue_id",
+                _queue_id(section, item.get("ticker") or item.get("label") or index),
+            )
+            queued["queue_section"] = section
+            queue.append(queued)
+    return sorted(queue, key=lambda item: (_queue_priority(item.get("priority"), 99), str(item.get("queue_id"))))[
+        :20
+    ]
+
+
+def _today_action_type_for_target(page: Any, command: Any = None) -> str:
+    page_name = str(page or "")
+    command_name = str(command or "")
+    if page_name == "data-quality":
+        return "data_check"
+    if page_name == "risk":
+        return "risk_review"
+    if "promotion" in command_name or "validate-config" in command_name:
+        return "data_check"
+    return "data_check"
+
+
+def _today_action_type_for_component(component: str) -> str:
+    return {
+        "data": "data_check",
+        "risk": "risk_review",
+        "promotion": "data_check",
+        "survivorship": "data_check",
+        "run": "data_check",
+    }.get(str(component or ""), "risk_review")
+
+
+def _queue_priority(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _queue_id(*parts: Any) -> str:
+    raw = "-".join(str(part or "").strip().lower() for part in parts if str(part or "").strip())
+    safe = "".join(char if char.isalnum() else "-" for char in raw)
+    return "-".join(part for part in safe.split("-") if part) or "action"
 
 
 def _recommended_actions(
@@ -6044,7 +6486,7 @@ def build_portfolio_hub_data(
     tickers: list[str] | None = None,
 ) -> dict[str, Any]:
     """포트폴리오 허브 전체 데이터. 종목 목록이 없으면 포트폴리오 매핑에서 자동 추출."""
-    from .portfolio_hub import build_portfolio_hub, PORTFOLIO_TYPE_META, PORTFOLIO_TYPE_ORDER
+    from .portfolio_hub import build_portfolio_hub
 
     # 포트폴리오 매핑에서 종목 + 타입 정보 로드
     mapping = load_portfolio_mapping()

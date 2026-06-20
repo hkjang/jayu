@@ -25,6 +25,8 @@ class RiskDecision:
     resized: bool = False
     # Whether the ticker was found in the portfolio mapping.
     mapped: bool = True
+    # Type-specific capital policy applied from risk.portfolio_policy.
+    policy: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,6 +50,8 @@ def evaluate_signal_risk(
     leverage = ticker_mapping.leverage_factor
     underlying = ticker_mapping.underlying_group or ticker
     sector = ticker_mapping.sector
+    portfolio_types = _normalize_portfolio_policy_types(ticker_mapping.portfolio_types)
+    policy = _effective_portfolio_policy(settings, portfolio_types)
 
     current_underlying = portfolio.get("underlying_exposure_pct", {}).get(underlying, 0.0)
     current_sector = portfolio.get("sector_exposure_pct", {}).get(sector, 0.0)
@@ -56,6 +60,9 @@ def evaluate_signal_risk(
     current_invested = float(portfolio.get("invested_pct", 0.0))
     current_cash = float(portfolio.get("cash_pct", 0.0))
     cash_known = bool(portfolio.get("cash_known", False))
+    current_turnover = float(
+        portfolio.get("daily_turnover_pct", portfolio.get("turnover_pct", 0.0)) or 0.0
+    )
     factor_exposure = portfolio.get("factor_exposure_pct", {})
     factors = ticker_mapping.factors
     positions = [item for item in portfolio.get("positions", []) if isinstance(item, dict)]
@@ -79,6 +86,7 @@ def evaluate_signal_risk(
         "adjusted_gross_exposure": current_gross + requested_position_pct * leverage,
         "invested_pct": current_invested + requested_position_pct,
         "cash_pct": max(0.0, current_cash - requested_position_pct),
+        "daily_turnover_pct": current_turnover + requested_position_pct,
     }
     for factor in factors:
         projected[f"factor:{factor}"] = float(factor_exposure.get(factor, 0.0)) + (
@@ -94,6 +102,13 @@ def evaluate_signal_risk(
     violation_details: list[dict[str, Any]] = []
     pass_details: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
+    max_single_position_pct = policy["max_position_pct"]
+    min_cash_pct = policy["min_cash_pct"]
+    max_invested_pct = policy["max_invested_pct"]
+    daily_loss_limit = policy["daily_loss_limit"]
+    weekly_loss_limit = policy["weekly_loss_limit"]
+    monthly_mdd_limit = policy["monthly_mdd_limit"]
+    max_daily_turnover_pct = policy["max_daily_turnover_pct"]
 
     def add_violation(
         code: str, message: str, *, observed: float, limit: float, metric: str
@@ -148,20 +163,20 @@ def evaluate_signal_risk(
             observed=float(projected_position_count),
             limit=float(settings.max_positions),
         )
-    if projected["single_position_pct"] > settings.max_single_position_pct:
+    if projected["single_position_pct"] > max_single_position_pct:
         add_violation(
             FailureCode.SINGLE_POSITION_EXCEEDED.value,
             "single_position_pct "
-            f"{projected['single_position_pct']:.1%} > {settings.max_single_position_pct:.1%}",
+            f"{projected['single_position_pct']:.1%} > {max_single_position_pct:.1%}",
             observed=projected["single_position_pct"],
-            limit=settings.max_single_position_pct,
+            limit=max_single_position_pct,
             metric="single_position_pct",
         )
     else:
         add_pass(
             metric="single_position_pct",
             observed=projected["single_position_pct"],
-            limit=settings.max_single_position_pct,
+            limit=max_single_position_pct,
         )
     liquidity_limit = max(
         settings.min_dollar_volume,
@@ -216,39 +231,39 @@ def evaluate_signal_risk(
                 observed=projected[key],
                 limit=settings.max_factor_exposure,
             )
-    if cash_known and projected["cash_pct"] < settings.min_cash_pct:
+    if cash_known and projected["cash_pct"] < min_cash_pct:
         add_violation(
             FailureCode.MIN_CASH_BREACHED.value,
-            f"cash_pct {projected['cash_pct']:.1%} < {settings.min_cash_pct:.1%}",
+            f"cash_pct {projected['cash_pct']:.1%} < {min_cash_pct:.1%}",
             observed=projected["cash_pct"],
-            limit=settings.min_cash_pct,
+            limit=min_cash_pct,
             metric="cash_pct",
         )
     elif cash_known:
         add_pass(
             metric="cash_pct",
             observed=projected["cash_pct"],
-            limit=settings.min_cash_pct,
+            limit=min_cash_pct,
             direction=">=",
         )
-    if cash_known and projected["invested_pct"] > settings.max_invested_pct:
+    if cash_known and projected["invested_pct"] > max_invested_pct:
         add_violation(
             FailureCode.MAX_INVESTED_EXCEEDED.value,
-            f"invested_pct {projected['invested_pct']:.1%} > {settings.max_invested_pct:.1%}",
+            f"invested_pct {projected['invested_pct']:.1%} > {max_invested_pct:.1%}",
             observed=projected["invested_pct"],
-            limit=settings.max_invested_pct,
+            limit=max_invested_pct,
             metric="invested_pct",
         )
     elif cash_known:
         add_pass(
             metric="invested_pct",
             observed=projected["invested_pct"],
-            limit=settings.max_invested_pct,
+            limit=max_invested_pct,
         )
     risk_status = portfolio.get("risk_status", {})
     loss_checks = (
-        ("daily_return", settings.daily_loss_limit, FailureCode.DAILY_LOSS_LIMIT_BREACHED.value),
-        ("weekly_return", settings.weekly_loss_limit, FailureCode.WEEKLY_LOSS_LIMIT_BREACHED.value),
+        ("daily_return", daily_loss_limit, FailureCode.DAILY_LOSS_LIMIT_BREACHED.value),
+        ("weekly_return", weekly_loss_limit, FailureCode.WEEKLY_LOSS_LIMIT_BREACHED.value),
     )
     for key, limit, code in loss_checks:
         value = float(risk_status.get(key, 0.0))
@@ -263,27 +278,43 @@ def evaluate_signal_risk(
         else:
             add_pass(metric=key, observed=value, limit=-limit, direction=">")
     monthly_drawdown = float(risk_status.get("monthly_drawdown", 0.0))
-    if monthly_drawdown >= settings.monthly_mdd_limit:
+    if monthly_drawdown >= monthly_mdd_limit:
         add_violation(
             FailureCode.MONTHLY_DRAWDOWN_BREACHED.value,
-            f"monthly_drawdown {monthly_drawdown:.1%} >= {settings.monthly_mdd_limit:.1%}",
+            f"monthly_drawdown {monthly_drawdown:.1%} >= {monthly_mdd_limit:.1%}",
             observed=monthly_drawdown,
-            limit=settings.monthly_mdd_limit,
+            limit=monthly_mdd_limit,
             metric="monthly_drawdown",
         )
     else:
         add_pass(
             metric="monthly_drawdown",
             observed=monthly_drawdown,
-            limit=settings.monthly_mdd_limit,
+            limit=monthly_mdd_limit,
             direction="<",
         )
+    if max_daily_turnover_pct is not None:
+        if projected["daily_turnover_pct"] > max_daily_turnover_pct:
+            add_violation(
+                FailureCode.PORTFOLIO_POLICY_TURNOVER_EXCEEDED.value,
+                "daily_turnover_pct "
+                f"{projected['daily_turnover_pct']:.1%} > {max_daily_turnover_pct:.1%}",
+                observed=projected["daily_turnover_pct"],
+                limit=max_daily_turnover_pct,
+                metric="daily_turnover_pct",
+            )
+        else:
+            add_pass(
+                metric="daily_turnover_pct",
+                observed=projected["daily_turnover_pct"],
+                limit=max_daily_turnover_pct,
+            )
     if not violations or settings.enforcement == "warn":
         approved = requested_position_pct
         eligible = True
     elif settings.enforcement == "resize":
         capacities = [
-            max(0.0, settings.max_single_position_pct - current_ticker_pct),
+            max(0.0, max_single_position_pct - current_ticker_pct),
             max(0.0, (limits["underlying_exposure"] - current_underlying) / leverage),
             max(0.0, (limits["sector_exposure"] - current_sector) / leverage),
             max(
@@ -304,10 +335,12 @@ def evaluate_signal_risk(
         if cash_known:
             capacities.extend(
                 [
-                    max(0.0, current_cash - settings.min_cash_pct),
-                    max(0.0, settings.max_invested_pct - current_invested),
+                    max(0.0, current_cash - min_cash_pct),
+                    max(0.0, max_invested_pct - current_invested),
                 ]
             )
+        if max_daily_turnover_pct is not None:
+            capacities.append(max(0.0, max_daily_turnover_pct - current_turnover))
         hard_block_codes = {
             FailureCode.MAX_POSITION_COUNT_EXCEEDED.value,
             FailureCode.UNMAPPED_TICKER.value,
@@ -335,6 +368,7 @@ def evaluate_signal_risk(
         warnings=warnings,
         resized=resized,
         mapped=mapped,
+        policy=policy,
     )
 
 
@@ -493,6 +527,97 @@ def apply_data_trust(
 
 def _optional_float(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def _normalize_portfolio_policy_types(values: Any) -> list[str]:
+    if isinstance(values, str):
+        raw_values = [values]
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = list(values)
+    else:
+        raw_values = []
+    normalized = []
+    for value in raw_values:
+        key = str(value or "").strip().lower()
+        if key and key not in normalized:
+            normalized.append(key)
+    return normalized or ["long_term"]
+
+
+def _effective_portfolio_policy(
+    settings: RiskSettings,
+    portfolio_types: list[str],
+) -> dict[str, Any]:
+    policies = settings.portfolio_policy or {}
+    selected = [policies[key] for key in portfolio_types if key in policies]
+    return {
+        "types": portfolio_types,
+        "source": "risk.portfolio_policy",
+        "target_position_pct": _min_policy_value(selected, "target_position_pct"),
+        "max_position_pct": _min_policy_value(
+            selected,
+            "max_position_pct",
+            default=settings.max_single_position_pct,
+        ),
+        "min_cash_pct": _max_policy_value(
+            selected,
+            "min_cash_pct",
+            default=settings.min_cash_pct,
+        ),
+        "max_invested_pct": _min_policy_value(
+            selected,
+            "max_invested_pct",
+            default=settings.max_invested_pct,
+        ),
+        "daily_loss_limit": _min_policy_value(
+            selected,
+            "daily_loss_limit",
+            default=settings.daily_loss_limit,
+        ),
+        "weekly_loss_limit": _min_policy_value(
+            selected,
+            "weekly_loss_limit",
+            default=settings.weekly_loss_limit,
+        ),
+        "monthly_mdd_limit": _min_policy_value(
+            selected,
+            "monthly_mdd_limit",
+            default=settings.monthly_mdd_limit,
+        ),
+        "max_daily_turnover_pct": _min_policy_value(selected, "max_daily_turnover_pct"),
+    }
+
+
+def _min_policy_value(
+    policies: list[Any],
+    key: str,
+    *,
+    default: float | None = None,
+) -> float | None:
+    values = [
+        float(value)
+        for policy in policies
+        if (value := getattr(policy, key, None)) is not None
+    ]
+    if default is not None:
+        values.append(float(default))
+    return min(values) if values else None
+
+
+def _max_policy_value(
+    policies: list[Any],
+    key: str,
+    *,
+    default: float | None = None,
+) -> float | None:
+    values = [
+        float(value)
+        for policy in policies
+        if (value := getattr(policy, key, None)) is not None
+    ]
+    if default is not None:
+        values.append(float(default))
+    return max(values) if values else None
 
 
 def _set_signal_status(item: dict[str, Any]) -> None:

@@ -353,13 +353,92 @@ def test_dashboard_overview_prioritizes_data_error_and_actions(tmp_path: Path):
     assert report["gates"]["risk"]["blocked_count"] == 1
     assert report["signals"]["blocked"] == 1
     assert report["today_board"]["tasks"][0]["label"] == "데이터 검증 확인"
+    assert report["today_board"]["tasks"][0]["action_type"] == "data_check"
+    assert report["today_board"]["tasks"][0]["queue_status"] == "new"
     assert report["today_board"]["risky_stocks"][0]["ticker"] == "SOXL"
+    assert report["today_board"]["risky_stocks"][0]["action_type"] == "risk_review"
     assert report["today_board"]["buy_candidates"] == []
+    assert report["today_board"]["action_queue"][0]["queue_section"] == "tasks"
     overview_metrics = report["metric_dictionary"]["overview"]
     assert any(item["key"] == "data_validation" for item in overview_metrics)
     assert overview_metrics[0]["plain_name"] == "가격 데이터 신뢰도"
     assert report["decision"]["top_reasons"][0]["code"] == "DATA_DISAGREEMENT"
     assert report["recommended_actions"][0]["page"] == "data-quality"
+
+
+def test_dashboard_overview_promotes_toss_stock_warning_to_today_board(tmp_path: Path):
+    paths = _paths(tmp_path)
+    run_dir = _write_run(paths)
+    atomic_write_json(
+        run_dir / "signals_risk.json",
+        {
+            "AAPL": {
+                "signal": "entry",
+                "action": "buy",
+                "eligible": True,
+                "status": "eligible",
+                "price": 120.0,
+                "stop_price": 112.0,
+                "target_price": 140.0,
+                "approved_position_pct": 0.05,
+            }
+        },
+    )
+    atomic_write_json(
+        paths.state_dir / "stock_warning_gate.json",
+        {
+            "AAPL": {
+                "has_warning": True,
+                "message": "Broker warning flag: OVERHEATED",
+                "warnings": {"result": [{"warningType": "OVERHEATED"}]},
+            }
+        },
+    )
+
+    report = build_dashboard_overview(paths, run_id="run-001")
+
+    assert report["today_board"]["buy_candidates"] == []
+    warning_item = next(
+        item for item in report["today_board"]["risky_stocks"] if item["ticker"] == "AAPL"
+    )
+    assert warning_item["status"] == "blocked"
+    assert warning_item["action_type"] == "broker_warning"
+    assert warning_item["queue_status"] == "new"
+    assert warning_item["queue_id"] == "broker-warning-aapl"
+    assert warning_item["detail"] == "Broker warning flag: OVERHEATED"
+    assert "Toss /api/v1/stocks/{symbol}/warnings" in warning_item["source"]
+
+
+def test_dashboard_overview_adds_order_prepare_queue_for_buy_candidates(tmp_path: Path):
+    paths = _paths(tmp_path)
+    run_dir = _write_run(paths)
+    atomic_write_json(
+        run_dir / "signals_risk.json",
+        {
+            "AAPL": {
+                "signal": "entry",
+                "action": "buy",
+                "eligible": True,
+                "status": "eligible",
+                "price": 120.0,
+                "stop_price": 112.0,
+                "target_price": 140.0,
+                "approved_position_pct": 0.05,
+            }
+        },
+    )
+
+    report = build_dashboard_overview(paths, run_id="run-001")
+
+    buy_item = report["today_board"]["buy_candidates"][0]
+    assert buy_item["ticker"] == "AAPL"
+    assert buy_item["action_type"] == "buy_review"
+    assert buy_item["queue_status"] == "new"
+    order_item = report["today_board"]["order_prepares"][0]
+    assert order_item["action_type"] == "order_prepare"
+    assert order_item["page"] == "toss-account"
+    assert "OrderIntent" in order_item["source"]
+    assert any(item["queue_id"] == "order-prepare-buy-candidates" for item in report["today_board"]["action_queue"])
 
 
 def test_dashboard_decision_api_prioritizes_next_action_and_blockers(tmp_path: Path):
@@ -744,6 +823,8 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "READ_ONLY_ACCOUNT" in content
     assert "renderTossAccountDashboard" in content
     assert "renderTossRegionTabs" in content
+    assert "renderReconciliationReview" in content
+    assert "RECONCILIATION_ISSUE_LABELS" in content
     assert "renderExposureDonut" in content
     assert "renderSituationTags" in content
     assert "renderPortfolioTypeCards" in content
@@ -758,6 +839,10 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "renderSourceCaption" in content
     assert "renderMetricDictionaryStrip" in content
     assert "renderTodayBoard" in content
+    assert "renderHubSignalConflictPanel" in content
+    assert "ACTION_QUEUE_STATUS_LABELS" in content
+    assert "ACTION_TYPE_LABELS" in content
+    assert "order_prepares" in content
     assert "renderPaperOrderContract" in content
     assert "운영 지표 쉬운 설명" in content
     assert "신호 지표 쉬운 설명" in content
@@ -772,6 +857,9 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "metric-help-grid" in css
     assert "today-board" in css
     assert "today-card" in css
+    assert "today-item-tags" in css
+    assert "hub-conflict-section" in css
+    assert "reconciliation-issue-table" in css
     assert "Data sources:" in content
     assert "Toss warnings endpoint" in content
     assert "Toss status config" in content
@@ -930,6 +1018,76 @@ def test_dashboard_toss_reconciliation_with_account(tmp_path: Path, monkeypatch)
     
     build_dashboard_toss_reconciliation(paths, account="custom-acc-seq")
     assert received_account == ["custom-acc-seq"]
+
+
+def test_dashboard_toss_reconciliation_adds_mapping_and_policy_review(
+    tmp_path: Path,
+    monkeypatch,
+):
+    paths = _paths(tmp_path)
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "toss_api_key": "mock-key",
+                "toss_secret_key": "mock-secret",
+                "toss_account": "1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths.portfolio_file.write_text(
+        "\n".join(
+            [
+                "name,ticker,quantity,market_value,currency",
+                "Apple,AAPL,10,9000000,KRW",
+                "Mystery,MYST,1,1000000,KRW",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    paths.portfolio_mapping_file.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(
+        paths.portfolio_mapping_file,
+        {
+            "version": 1,
+            "tickers": {
+                "AAPL": {
+                    "leverage_factor": 1.0,
+                    "underlying_group": "apple",
+                    "sector": "technology",
+                    "factors": ["technology", "growth"],
+                    "currency": "USD",
+                }
+            },
+        },
+    )
+
+    def mock_reconcile(client, paths, *, account=None):
+        return {
+            "status": "synchronized",
+            "differences": [],
+            "unmapped_tickers": ["MYST"],
+        }
+
+    monkeypatch.setattr("jayu.toss.reconcile_portfolio_with_toss", mock_reconcile)
+
+    report = build_dashboard_toss_reconciliation(paths, account="custom-acc-seq")
+
+    assert report["status"] == "synchronized"
+    assert report["review_status"] == "needs_review"
+    assert report["review_summary"]["issue_count"] >= 4
+    issue_types = {item["issue_type"] for item in report["mapping_issues"]}
+    assert {"unmapped", "missing_type", "missing_sector", "overweight"} <= issue_types
+    aapl_overweight = next(
+        item
+        for item in report["mapping_issues"]
+        if item["ticker"] == "AAPL" and item["issue_type"] == "overweight"
+    )
+    assert aapl_overweight["observed"] == 0.9
+    assert aapl_overweight["source"].startswith("portfolio.csv")
+    assert report["position_policy_checks"][0]["source"] == "portfolio.csv · risk.portfolio_policy"
+    assert "portfolio_type_overrides.json" in report["review_source"]
+    assert report["portfolio_type_totals"]
 
 
 def test_dashboard_toss_reconciliation_sync_endpoint_with_account(tmp_path: Path, monkeypatch):
