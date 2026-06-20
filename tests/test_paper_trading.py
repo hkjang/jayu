@@ -4,7 +4,13 @@ import pytest
 
 from jayu.execution import QuotedSpreadModel
 from jayu.kill_switch import KillSwitch, KillSwitchConfig
-from jayu.paper_trading import OrderIntent, PaperBroker, run_paper_session
+from jayu.paper_trading import (
+    OrderApproval,
+    OrderIntent,
+    OrderPlan,
+    PaperBroker,
+    run_paper_session,
+)
 
 
 def _switch(**overrides):
@@ -25,6 +31,30 @@ def test_broker_crosses_spread_and_partial_fills():
     )
     assert filled == pytest.approx(50.0)  # 50% partial fill
     assert price > 100.0  # buy pays above the mid
+
+
+def test_order_plan_contract_defaults_to_paper_only():
+    plan = OrderPlan(
+        intents=(
+            OrderIntent(
+                ticker="SOXL",
+                side="buy",
+                quantity=10.0,
+                decision_price=100.0,
+                arrival_mid=100.0,
+                final_price=100.0,
+            ),
+        ),
+        approval=OrderApproval(),
+    )
+
+    payload = plan.to_dict()
+    assert payload["model"] == "OrderPlan"
+    assert payload["mode"] == "paper"
+    assert payload["intents"][0]["model"] == "OrderIntent"
+    assert payload["approval"]["model"] == "OrderApproval"
+    assert payload["approval"]["live_order_enabled"] is False
+    assert payload["approval"]["status"] == "not_requested"
 
 
 def test_session_books_pnl_and_execution_quality():

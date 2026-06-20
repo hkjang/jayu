@@ -32,6 +32,12 @@ const state = {
   analysisCompare: null,
   analysisPortfolio: null,
   analysisCalendar: null,
+  // 포트폴리오 허브
+  portfolioHub: null,
+  portfolioHubTab: localStorage.getItem("jayu.hub.tab") || "short_term",
+  portfolioHubTickers: localStorage.getItem("jayu.hub.tickers") || "",
+  // 자동매매 준비
+  autotradingStatus: null,
 };
 
 const els = {
@@ -211,6 +217,13 @@ async function loadPage() {
     const run = encodeURIComponent(state.runId);
     state.decision = await api(`/api/v1/decision?run_id=${run}`);
     state.overview = await api(`/api/v1/overview?run_id=${run}`);
+    if (!state.portfolioHub) {
+      try {
+        state.portfolioHub = await api("/api/v1/portfolio-hub");
+      } catch (err) {
+        console.warn("Failed to auto-load portfolio hub data", err);
+      }
+    }
     if (state.page === "data-quality") {
       state.dataQuality = await api(`/api/v1/runs/${run}/data-quality`);
     }
@@ -219,6 +232,13 @@ async function loadPage() {
     }
     if (state.page === "signals") {
       state.signals = await api(`/api/v1/runs/${run}/signals`);
+      if (!state.portfolioHub) {
+        try {
+          state.portfolioHub = await api("/api/v1/portfolio-hub");
+        } catch (err) {
+          console.warn("Failed to load portfolio hub for signals page", err);
+        }
+      }
     }
     if (state.page === "trader-lens") {
       state.traderLens = await api(`/api/v1/runs/${run}/trader-lens`);
@@ -240,6 +260,12 @@ async function loadPage() {
     }
     if (state.page === "analysis") {
       // Analysis tabs load data themselves via bindPageActions auto-triggers
+    }
+    if (state.page === "portfolio-hub") {
+      // 포트폴리오 허브는 bindPageActions에서 자동 로드
+    }
+    if (state.page === "autotrading") {
+      state.autotradingStatus = await api("/api/v1/autotrading-status");
     }
     if (state.page === "toss-account") {
       const params = new URLSearchParams();
@@ -398,6 +424,9 @@ const METRIC_DATA_SOURCE_BY_PAGE = {
     "평가손익(KRW)": "Toss holdings GET · exchange-rate GET",
     "USD/KRW": "Toss exchange-rate GET",
     "조회 실패": "Toss account section status",
+    OrderIntent: "order_plan.json · jayu.paper_trading",
+    OrderPlan: "order_plan.json · today_signals.json · jayu.paper_trading",
+    OrderApproval: "order_plan.json · manual approval policy",
     __default: "Toss holdings GET",
   },
   toss: {
@@ -450,6 +479,97 @@ function renderDataSourceNote(page, extra = []) {
   return `<p class="metric-detail data-source-note" style="margin:6px 0 14px;color:var(--muted);font-size:11px;line-height:1.4">데이터 출처 · Data sources: ${sources.map(escapeHtml).join(" · ")}</p>`;
 }
 
+function renderMetricDictionaryStrip(entries, title = "지표 쉬운 설명") {
+  const items = (entries || []).filter(Boolean);
+  if (!items.length) return "";
+  return `
+    <section class="metric-help-panel" aria-label="${escapeHtml(title)}">
+      <div class="metric-help-header">
+        <strong>${escapeHtml(title)}</strong>
+        <span>표시명 · 쉬운 설명 · 좋은 값 · 주의할 점</span>
+      </div>
+      <div class="metric-help-grid">
+        ${items.map((item) => `
+          <article class="metric-help-card">
+            <div class="metric-help-title">
+              <strong>${escapeHtml(item.label || item.key || "-")}</strong>
+              <span>${escapeHtml(item.plain_name || "")}</span>
+            </div>
+            <p>${escapeHtml(item.short_description || "")}</p>
+            <dl>
+              <div><dt>좋은 값</dt><dd>${escapeHtml(item.good_value || "-")}</dd></div>
+              <div><dt>주의</dt><dd>${escapeHtml(item.watch_out || "-")}</dd></div>
+            </dl>
+            ${renderSourceLabel(item.source || "src/jayu/metric_dictionary.py")}
+          </article>
+        `).join("")}
+      </div>
+    </section>`;
+}
+
+function renderTodayBoard(board) {
+  if (!board) return "";
+  const sections = [
+    ["tasks", "오늘 할 일", "먼저 처리할 운영 검토", "runs/*/manifest.json · safety_verdict.json"],
+    ["risky_stocks", "위험 종목", "차단·경고·데이터 확인 대상", "today_signals.json · risk gate status"],
+    ["buy_candidates", "매수 후보", "리스크 게이트 통과 후보", "today_signals.json"],
+    ["sell_candidates", "매도 후보", "축소 또는 청산 검토 후보", "today_signals.json"],
+    ["dividend_reviews", "배당 점검", "배당 타입 보유·관심 종목", "portfolio_mapping.json"],
+  ];
+  return `
+    <section class="today-board" aria-label="오늘 확인할 항목">
+      <div class="today-board-header">
+        <div>
+          <h2>오늘 확인할 항목</h2>
+          <p>실행 결과를 사용자가 바로 행동으로 옮길 수 있게 나눈 읽기 전용 점검판입니다.</p>
+        </div>
+        ${renderSourceLabel("latest run manifest · safety_verdict.json · today_signals.json · portfolio_mapping.json")}
+      </div>
+      <div class="today-board-grid">
+        ${sections.map(([key, title, emptyText, source]) => renderTodayBoardCard(title, board[key] || [], emptyText, source)).join("")}
+      </div>
+    </section>`;
+}
+
+function renderTodayBoardCard(title, items, emptyText, fallbackSource) {
+  return `
+    <article class="today-card">
+      <div class="today-card-header">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${items.length}건</span>
+      </div>
+      <div class="today-list">
+        ${items.length ? items.map((item) => renderTodayBoardItem(item, fallbackSource)).join("") : `
+          <div class="today-empty">${escapeHtml(emptyText)}</div>
+          ${renderSourceLabel(fallbackSource)}
+        `}
+      </div>
+    </article>`;
+}
+
+function renderTodayBoardItem(item, fallbackSource) {
+  const targetAttr = item.page
+    ? `data-go="${escapeHtml(item.page)}"`
+    : item.command
+    ? `data-command="${escapeHtml(item.command)}"`
+    : "";
+  const priceBits = [
+    item.entry_price != null ? `진입 ${formatNumber(item.entry_price, 2)}` : "",
+    item.stop_price != null ? `손절 ${formatNumber(item.stop_price, 2)}` : "",
+    item.target_price != null ? `목표 ${formatNumber(item.target_price, 2)}` : "",
+  ].filter(Boolean);
+  return `
+    <div class="today-item status-${statusClass(item.status || "not_evaluated")}">
+      <div class="today-item-main">
+        <strong>${escapeHtml(item.label || item.ticker || "-")}</strong>
+        <span>${escapeHtml(item.detail || "")}</span>
+        ${priceBits.length ? `<small>${escapeHtml(priceBits.join(" · "))}</small>` : ""}
+      </div>
+      ${targetAttr ? `<button class="icon-button today-jump" type="button" ${targetAttr} title="관련 화면으로 이동">›</button>` : ""}
+      ${renderSourceLabel(item.source || fallbackSource)}
+    </div>`;
+}
+
 function render() {
   els.root.hidden = false;
   if (state.page === "data-quality") renderDataQuality();
@@ -462,6 +582,8 @@ function render() {
   else if (state.page === "toss") renderTossMarket();
   else if (state.page === "api-monitoring") renderApiMonitoring();
   else if (state.page === "analysis") renderAnalysis();
+  else if (state.page === "portfolio-hub") renderPortfolioHub();
+  else if (state.page === "autotrading") renderAutotrading();
   else renderOverview();
   bindPageActions();
 }
@@ -499,6 +621,8 @@ function renderOverview() {
       </article>
       ${renderPrimaryAction(primaryAction)}
     </section>
+    ${renderOverviewPortfolioHub(state.portfolioHub)}
+    ${renderTodayBoard(data.today_board)}
     <section class="metric-grid" aria-label="핵심 운영 지표">
       ${metricCard("데이터 검증", ratioValue(gates.data.verified, gates.data.total), gates.data.status,
         gates.data.total ? `${formatPercent(gates.data.validation_rate)} · provider ${gates.data.provider_count}` : "가격 데이터 미검증",
@@ -515,6 +639,7 @@ function renderOverview() {
       ${metricCard("Health", health.score ?? "미검증", health.status === "healthy" ? "success" : health.status,
         `기준 ${health.threshold ?? "-"} / 100`, health.score == null ? null : health.score / 100)}
     </section>
+    ${renderMetricDictionaryStrip(data.metric_dictionary?.overview, "운영 지표 쉬운 설명")}
     <div class="section-grid">
       <section class="panel">
         <div class="panel-header">
@@ -673,8 +798,10 @@ function renderSignals() {
       ${metricCard("데이터 검증", `${summary.data_verified_count}/${summary.total_count}`, summary.data_verified_count === summary.total_count && summary.total_count ? "success" : summary.total_count ? "data_error" : "not_evaluated", "가격 신뢰도", summary.data_verified_rate)}
       ${metricCard("신호 hash", shortHash(publication.signal_hash), publication.signal_hash ? "success" : "not_evaluated", "출판 근거")}
     </section>
+    ${renderMetricDictionaryStrip(data.metric_dictionary?.signals, "신호 지표 쉬운 설명")}
+    ${renderSignalTypeTabs(state.portfolioHub)}
     <section class="panel">
-      <div class="panel-header"><div><h2>신호 목록</h2><p>진입가, 손절가, 목표가, 유동성, reason code</p></div></div>
+      <div class="panel-header"><div><h2>전체 신호 목록</h2><p>진입가, 손절가, 목표가, 유동성, reason code</p></div></div>
       ${renderSignalDetailTable(data.rows)}
       ${renderSourceCaption("today_signals.json · signal publication sidecar")}
     </section>
@@ -856,7 +983,10 @@ function renderTossAccountDashboard() {
         <div class="panel-header">
           <div><h2>포트폴리오 타입별 요약</h2><p>보유종목을 단타, 중타, 장타, 배당 관리 관점으로 나눠 확인합니다.</p></div>
         </div>
-        <div class="panel-body">${renderPortfolioTypeCards(data.portfolio_type_totals || [])}</div>
+        <div class="panel-body">
+          ${renderPortfolioTypeCards(data.portfolio_type_totals || [])}
+          ${renderSourceCaption("portfolio_mapping.json · portfolio_type_overrides.json · Toss holdings/stocks metadata")}
+        </div>
       </section>
       <section class="panel" style="margin-bottom:14px">
         <div class="panel-header">
@@ -1073,6 +1203,7 @@ function renderReconciliation(reconciliation) {
               </div>
             `).join("")}
           </div>
+          ${renderSourceCaption("portfolio_mapping.json 쨌 portfolio.csv 쨌 Toss holdings GET")}
         </div>
       </section>
     `;
@@ -1101,6 +1232,7 @@ function renderOrderPlan(orderPlanData) {
   const warningsGate = planData.warnings_gate || {};
   const marketSession = planData.market_session || {};
   const todaySignals = planData.today_signals || {};
+  const paperContract = planData.paper_order_contract || {};
 
   const krOpen = marketSession.KR?.open || false;
   const usOpen = marketSession.US?.open || false;
@@ -1246,6 +1378,7 @@ function renderOrderPlan(orderPlanData) {
 
   return `
     ${sessionHtml}
+    ${renderPaperOrderContract(paperContract)}
     
     <div class="section-grid" style="margin-bottom:14px">
       <section class="panel">
@@ -1278,6 +1411,55 @@ function renderOrderPlan(orderPlanData) {
       ${renderSourceCaption("today_signals.json · stock_warning_gate.json · Toss /api/v1/stocks/{symbol}/warnings")}
     </section>
   `;
+}
+
+function renderPaperOrderContract(contract) {
+  const intents = contract.intents || [];
+  const approval = contract.approval || {};
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div><h2>Paper 주문 의도 계약</h2><p>OrderIntent · OrderPlan · OrderApproval 구조를 live 주문 없이 검토합니다.</p></div>
+        ${statusBadge(contract.live_order_enabled ? "blocked" : "success", contract.live_order_enabled ? "Live 주문 켜짐" : "Live 주문 비활성")}
+      </div>
+      <section class="metric-grid" style="margin:12px">
+        ${metricCard("OrderIntent", `${intents.length}건`, intents.length ? "success" : "not_evaluated", "paper fill 후보")}
+        ${metricCard("OrderPlan", contract.mode || "paper", "not_evaluated", "실행 모드")}
+        ${metricCard("OrderApproval", approval.status || "not_requested", approval.live_order_enabled ? "blocked" : "success", approval.reason || "승인 대기")}
+      </section>
+      ${intents.length ? `
+        <div class="table-wrap"><table>
+          <thead>
+            <tr>
+              <th>종목</th>
+              <th>Side</th>
+              <th class="numeric">수량</th>
+              <th class="numeric">결정가</th>
+              <th class="numeric">도착 중간가</th>
+              <th class="numeric">최종가</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${intents.map((intent) => `
+              <tr>
+                <td class="ticker-cell"><strong>${escapeHtml(intent.ticker)}</strong></td>
+                <td>${escapeHtml(intent.side)}</td>
+                <td class="numeric">${formatNumber(intent.quantity, 4)}</td>
+                <td class="numeric">${formatNumber(intent.decision_price, 2)}</td>
+                <td class="numeric">${formatNumber(intent.arrival_mid, 2)}</td>
+                <td class="numeric">${formatNumber(intent.final_price, 2)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table></div>
+      ` : `
+        <div class="empty-state">
+          <strong>Paper 주문 의도가 없습니다.</strong>
+          <span>수량과 기준 가격이 있는 수동 order_plan 항목이 생기면 여기에 OrderIntent가 표시됩니다.</span>
+        </div>
+      `}
+      ${renderSourceCaption(contract.source || "order_plan.json · today_signals.json · jayu.paper_trading")}
+    </section>`;
 }
 
 function renderTossMarket() {
@@ -2998,6 +3180,20 @@ function bindPageActions() {
       btnCalendarFetch.click();
     }
   }
+
+  // ── Portfolio Hub Actions ──────────────────────────────────────────────────
+  if (state.page === "portfolio-hub") {
+    bindPortfolioHubActions();
+  }
+
+  // ── Signal Tab Actions ─────────────────────────────────────────────────────
+  document.querySelectorAll("[data-signal-tab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.signalHubTab = btn.dataset.signalTab;
+      renderSignals();
+      bindPageActions();
+    });
+  });
 }
 
 
@@ -3035,7 +3231,7 @@ function setupApiMonitoringRefreshTimer() {
 }
 
 function navigate(page) {
-  if (!["overview", "data-quality", "risk", "signals", "trader-lens", "promotion", "settings", "toss-account", "toss", "api-monitoring", "analysis"].includes(page)) return;
+  if (!["overview", "data-quality", "risk", "signals", "trader-lens", "promotion", "settings", "toss-account", "toss", "api-monitoring", "analysis", "portfolio-hub", "autotrading"].includes(page)) return;
   clearApiMonitoringRefreshTimer();
   state.page = page;
   localStorage.setItem("jayu.dashboard.activePage", page);
@@ -3451,6 +3647,7 @@ function renderAnalysisBasic(container, ticker, macro, period) {
           </div>
         </div>
       </div>
+      ${renderSourceCaption("Yahoo Finance OHLCV/news 쨌 FRED series 쨌 TradingView right-details 쨌 Toss holdings")}
     </section>`;
 
   if (!data.stock) {
@@ -3586,6 +3783,7 @@ function renderAnalysisTechnical(container, ticker, period) {
           </div>
         </div>
       </div>
+      ${renderSourceCaption("Yahoo Finance OHLCV 쨌 TradingView scanner popup-technicals 쨌 TradingView right-details")}
     </section>`;
 
   if (!data.records) {
@@ -3702,8 +3900,8 @@ function renderAnalysisTechnical(container, ticker, period) {
                 <th style="text-align:right;padding:7px 10px">종합</th>
                 <th style="text-align:right;padding:7px 10px">MA</th>
                 <th style="text-align:right;padding:7px 10px">Osc</th>
-                <th style="text-align:right;padding:7px 10px">RSI</th>
-                <th style="text-align:right;padding:7px 10px">MACD</th>
+                <th style="text-align:right;padding:7px 10px">${renderTooltip("RSI")}</th>
+                <th style="text-align:right;padding:7px 10px">${renderTooltip("MACD")}</th>
                 <th style="text-align:right;padding:7px 10px">Close</th>
               </tr>
             </thead>
@@ -3805,6 +4003,7 @@ function renderAnalysisCompare(container, period) {
           </div>
         </div>
       </div>
+      ${renderSourceCaption("Yahoo Finance adjusted close series")}
     </section>`;
 
   if (!data.dates) {
@@ -4391,4 +4590,537 @@ function _renderTechnicalCharts(recs, dates) {
   </svg>`;
 
   return chart1 + chart2 + chart3 + chart4;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 포트폴리오 허브 (12번 메뉴)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PORTFOLIO_TYPE_ORDER_HUB = ["short_term", "swing", "long_term", "dividend"];
+
+const PORTFOLIO_TYPE_COLORS = {
+  short_term: { bg: "#fef2f2", border: "#ef4444", text: "#ef4444", label: "단타" },
+  swing:      { bg: "#fffbeb", border: "#f59e0b", text: "#d97706", label: "중타" },
+  long_term:  { bg: "#eef2ff", border: "#6366f1", text: "#6366f1", label: "장타" },
+  dividend:   { bg: "#f0fdf4", border: "#22c55e", text: "#16a34a", label: "배당" },
+};
+
+const SIGNAL_DISPLAY_HUB = {
+  buy_candidate:  { label: "매수 후보",  color: "#22c55e", emoji: "🟢", bg: "rgba(34,197,94,0.10)" },
+  weak_buy:       { label: "약한 매수",  color: "#86efac", emoji: "🔵", bg: "rgba(134,239,172,0.12)" },
+  hold:           { label: "관망",       color: "#94a3b8", emoji: "⚪", bg: "rgba(148,163,184,0.08)" },
+  weak_sell:      { label: "약한 매도",  color: "#fca5a5", emoji: "🟡", bg: "rgba(252,165,165,0.12)" },
+  sell_candidate: { label: "매도 후보",  color: "#ef4444", emoji: "🔴", bg: "rgba(239,68,68,0.10)" },
+  caution:        { label: "점검 필요",  color: "#f59e0b", emoji: "⚠️", bg: "rgba(245,158,11,0.10)" },
+  insufficient:   { label: "데이터 부족","color": "#6b7280", emoji: "❓", bg: "rgba(107,114,128,0.08)" },
+};
+
+function hubSignalBadge(signalKey) {
+  const d = SIGNAL_DISPLAY_HUB[signalKey] || SIGNAL_DISPLAY_HUB.hold;
+  return `<span class="hub-signal-badge" style="background:${d.bg};color:${d.color};border:1px solid ${d.color}33">${d.emoji} ${d.label}</span>`;
+}
+
+function renderPortfolioHub() {
+  const data = state.portfolioHub;
+  const tab = state.portfolioHubTab || "short_term";
+
+  const tabButtons = PORTFOLIO_TYPE_ORDER_HUB.map(pt => {
+    const c = PORTFOLIO_TYPE_COLORS[pt];
+    const isActive = pt === tab;
+    const summary = data?.type_summaries?.[pt];
+    const cnt = summary?.ticker_count ?? 0;
+    const buyN = summary?.buy_candidate_count ?? 0;
+    return `<button class="hub-tab-btn ${isActive ? "is-active" : ""}" data-hub-tab="${pt}"
+      style="border-bottom-color:${isActive ? c.border : "transparent"};color:${isActive ? c.text : "#64748b"}">
+      ${c.label} <span class="hub-tab-count">${cnt}종목</span>
+      ${buyN > 0 ? `<span class="hub-tab-badge" style="background:${c.border}">${buyN}</span>` : ""}
+    </button>`;
+  }).join("");
+
+  const tabContent = data ? renderHubTabContent(data, tab) : `
+    <div class="hub-load-area">
+      <p>포트폴리오 허브 데이터를 불러오려면 조회 버튼을 클릭하세요.</p>
+      <p style="font-size:12px;color:#94a3b8;margin-top:6px">portfolio_mapping.json의 종목이 자동으로 불러와집니다.</p>
+    </div>`;
+
+  const checklist = data?.today_checklist;
+
+  els.root.innerHTML = `
+    <div class="page-heading">
+      <div>
+        <h1>포트폴리오 허브</h1>
+        <p>단타 · 중타 · 장타 · 배당 4가지 투자 타입별로 보유 종목을 관리하고, 오늘 확인할 사항을 빠르게 파악합니다.</p>
+      </div>
+      <button id="btn-hub-load" class="button button-primary">📊 데이터 조회</button>
+    </div>
+
+    ${renderHubTodayChecklist(checklist)}
+
+    <div class="hub-ticker-input-row">
+      <label for="hub-tickers-input" style="font-size:13px;font-weight:600;color:#475569">종목 직접 입력 (선택사항)</label>
+      <input id="hub-tickers-input" class="hub-input" type="text"
+        placeholder="SOXL,TQQQ,NVDA,QQQ (쉼표로 구분, 비워두면 포트폴리오 매핑 자동 사용)"
+        value="${escapeHtml(state.portfolioHubTickers)}">
+      <small style="color:#94a3b8;font-size:11px">비워두면 portfolio_mapping.json의 종목이 자동으로 사용됩니다.</small>
+    </div>
+
+    <div class="hub-tab-bar">${tabButtons}</div>
+    <div id="hub-tab-content">${tabContent}</div>
+
+    <div class="hub-disclaimer">
+      ⚠️ 이 화면의 신호와 지표는 <strong>투자 보조 분석 결과</strong>이며 투자 추천이 아닙니다.
+      투자 결정과 결과에 대한 책임은 전적으로 투자자 본인에게 있습니다.
+    </div>
+  `;
+}
+
+function renderHubTodayChecklist(checklist) {
+  if (!checklist) return "";
+  const { buy_candidates = [], sell_candidates = [], risk_items = [], dividend_items = [] } = checklist;
+  if (!buy_candidates.length && !sell_candidates.length && !risk_items.length && !dividend_items.length) return "";
+
+  const renderItems = (items) => items.map(item => `
+    <div class="hub-checklist-item">
+      <span class="hub-checklist-signal">${hubSignalBadge(item.signal)}</span>
+      <span class="hub-checklist-ticker">${escapeHtml(item.ticker)}</span>
+      <span class="hub-checklist-type">${escapeHtml(item.portfolio_type_label || "")}</span>
+      <span class="hub-checklist-reason">${escapeHtml((item.reasons || item.reason || [])[0] || "")}</span>
+    </div>`).join("");
+
+  return `
+    <section class="hub-checklist-section">
+      <h2>📋 오늘 확인할 사항</h2>
+      <div class="hub-checklist-grid">
+        ${buy_candidates.length ? `
+        <div class="hub-checklist-group">
+          <div class="hub-checklist-group-title" style="color:#22c55e">🟢 매수 후보 (${buy_candidates.length})</div>
+          ${renderItems(buy_candidates)}
+        </div>` : ""}
+        ${sell_candidates.length ? `
+        <div class="hub-checklist-group">
+          <div class="hub-checklist-group-title" style="color:#ef4444">🔴 매도 후보 (${sell_candidates.length})</div>
+          ${renderItems(sell_candidates)}
+        </div>` : ""}
+        ${risk_items.length ? `
+        <div class="hub-checklist-group">
+          <div class="hub-checklist-group-title" style="color:#f59e0b">⚠️ 급등락 확인 (${risk_items.length})</div>
+          ${renderItems(risk_items)}
+        </div>` : ""}
+        ${dividend_items.length ? `
+        <div class="hub-checklist-group">
+          <div class="hub-checklist-group-title" style="color:#16a34a">💰 배당락 임박 (${dividend_items.length})</div>
+          ${renderItems(dividend_items)}
+        </div>` : ""}
+      </div>
+    </section>`;
+}
+
+function renderHubTickerCard(tab, item) {
+  const sig = item.signals?.[tab] || {};
+  const sigKey = sig.signal || "hold";
+  const d = SIGNAL_DISPLAY_HUB[sigKey] || SIGNAL_DISPLAY_HUB.hold;
+  const price = item.latest_price != null ? `$${Number(item.latest_price).toFixed(2)}` : "—";
+  const chg = item.change_pct != null ? `${item.change_pct >= 0 ? "+" : ""}${Number(item.change_pct).toFixed(2)}%` : "—";
+  const chgClass = (item.change_pct || 0) >= 0 ? "text-up" : "text-down";
+
+  const keyMetrics = renderHubKeyMetrics(item.ticker_info || {}, tab);
+  const reasons = (sig.reasons || []).slice(0, 2).map(r => `<li>${escapeHtml(r)}</li>`).join("");
+  const cautions = (sig.cautions || []).slice(0, 2).map(r => `<li class="hub-caution-item">${escapeHtml(r)}</li>`).join("");
+
+  const dqColor = { good: "#22c55e", partial: "#f59e0b", poor: "#ef4444", unavailable: "#94a3b8" }[item.data_quality] || "#94a3b8";
+
+  return `
+    <div class="hub-ticker-card" style="border-top:3px solid ${d.color}">
+      <div class="hub-ticker-header">
+        <div class="hub-ticker-name">
+          <strong>${escapeHtml(item.ticker)}</strong>
+          <span class="hub-data-quality" style="color:${dqColor}" title="데이터 품질">●</span>
+        </div>
+        <div class="hub-ticker-price">
+          <span class="hub-price">${price}</span>
+          <span class="hub-change ${chgClass}">${chg}</span>
+        </div>
+        ${hubSignalBadge(sigKey)}
+      </div>
+      ${keyMetrics}
+      ${reasons || cautions ? `
+      <div class="hub-ticker-reasons">
+        <ul class="hub-reason-list">${reasons}${cautions}</ul>
+      </div>` : ""}
+      ${sig.stop_loss_ref ? `<div class="hub-stop-loss">📍 참고 손절가: <strong>$${Number(sig.stop_loss_ref).toFixed(2)}</strong> <small>(ATR × 1.5 기준)</small></div>` : ""}
+    </div>`;
+}
+
+function renderHubTabContent(data, tab) {
+  const meta = data.portfolio_type_meta?.[tab] || {};
+  const summary = data.type_summaries?.[tab] || {};
+  const items = data.type_buckets?.[tab] || [];
+  const c = PORTFOLIO_TYPE_COLORS[tab] || {};
+
+  const typeDesc = `
+    <div class="hub-type-card" style="border-left:4px solid ${c.border};background:${c.bg}">
+      <div class="hub-type-header">
+        <span style="font-size:22px">${meta.emoji || ""}</span>
+        <div>
+          <strong style="color:${c.text}">${meta.label || tab}</strong>
+          <span class="hub-type-period">${meta.holding_period || ""}</span>
+          <span class="hub-type-risk" style="color:${c.text}">위험도: ${meta.risk_level || ""}</span>
+        </div>
+      </div>
+      <p style="margin:6px 0;font-size:13px;color:#475569">${escapeHtml(meta.description || "")}</p>
+      <div class="hub-type-metrics">
+        <strong style="font-size:11px;color:#64748b">핵심 지표:</strong>
+        ${(meta.focus_metrics || []).map(m => `<span class="hub-metric-chip">${escapeHtml(m)}</span>`).join("")}
+      </div>
+      ${(meta.checklist || []).length ? `
+      <div class="hub-type-checklist">
+        <strong style="font-size:11px;color:#64748b">오늘 점검 사항:</strong>
+        <ul>${meta.checklist.map(c => `<li>${escapeHtml(c)}</li>`).join("")}</ul>
+      </div>` : ""}
+    </div>`;
+
+  const summaryCards = `
+    <div class="hub-summary-row">
+      <div class="hub-stat-card"><div class="hub-stat-num">${summary.ticker_count || 0}</div><div class="hub-stat-label">종목 수</div></div>
+      <div class="hub-stat-card" style="border-top:3px solid #22c55e"><div class="hub-stat-num" style="color:#22c55e">${summary.buy_candidate_count || 0}</div><div class="hub-stat-label">매수 후보</div></div>
+      <div class="hub-stat-card" style="border-top:3px solid #ef4444"><div class="hub-stat-num" style="color:#ef4444">${summary.sell_candidate_count || 0}</div><div class="hub-stat-label">매도 후보</div></div>
+      <div class="hub-stat-card" style="border-top:3px solid #f59e0b"><div class="hub-stat-num" style="color:#f59e0b">${summary.caution_count || 0}</div><div class="hub-stat-label">점검 필요</div></div>
+    </div>`;
+
+  if (!items.length) {
+    return typeDesc + summaryCards + `<div class="hub-empty">이 탭에 배정된 종목이 없습니다.<br><small>portfolio_mapping.json에서 portfolio_types에 <code>${tab}</code>을 추가하거나 위 입력창에 종목을 입력하세요.</small></div>`;
+  }
+
+  const ticker_rows = items.map(item => renderHubTickerCard(tab, item)).join("");
+
+  return typeDesc + summaryCards + `<div class="hub-ticker-grid">${ticker_rows}</div>`;
+}
+
+function renderHubKeyMetrics(info, tab) {
+  const fmt = (v, d = 2) => v != null ? Number(v).toFixed(d) : "—";
+  const fmtPct = (v) => v != null ? `${v >= 0 ? "+" : ""}${Number(v).toFixed(1)}%` : "—";
+  const rsiColor = (v) => {
+    if (v == null) return "#94a3b8";
+    if (v >= 70) return "#ef4444";
+    if (v <= 30) return "#22c55e";
+    return "#475569";
+  };
+
+  let metrics = [];
+  if (tab === "short_term") {
+    metrics = [
+      { label: "RSI(2)", value: fmt(info.rsi2, 1), color: rsiColor(info.rsi2), tip: "2일 RSI: 10 이하→과매도, 90 이상→과매수" },
+      { label: "ATR(14)", value: fmt(info.atr), tip: "14일 평균 변동폭" },
+      { label: "거래량비율", value: info.volume_ratio != null ? `${fmt(info.volume_ratio, 1)}배` : "—", tip: "오늘 거래량 / 20일 평균" },
+      { label: "당일등락", value: fmtPct(info.change_pct), color: (info.change_pct || 0) >= 0 ? "#22c55e" : "#ef4444", tip: "전일 대비 등락률" },
+    ];
+  } else if (tab === "swing") {
+    metrics = [
+      { label: "RSI(14)", value: fmt(info.rsi14, 1), color: rsiColor(info.rsi14), tip: "14일 RSI: 70↑ 과매수, 30↓ 과매도" },
+      { label: "EMA20", value: fmt(info.ema20), tip: "20일 지수이동평균" },
+      { label: "EMA50", value: fmt(info.ema50), tip: "50일 지수이동평균" },
+      { label: "MACD", value: info.macd_hist != null ? (info.macd_hist >= 0 ? "+" : "") + fmt(info.macd_hist, 4) : "—", color: (info.macd_hist || 0) >= 0 ? "#22c55e" : "#ef4444", tip: "MACD 히스토그램: 양수→상승, 음수→하락" },
+    ];
+  } else if (tab === "long_term") {
+    const regime = info.ema200 && info.latest_price
+      ? (info.latest_price > info.ema200 * 1.02 ? "강세장" : info.latest_price < info.ema200 * 0.98 ? "약세장" : "횡보")
+      : "—";
+    const regimeColor = { "강세장": "#22c55e", "약세장": "#ef4444", "횡보": "#f59e0b" }[regime] || "#94a3b8";
+    metrics = [
+      { label: "EMA(200)", value: fmt(info.ema200), tip: "200일 지수이동평균 — 장기 추세 기준선" },
+      { label: "레짐", value: regime, color: regimeColor, tip: "강세장: 가격 > EMA200×1.02, 약세장: 가격 < EMA200×0.98" },
+      { label: "52주 수익률", value: fmtPct(info.change_52w_pct), color: (info.change_52w_pct || 0) >= 0 ? "#22c55e" : "#ef4444", tip: "1년간 주가 변화율" },
+      { label: "52주 위치", value: info.near_52w_high ? "고점 근처" : info.near_52w_low ? "저점 근처" : "중간", tip: "현재 가격의 52주 고저 대비 위치" },
+    ];
+  } else if (tab === "dividend") {
+    metrics = [
+      { label: "배당수익률", value: info.dividend_yield != null ? `${fmt(info.dividend_yield, 1)}%` : "—", tip: "현재 주가 대비 연간 배당 비율" },
+      { label: "배당락일", value: info.ex_dividend_date || "정보 없음", tip: "배당락일: 이 날짜 전 보유 시 배당 수령 가능" },
+      { label: "EMA(200)", value: fmt(info.ema200), tip: "장기 추세 — 원금 보전 여부 확인용" },
+      { label: "52주 수익률", value: fmtPct(info.change_52w_pct), color: (info.change_52w_pct || 0) >= 0 ? "#22c55e" : "#ef4444", tip: "" },
+    ];
+  }
+
+  return `<div class="hub-key-metrics">${metrics.map(m => `
+    <div class="hub-metric-item">
+      <div class="hub-metric-label">${renderTooltip(m.label)}</div>
+      <div class="hub-metric-value" style="${m.color ? `color:${m.color}` : ""}">${escapeHtml(String(m.value))}</div>
+    </div>`).join("")}</div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 자동매매 준비 (13번 메뉴)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function renderAutotrading() {
+  const data = state.autotradingStatus;
+
+  if (!data) {
+    els.root.innerHTML = `
+      <div class="page-heading"><h1>자동매매 준비</h1></div>
+      <div class="analysis-loading">⏳ 자동매매 상태 로딩 중...</div>`;
+    return;
+  }
+
+  const status = data.status || {};
+  const phases = data.phases || [];
+  const requirements = data.safety_requirements || [];
+  const passedCount = requirements.filter(r => r.current).length;
+  const totalCount = requirements.length;
+
+  const phaseCards = phases.map(phase => `
+    <div class="at-phase-card ${phase.is_current ? "is-current" : ""}" style="border-left:4px solid ${phase.color}">
+      <div class="at-phase-header">
+        <span class="at-phase-label" style="color:${phase.color}">${escapeHtml(phase.label)}</span>
+        ${phase.is_current ? '<span class="at-phase-badge">현재 상태</span>' : ""}
+      </div>
+      <p class="at-phase-desc">${escapeHtml(phase.description)}</p>
+      ${phase.requirements ? `
+      <div class="at-phase-reqs">
+        ${phase.requirements.map(r => `<span class="at-phase-req">✓ ${escapeHtml(r)}</span>`).join("")}
+      </div>` : ""}
+    </div>`).join("");
+
+  const reqItems = requirements.map(req => `
+    <div class="at-req-item ${req.current ? "is-done" : ""}">
+      <span class="at-req-icon">${req.current ? "✅" : "⬜"}</span>
+      <div class="at-req-body">
+        <strong>${escapeHtml(req.label)}</strong>
+        <p>${escapeHtml(req.description)}</p>
+      </div>
+    </div>`).join("");
+
+  els.root.innerHTML = `
+    <div class="page-heading">
+      <div>
+        <h1>자동매매 준비 상태</h1>
+        <p>자동매매는 모든 안전장치를 갖춘 후 단계적으로 활성화합니다. 현재는 비활성 상태입니다.</p>
+      </div>
+      <span class="at-status-badge">🔒 비활성</span>
+    </div>
+
+    <div class="at-warning-box">
+      <div class="at-warning-icon">⚠️</div>
+      <div>
+        <strong>자동매매 위험 안내</strong>
+        <p>${escapeHtml(status.warning || data.warning || "")}</p>
+      </div>
+    </div>
+
+    <div class="at-disclaimer-box">
+      <strong>투자 책임 고지</strong>
+      <p>${escapeHtml(status.disclaimer || data.disclaimer || "")}</p>
+    </div>
+
+    <section class="at-section">
+      <h2>단계별 활성화 로드맵</h2>
+      <p style="font-size:13px;color:#64748b;margin-bottom:12px">자동매매는 비활성 → 모의투자 → 반자동 → 자동 순서로 단계적으로 확장됩니다.</p>
+      <div class="at-phases-grid">${phaseCards}</div>
+    </section>
+
+    <section class="at-section">
+      <h2>안전장치 체크리스트</h2>
+      <div class="at-progress-bar-wrap">
+        <div class="at-progress-bar" style="width:${totalCount ? Math.round(passedCount/totalCount*100) : 0}%"></div>
+      </div>
+      <p style="font-size:12px;color:#64748b;margin:4px 0 12px">${passedCount}/${totalCount} 항목 완료</p>
+      <div class="at-req-list">${reqItems}</div>
+    </section>
+
+    <section class="at-section">
+      <h2>현재 자동매매 상태</h2>
+      <div class="at-current-status">
+        <div class="at-status-row"><strong>활성 여부:</strong> <span style="color:#ef4444">비활성 (disabled)</span></div>
+        <div class="at-status-row"><strong>현재 단계:</strong> 비활성 (모의투자 단계 아님)</div>
+        <div class="at-status-row"><strong>주문 발송:</strong> <span style="color:#ef4444">불가 — 자동매매 기능 미구현</span></div>
+        <div class="at-status-row"><strong>안전장치 충족:</strong> ${passedCount}/${totalCount}</div>
+      </div>
+      <p style="margin-top:12px;font-size:13px;color:#64748b">${escapeHtml(status.message || "자동매매는 현재 비활성 상태입니다.")}</p>
+    </section>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 포트폴리오 허브 bindPageActions 핸들러
+// ═══════════════════════════════════════════════════════════════════════════
+
+function bindPortfolioHubActions() {
+  // 탭 전환
+  document.querySelectorAll("[data-hub-tab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.portfolioHubTab = btn.dataset.hubTab;
+      localStorage.setItem("jayu.hub.tab", state.portfolioHubTab);
+      renderPortfolioHub();
+      bindPageActions();
+    });
+  });
+
+  // 데이터 조회
+  const btnLoad = document.querySelector("#btn-hub-load");
+  if (btnLoad) {
+    btnLoad.addEventListener("click", async () => {
+      const tickersInput = document.querySelector("#hub-tickers-input");
+      const tickersVal = (tickersInput?.value || "").trim();
+      state.portfolioHubTickers = tickersVal;
+      localStorage.setItem("jayu.hub.tickers", tickersVal);
+
+      btnLoad.disabled = true;
+      btnLoad.textContent = "⏳ 조회 중...";
+      try {
+        const q = tickersVal ? `?tickers=${encodeURIComponent(tickersVal)}` : "";
+        state.portfolioHub = await api(`/api/v1/portfolio-hub${q}`);
+        renderPortfolioHub();
+        bindPageActions();
+      } catch (err) {
+        alert("포트폴리오 허브 조회 실패: " + (err.message || "오류"));
+      } finally {
+        btnLoad.disabled = false;
+        btnLoad.textContent = "📊 데이터 조회";
+      }
+    });
+
+    // 자동 로드 (처음 진입 시)
+    if (!state.portfolioHub) {
+      btnLoad.click();
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 대시보드 개요 - 포트폴리오 허브 미니 요약
+// ═══════════════════════════════════════════════════════════════════════════
+function renderOverviewPortfolioHub(hubData) {
+  if (!hubData) return "";
+
+  const summaries = hubData.type_summaries || {};
+  const checklist = hubData.today_checklist || {};
+
+  const typeCards = PORTFOLIO_TYPE_ORDER_HUB.map(pt => {
+    const c = PORTFOLIO_TYPE_COLORS[pt] || {};
+    const sum = summaries[pt] || {};
+    const count = sum.ticker_count || 0;
+    const buys = sum.buy_candidate_count || 0;
+    const cautions = sum.caution_count || 0;
+
+    return `
+      <div class="ov-hub-card" style="border-left: 3px solid ${c.border}">
+        <div class="ov-hub-card-title" style="color:${c.text}">${c.label}</div>
+        <div class="ov-hub-card-stats">
+          <span>총 ${count}종목</span>
+          ${buys > 0 ? `<span style="color:#22c55e">매수 ${buys}</span>` : ""}
+          ${cautions > 0 ? `<span style="color:#f59e0b">점검 ${cautions}</span>` : ""}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <section class="ov-hub-section">
+      <div class="panel-header" style="margin-bottom:12px;padding:0;">
+        <div>
+          <h2>포트폴리오 허브 요약</h2>
+          <p>4가지 투자 타입별 현재 상태와 오늘 꼭 확인해야 할 종목입니다.</p>
+        </div>
+        <button class="button button-small" data-go="portfolio-hub">허브로 이동</button>
+      </div>
+      <div class="ov-hub-grid">
+        ${typeCards}
+      </div>
+      ${renderHubTodayChecklist(checklist)}
+    </section>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 한국어 지표 설명 (Tooltip System)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const INDICATOR_EXPLANATIONS = {
+  "RSI": "상대강도지수(RSI): 14일간의 상승폭과 하락폭 비율입니다. 30 이하면 과매도(반등 가능성), 70 이상이면 과매수(하락 가능성)로 봅니다.",
+  "RSI(14)": "14일 상대강도지수: 30 이하면 과매도, 70 이상이면 과매수 상태를 의미합니다.",
+  "RSI(2)": "2일 상대강도지수: 초단기 과매도/과매수 지표입니다. 10 이하면 극단적 과매도, 90 이상이면 극단적 과매수를 뜻합니다.",
+  "EMA20": "20일 지수이동평균(단기): 최근 20일간의 가격 흐름입니다. 주가가 이 선 위에 있으면 단기 상승세입니다.",
+  "EMA50": "50일 지수이동평균(중기): 최근 50일간의 가격 흐름입니다. 중기적인 추세 지지선 역할을 합니다.",
+  "EMA(200)": "200일 지수이동평균(장기): 주식의 장기적인 대세 상승/하락을 판단하는 가장 중요한 기준선입니다.",
+  "EMA200": "200일 지수이동평균(장기): 장기 추세 지지/저항선입니다.",
+  "Volatility": "변동성(20일): 최근 주가 등락의 험난한 정도입니다. 수치가 높을수록 단기 급등락 위험이 큽니다.",
+  "변동성": "최근 20일간 주가 변동성입니다. 높을수록 급등락 위험이 큽니다.",
+  "MACD": "MACD: 단기 이동평균선과 장기 이동평균선의 차이입니다. 양수면 상승, 음수면 하락 추세를 의미합니다.",
+  "Dividend Yield": "배당 수익률: 1년 동안 지급될 예상 배당금을 현재 주가로 나눈 비율입니다.",
+  "배당수익률": "현재 주가 대비 연간 배당금의 비율(%)입니다.",
+  "Payout Ratio": "배당 성향: 회사가 벌어들인 순이익 중 몇 %를 배당으로 지급하는지 나타냅니다. 100%가 넘으면 빚내서 배당하는 것일 수 있습니다.",
+  "배당락일": "이 날짜 전날까지 주식을 매수해야 배당금을 받을 수 있습니다."
+};
+
+function renderTooltip(label, indicatorKey) {
+  const key = indicatorKey || label;
+  const explanation = INDICATOR_EXPLANATIONS[key];
+  if (!explanation) return escapeHtml(label);
+  
+  return `
+    <span class="with-tooltip">
+      ${escapeHtml(label)}
+      <i class="tooltip-icon">i</i>
+      <span class="tooltip-popup">${escapeHtml(explanation)}</span>
+    </span>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 신호 페이지 - 타입별 신호 분석 뷰
+// ═══════════════════════════════════════════════════════════════════════════
+
+function renderSignalTypeTabs(hubData) {
+  if (!hubData || !hubData.type_summaries) return "";
+
+  // This will use the same UI as Portfolio Hub but directly embedded in the Signals page.
+  // We can just reuse the hub render logic but adapted for this container.
+  // Actually, let's render a mini tab view for signals specifically.
+
+  const types = PORTFOLIO_TYPE_ORDER_HUB;
+  let html = `<div class="hub-tab-bar" style="margin-bottom: 16px;">`;
+  
+  // Use a local state for the signal tab if not defined
+  state.signalHubTab = state.signalHubTab || "short_term";
+
+  types.forEach(pt => {
+    const c = PORTFOLIO_TYPE_COLORS[pt] || {};
+    const sum = hubData.type_summaries[pt] || {};
+    const isActive = state.signalHubTab === pt;
+    html += `
+      <button class="hub-tab-btn ${isActive ? "is-active" : ""}" 
+              data-signal-tab="${pt}" 
+              style="${isActive ? `border-bottom-color: ${c.border}` : ""}">
+        <span style="color: ${c.text}">●</span> ${c.label}
+        <span class="hub-tab-count">(${sum.ticker_count || 0})</span>
+        ${sum.buy_candidate_count ? `<span class="hub-tab-badge" style="background:#22c55e">${sum.buy_candidate_count}</span>` : ""}
+      </button>
+    `;
+  });
+  html += `</div>`;
+
+  const activeTickers = hubData.type_buckets?.[state.signalHubTab] || [];
+  if (activeTickers.length === 0) {
+    html += `<div class="hub-empty">이 타입에 해당하는 종목이 없습니다.</div>`;
+  } else {
+    html += `<div class="hub-ticker-grid">`;
+    activeTickers.forEach(info => {
+      html += renderHubTickerCard(state.signalHubTab, info);
+    });
+    html += `</div>`;
+  }
+
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>타입별 신호 분석 (포트폴리오 허브)</h2>
+          <p>단타, 중타, 장타, 배당 타입별 매매 신호와 한국어 근거, 신뢰도 게이지입니다.</p>
+        </div>
+      </div>
+      <div class="panel-body">
+        ${html}
+      </div>
+    </section>
+  `;
 }

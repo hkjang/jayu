@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "description": "Optional dashboard-only portfolio type overrides. Example: {\"tickers\":{\"AAPL\":{\"portfolio_types\":[\"long_term\"],\"reason\":\"Core holding\"}}}",
+  "tickers": {}
+}

@@ -40,6 +40,55 @@ class OrderIntent:
 
 
 @dataclass(frozen=True)
+class OrderApproval:
+    status: str = "not_requested"
+    approved_by: str | None = None
+    approved_at: str | None = None
+    live_order_enabled: bool = False
+    reason: str = "Paper trading only; live orders are disabled."
+
+
+@dataclass(frozen=True)
+class OrderPlan:
+    intents: tuple[OrderIntent, ...]
+    generated_at: str | None = None
+    mode: str = "paper"
+    source: str = "order_plan.json"
+    approval: OrderApproval = field(default_factory=OrderApproval)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "model": "OrderPlan",
+            "mode": self.mode,
+            "generated_at": self.generated_at,
+            "source": self.source,
+            "intents": [
+                {
+                    "model": "OrderIntent",
+                    "ticker": intent.ticker,
+                    "side": intent.side,
+                    "quantity": intent.quantity,
+                    "decision_price": intent.decision_price,
+                    "arrival_mid": intent.arrival_mid,
+                    "final_price": intent.final_price,
+                    "atr": intent.atr,
+                    "relative_spread": intent.relative_spread,
+                    "latency_ms": intent.latency_ms,
+                }
+                for intent in self.intents
+            ],
+            "approval": {
+                "model": "OrderApproval",
+                "status": self.approval.status,
+                "approved_by": self.approval.approved_by,
+                "approved_at": self.approval.approved_at,
+                "live_order_enabled": self.approval.live_order_enabled,
+                "reason": self.approval.reason,
+            },
+        }
+
+
+@dataclass(frozen=True)
 class PaperBroker:
     """Deterministic paper fill engine: cross the spread, optionally partial-fill."""
 

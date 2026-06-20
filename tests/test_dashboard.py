@@ -352,6 +352,12 @@ def test_dashboard_overview_prioritizes_data_error_and_actions(tmp_path: Path):
     assert report["gates"]["data"]["disagreement_count"] == 1
     assert report["gates"]["risk"]["blocked_count"] == 1
     assert report["signals"]["blocked"] == 1
+    assert report["today_board"]["tasks"][0]["label"] == "데이터 검증 확인"
+    assert report["today_board"]["risky_stocks"][0]["ticker"] == "SOXL"
+    assert report["today_board"]["buy_candidates"] == []
+    overview_metrics = report["metric_dictionary"]["overview"]
+    assert any(item["key"] == "data_validation" for item in overview_metrics)
+    assert overview_metrics[0]["plain_name"] == "가격 데이터 신뢰도"
     assert report["decision"]["top_reasons"][0]["code"] == "DATA_DISAGREEMENT"
     assert report["recommended_actions"][0]["page"] == "data-quality"
 
@@ -445,6 +451,9 @@ def test_dashboard_signals_exposes_publication_prices_and_reasons(tmp_path: Path
 
     assert report["summary"]["blocked_count"] == 1
     assert report["publication"]["status"] == "blocked"
+    signal_metrics = report["metric_dictionary"]["signals"]
+    assert any(item["key"] == "stop_price" for item in signal_metrics)
+    assert signal_metrics[0]["plain_name"] == "신호가 오늘 사용 가능한 상태인지"
     row = report["rows"][0]
     assert row["ticker"] == "SOXL"
     assert row["entry_price"] == 100.0
@@ -648,6 +657,36 @@ def test_dashboard_toss_portfolio_auto_selects_first_account_and_holdings(tmp_pa
     assert "12345678901" not in json.dumps(report)
 
 
+def test_dashboard_toss_portfolio_type_override_wins_over_heuristics(tmp_path: Path):
+    paths = _paths(tmp_path)
+    override_dir = tmp_path / "configs"
+    override_dir.mkdir()
+    atomic_write_json(
+        override_dir / "portfolio_type_overrides.json",
+        {
+            "tickers": {
+                "AAPL": {
+                    "portfolio_types": ["dividend"],
+                    "reason": "사용자가 배당 점검 대상으로 지정",
+                }
+            }
+        },
+    )
+    fake = FakeTossDashboardClient()
+
+    report = build_dashboard_toss_portfolio(paths, client=fake)
+
+    aapl = next(item for item in report["holdings"] if item["symbol"] == "AAPL")
+    assert aapl["portfolio_types"] == ["dividend"]
+    assert aapl["primary_portfolio_type"] == "dividend"
+    assert aapl["portfolio_type_reason"] == "사용자가 배당 점검 대상으로 지정"
+    assert aapl["portfolio_type_override"]["active"] is True
+    assert aapl["portfolio_type_source"] == "portfolio_type_overrides.json"
+    portfolio_types = {item["type"]: item for item in report["portfolio_type_totals"]}
+    assert portfolio_types["dividend"]["count"] == 1
+    assert "portfolio_type_overrides.json" in portfolio_types["dividend"]["source"]
+
+
 def test_dashboard_toss_market_snapshot_uses_get_sections_without_network(tmp_path: Path):
     paths = _paths(tmp_path)
     fake = FakeTossDashboardClient()
@@ -717,12 +756,29 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "renderDataSourceNote" in content
     assert "renderSourceLabel" in content
     assert "renderSourceCaption" in content
+    assert "renderMetricDictionaryStrip" in content
+    assert "renderTodayBoard" in content
+    assert "renderPaperOrderContract" in content
+    assert "운영 지표 쉬운 설명" in content
+    assert "신호 지표 쉬운 설명" in content
+    assert "오늘 확인할 항목" in content
+    assert "위험 종목" in content
+    assert "Paper 주문 의도 계약" in content
+    assert "OrderIntent · OrderPlan · OrderApproval" in content
+    assert "portfolio_type_overrides.json" in content
     assert "data-source-inline" in css
     assert "data-source-caption" in css
+    assert "metric-help-panel" in css
+    assert "metric-help-grid" in css
+    assert "today-board" in css
+    assert "today-card" in css
     assert "Data sources:" in content
     assert "Toss warnings endpoint" in content
+    assert "Toss status config" in content
+    assert "generated markdown slips" in content
     assert "TradingView scanner popup-technicals" in content
     assert "Yahoo Finance OHLCV · derived RSI" in content
+    assert "Yahoo Finance adjusted close series" in content
     assert "Toss /api/v1/stocks/{symbol}/warnings" in content
     assert "runs/*/manifest.json" in content
     assert "TradingView 상세 스냅샷" in content
@@ -826,7 +882,19 @@ def test_dashboard_toss_order_plan(tmp_path: Path):
     paths = _paths(tmp_path)
     paths.state_dir.mkdir(parents=True, exist_ok=True)
     paths.signals_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(paths.state_dir / "order_plan.json", {"orders": [{"ticker": "AAPL", "action": "BUY"}]})
+    atomic_write_json(
+        paths.state_dir / "order_plan.json",
+        {
+            "orders": [
+                {
+                    "ticker": "AAPL",
+                    "action": "BUY",
+                    "estimated_quantity": 3,
+                    "price": 120,
+                }
+            ]
+        },
+    )
     atomic_write_json(paths.state_dir / "stock_warning_gate.json", {"AAPL": {"has_warning": False}})
     atomic_write_json(paths.state_dir / "market_session_status.json", {"US": {"open": True}})
     atomic_write_json(paths.signal_file, {"AAPL": {"eligible": True}})
@@ -836,6 +904,10 @@ def test_dashboard_toss_order_plan(tmp_path: Path):
     assert report["warnings_gate"]["AAPL"]["has_warning"] is False
     assert report["market_session"]["US"]["open"] is True
     assert report["today_signals"]["AAPL"]["eligible"] is True
+    assert report["paper_order_contract"]["contract"]["intent"] == "OrderIntent"
+    assert report["paper_order_contract"]["intents"][0]["ticker"] == "AAPL"
+    assert report["paper_order_contract"]["approval"]["model"] == "OrderApproval"
+    assert report["paper_order_contract"]["approval"]["live_order_enabled"] is False
 
 
 def test_dashboard_toss_reconciliation_with_account(tmp_path: Path, monkeypatch):
