@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from .failure_codes import FailureCode
 from .io import read_json, stable_hash
 from .paths import RuntimePaths
+from .portfolio import load_portfolio_mapping
 from .provider_factory import build_provider_registry, provider_configuration_audit, provider_policy
 from .safety import evaluate_shadow_promotion
 from .settings import Settings, load_settings
@@ -37,6 +38,58 @@ DATA_FAILURE_CODES = {
     FailureCode.LIVE_PRICE_SAFETY_FAILED.value,
     FailureCode.UNVERIFIED_PRICE_DATA.value,
     FailureCode.SIGNAL_PUBLICATION_INVALID.value,
+}
+
+PORTFOLIO_TYPE_ORDER = ("short_term", "swing", "long_term", "dividend")
+PORTFOLIO_TYPE_ALIASES = {
+    "short": "short_term",
+    "short_term": "short_term",
+    "day": "short_term",
+    "day_trade": "short_term",
+    "scalp": "short_term",
+    "단타": "short_term",
+    "swing": "swing",
+    "mid": "swing",
+    "mid_term": "swing",
+    "중타": "swing",
+    "long": "long_term",
+    "long_term": "long_term",
+    "core": "long_term",
+    "장타": "long_term",
+    "dividend": "dividend",
+    "income": "dividend",
+    "yield": "dividend",
+    "배당": "dividend",
+}
+PORTFOLIO_TYPE_PROFILES: dict[str, dict[str, Any]] = {
+    "short_term": {
+        "label": "단타",
+        "description": "짧은 보유 기간과 빠른 손절을 전제로 보는 고변동/레버리지 관리 구간입니다.",
+        "focus": "당일 변동률, 유동성, 손절가, TradingView 단기 신호",
+        "risk_level": "높음",
+        "checklist": ["손절가 선지정", "당일 급등락 확인", "레버리지 비중 제한"],
+    },
+    "swing": {
+        "label": "중타",
+        "description": "며칠에서 몇 주 단위의 추세와 변동성을 함께 보는 전술적 보유 구간입니다.",
+        "focus": "중기 추세, RSI/MACD, 섹터 모멘텀, 목표가 대비 손익비",
+        "risk_level": "중간",
+        "checklist": ["추세 훼손 확인", "분할 익절 기준", "섹터 과열 여부"],
+    },
+    "long_term": {
+        "label": "장타",
+        "description": "핵심 보유 관점에서 기업/ETF 품질과 포트폴리오 집중도를 함께 보는 구간입니다.",
+        "focus": "섹터 비중, 장기 이동평균, 실적/테마 지속성, 리밸런싱 주기",
+        "risk_level": "중간",
+        "checklist": ["핵심 비중 한도", "분기 리밸런싱", "장기 추세 유지"],
+    },
+    "dividend": {
+        "label": "배당",
+        "description": "현금흐름과 배당 안정성을 우선 확인하는 인컴형 관리 구간입니다.",
+        "focus": "배당락, 분배금 안정성, NAV 괴리, 금리 민감도",
+        "risk_level": "낮음~중간",
+        "checklist": ["배당락 일정", "분배금 지속성", "원금 훼손 여부"],
+    },
 }
 
 FAILURE_CATALOG: dict[str, tuple[str, str]] = {
@@ -767,6 +820,8 @@ def build_dashboard_toss_portfolio(
             "selected_account": None,
             "holdings": [],
             "allocation": [],
+            "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
+            "portfolio_type_profiles": _portfolio_type_profile_rows(),
             "sections": {},
             "summary": _empty_toss_portfolio_summary("missing_credentials"),
             "message": "Set TS_API_KEY and TS_SECRET_KEY before account lookup.",
@@ -782,6 +837,8 @@ def build_dashboard_toss_portfolio(
             "selected_account": None,
             "holdings": [],
             "allocation": [],
+            "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
+            "portfolio_type_profiles": _portfolio_type_profile_rows(),
             "sections": {"accounts": accounts_result},
             "summary": _empty_toss_portfolio_summary("failed"),
             "error": accounts_result.get("message"),
@@ -797,6 +854,8 @@ def build_dashboard_toss_portfolio(
             "selected_account": None,
             "holdings": [],
             "allocation": [],
+            "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
+            "portfolio_type_profiles": _portfolio_type_profile_rows(),
             "sections": {"accounts": accounts_result},
             "summary": _empty_toss_portfolio_summary("no_accounts"),
             "message": "Toss accounts response did not include an account row.",
@@ -817,6 +876,7 @@ def build_dashboard_toss_portfolio(
     enrichment_sections = _toss_enrichment_sections(resolved_client, holdings)
     sections.update(enrichment_sections)
     holdings = _apply_toss_enrichment(holdings, enrichment_sections)
+    holdings = _apply_portfolio_type_metadata(holdings, paths)
     summary = _toss_portfolio_summary(
         holdings,
         [],
@@ -851,6 +911,8 @@ def build_dashboard_toss_portfolio(
         "category_totals": _toss_category_totals(holdings),
         "sector_totals": _toss_sector_totals(holdings),
         "situation_totals": _toss_situation_totals(holdings),
+        "portfolio_type_totals": _toss_portfolio_type_totals(holdings),
+        "portfolio_type_profiles": _portfolio_type_profile_rows(),
         "enrichment": _toss_enrichment_summary(holdings, sections),
         "sections": {name: _toss_section_status(section) for name, section in sections.items()},
         "summary": summary,
@@ -2512,6 +2574,208 @@ def _apply_toss_enrichment(
         row["situation_tags"] = _toss_situation_tags(row)
         enriched.append(row)
     return enriched
+
+
+def _apply_portfolio_type_metadata(
+    holdings: Sequence[Mapping[str, Any]],
+    paths: RuntimePaths,
+) -> list[dict[str, Any]]:
+    portfolio_mapping = _load_dashboard_portfolio_mapping(paths)
+    typed: list[dict[str, Any]] = []
+    for item in holdings:
+        row = dict(item)
+        lookup = _portfolio_mapping_lookup(portfolio_mapping, row)
+        type_keys, reason, source = _portfolio_type_keys_for_holding(row, lookup)
+        primary = type_keys[0] if type_keys else "long_term"
+        primary_profile = PORTFOLIO_TYPE_PROFILES[primary]
+        row.update(
+            {
+                "portfolio_types": type_keys,
+                "portfolio_type_labels": [
+                    PORTFOLIO_TYPE_PROFILES[key]["label"] for key in type_keys
+                ],
+                "primary_portfolio_type": primary,
+                "primary_portfolio_type_label": primary_profile["label"],
+                "portfolio_type_reason": reason,
+                "portfolio_type_focus": primary_profile["focus"],
+                "portfolio_type_risk_level": primary_profile["risk_level"],
+                "portfolio_type_source": source,
+            }
+        )
+        if lookup is not None:
+            row["portfolio_mapping_status"] = "mapped" if lookup.mapped else "heuristic"
+            row["portfolio_mapping_symbol"] = lookup.mapping.ticker
+            row["portfolio_mapping_sector"] = lookup.mapping.sector
+            row["portfolio_mapping_factors"] = list(lookup.mapping.factors)
+        else:
+            row["portfolio_mapping_status"] = "heuristic"
+            row["portfolio_mapping_symbol"] = row.get("symbol")
+        typed.append(row)
+    return typed
+
+
+def _load_dashboard_portfolio_mapping(paths: RuntimePaths) -> Any | None:
+    try:
+        return load_portfolio_mapping(paths.portfolio_mapping_file)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _portfolio_mapping_lookup(portfolio_mapping: Any | None, row: Mapping[str, Any]) -> Any | None:
+    if portfolio_mapping is None:
+        return None
+    symbol = str(row.get("symbol") or "").strip().upper()
+    if not symbol:
+        return None
+    name = str(row.get("name") or "")
+    candidates = [symbol]
+    if "." in symbol:
+        candidates.append(symbol.split(".", 1)[0])
+    market_region = str(row.get("market_region") or "").upper()
+    if symbol.isdigit() and len(symbol) == 6:
+        candidates.extend([f"{symbol}.KS", f"{symbol}.KQ"])
+    if market_region == "KR" and not symbol.endswith((".KS", ".KQ")) and symbol.isdigit():
+        candidates.extend([f"{symbol}.KS", f"{symbol}.KQ"])
+    seen: set[str] = set()
+    fallback = None
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        lookup = portfolio_mapping.lookup(candidate, name=name)
+        fallback = fallback or lookup
+        if lookup.mapped:
+            return lookup
+    return fallback
+
+
+def _portfolio_type_keys_for_holding(
+    row: Mapping[str, Any],
+    lookup: Any | None,
+) -> tuple[list[str], str, str]:
+    mapped = lookup.mapping if lookup is not None else None
+    explicit = _normalize_portfolio_type_keys(getattr(mapped, "portfolio_types", ()))
+    if explicit:
+        return explicit, "portfolio_mapping.json에 명시된 운용 타입입니다.", "portfolio_mapping.json"
+
+    lookup_mapped = bool(getattr(lookup, "mapped", False))
+    factors = {
+        str(item).strip().lower()
+        for item in (getattr(mapped, "factors", ()) if lookup_mapped else ())
+        if item
+    }
+    mapped_sector = str(getattr(mapped, "sector", "") if lookup_mapped else "").strip().lower()
+    if mapped_sector == "other":
+        mapped_sector = ""
+    sector = str(mapped_sector or row.get("sector") or "").strip().lower()
+    asset_type = str(row.get("asset_type") or row.get("category") or "").strip().lower()
+    name = str(row.get("name") or "").strip().lower()
+    symbol = str(row.get("symbol") or "").strip().lower()
+    text_blob = " ".join([symbol, name, sector, asset_type, " ".join(sorted(factors))])
+    leverage = _float_or_none(getattr(mapped, "leverage_factor", None)) or 1.0
+    inferred: list[str] = []
+    reasons: list[str] = []
+
+    if leverage >= 2 or "leveraged" in factors or any(token in text_blob for token in ("2x", "3x")):
+        inferred.extend(["short_term", "swing"])
+        reasons.append("레버리지/고변동 상품은 짧은 손절과 잦은 점검이 우선입니다.")
+
+    if factors & {"speculative_growth", "quantum", "bitcoin_proxy", "crypto_equity"}:
+        inferred.extend(["short_term", "swing"])
+        reasons.append("투기적 성장 팩터는 중단기 변동성 관리가 필요합니다.")
+
+    if factors & {
+        "growth",
+        "technology",
+        "semiconductors",
+        "ai",
+        "nasdaq100",
+        "consumer_growth",
+        "ev",
+    } or sector in {"technology", "semiconductors", "consumer_growth", "quantum"}:
+        inferred.extend(["swing", "long_term"])
+        reasons.append("성장/기술 노출은 중기 추세와 장기 핵심 보유를 함께 봅니다.")
+
+    if asset_type in {"etf", "stock"} and not inferred:
+        inferred.append("long_term")
+        reasons.append("기본 보유종목은 장기 비중과 리밸런싱 관점으로 분류했습니다.")
+
+    if factors & {"dividend", "income", "yield", "covered_call"} or any(
+        token in text_blob
+        for token in ("dividend", "income", "yield", "배당", "분배", "covered call")
+    ):
+        inferred.append("dividend")
+        reasons.append("배당/인컴 성격이 있어 현금흐름과 배당락 위험을 봅니다.")
+
+    normalized = _normalize_portfolio_type_keys(inferred) or ["long_term"]
+    reason = " ".join(reasons) if reasons else "명시 매핑이 없어 보수적으로 장기 관리 대상으로 분류했습니다."
+    return normalized, reason, "portfolio_mapping.json factors · Toss holdings/stocks metadata"
+
+
+def _normalize_portfolio_type_keys(values: Sequence[Any]) -> list[str]:
+    keys: list[str] = []
+    for value in values:
+        key = PORTFOLIO_TYPE_ALIASES.get(str(value).strip().lower())
+        if key and key not in keys:
+            keys.append(key)
+    return sorted(keys, key=PORTFOLIO_TYPE_ORDER.index)
+
+
+def _portfolio_type_profile_rows() -> list[dict[str, Any]]:
+    return [
+        {"type": key, **PORTFOLIO_TYPE_PROFILES[key]}
+        for key in PORTFOLIO_TYPE_ORDER
+    ]
+
+
+def _empty_toss_portfolio_type_totals() -> list[dict[str, Any]]:
+    return [
+        {
+            **profile,
+            "type": key,
+            "count": 0,
+            "symbols": [],
+            "market_value_krw": 0.0,
+            "unrealized_pnl_krw": 0.0,
+            "weight": 0.0,
+            "warning_count": 0,
+            "source": "portfolio_mapping.json · Toss holdings/stocks metadata",
+        }
+        for key, profile in ((key, PORTFOLIO_TYPE_PROFILES[key]) for key in PORTFOLIO_TYPE_ORDER)
+    ]
+
+
+def _toss_portfolio_type_totals(
+    holdings: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    rows = {item["type"]: item for item in _empty_toss_portfolio_type_totals()}
+    for item in holdings:
+        key = str(item.get("primary_portfolio_type") or "long_term")
+        if key not in rows:
+            key = "long_term"
+        row = rows[key]
+        row["count"] += 1
+        symbol = str(item.get("symbol") or "").strip()
+        if symbol:
+            row["symbols"].append(symbol)
+        row["market_value_krw"] += _float_or_none(item.get("market_value_krw")) or 0.0
+        row["unrealized_pnl_krw"] += _float_or_none(item.get("unrealized_pnl_krw")) or 0.0
+        row["warning_count"] += int(item.get("warning_count") or 0)
+
+    total = sum(_float_or_none(row.get("market_value_krw")) or 0.0 for row in rows.values())
+    normalized = []
+    for key in PORTFOLIO_TYPE_ORDER:
+        row = dict(rows[key])
+        value = _float_or_none(row.get("market_value_krw")) or 0.0
+        row["market_value_krw"] = _round_or_none(value, 4)
+        row["unrealized_pnl_krw"] = _round_or_none(
+            _float_or_none(row.get("unrealized_pnl_krw")),
+            4,
+        )
+        row["weight"] = _round_or_none(value / total if total else 0.0, 6)
+        row["symbols"] = row["symbols"][:8]
+        normalized.append(row)
+    return normalized
 
 
 def _toss_portfolio_summary(
@@ -5130,7 +5394,16 @@ def build_analysis_portfolio_stats(paths: RuntimePaths, run_id: str | None = Non
 
     runs_dir = paths.runs_dir
     if not runs_dir.exists():
-        return {"error": "runs 디렉터리가 없습니다.", "runs": []}
+        return {
+            "error": "runs 디렉터리가 없습니다.",
+            "runs": [],
+            "diagnostics": {
+                "checked_run_count": 0,
+                "performance_run_count": 0,
+                "status_counts": {},
+                "skipped_runs": [],
+            },
+        }
 
     run_dirs = sorted(
         [d for d in runs_dir.iterdir() if d.is_dir()],
@@ -5140,20 +5413,55 @@ def build_analysis_portfolio_stats(paths: RuntimePaths, run_id: str | None = Non
 
     results = []
     equity_curve: list[dict[str, Any]] = []
+    skipped_runs: list[dict[str, Any]] = []
+    status_counts: dict[str, int] = {}
 
     for run_dir in run_dirs[:10]:
         try:
             manifest_path = run_dir / "manifest.json"
             if not manifest_path.exists():
+                skipped_runs.append(
+                    {
+                        "run_id": run_dir.name,
+                        "status": "unknown",
+                        "reason": "manifest.json not found",
+                    }
+                )
                 continue
             manifest = read_json(manifest_path) or {}
             rid = manifest.get("run_id", run_dir.name)
+            status = str(manifest.get("status") or "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
 
             trades_path = run_dir / "trades.json"
             if not trades_path.exists():
+                skipped_runs.append(
+                    {
+                        "run_id": rid,
+                        "command": manifest.get("command", "-"),
+                        "status": status,
+                        "failure_code": manifest.get("failure_code"),
+                        "error": manifest.get("error"),
+                        "started_at": manifest.get("started_at"),
+                        "finished_at": manifest.get("finished_at"),
+                        "reason": "trades.json not found",
+                    }
+                )
                 continue
             trades = read_json(trades_path) or []
             if not isinstance(trades, list):
+                skipped_runs.append(
+                    {
+                        "run_id": rid,
+                        "command": manifest.get("command", "-"),
+                        "status": status,
+                        "failure_code": manifest.get("failure_code"),
+                        "error": manifest.get("error"),
+                        "started_at": manifest.get("started_at"),
+                        "finished_at": manifest.get("finished_at"),
+                        "reason": "trades.json is not a list",
+                    }
+                )
                 continue
 
             capital_history = manifest.get("capital_history", [])
@@ -5162,6 +5470,18 @@ def build_analysis_portfolio_stats(paths: RuntimePaths, run_id: str | None = Non
 
             metrics = calc_metrics(trades, final_capital, capital_history, min_trades=1)
             if metrics is None:
+                skipped_runs.append(
+                    {
+                        "run_id": rid,
+                        "command": manifest.get("command", "-"),
+                        "status": status,
+                        "failure_code": manifest.get("failure_code"),
+                        "error": manifest.get("error"),
+                        "started_at": manifest.get("started_at"),
+                        "finished_at": manifest.get("finished_at"),
+                        "reason": "metrics could not be calculated",
+                    }
+                )
                 continue
 
             run_result: dict[str, Any] = {
@@ -5195,6 +5515,13 @@ def build_analysis_portfolio_stats(paths: RuntimePaths, run_id: str | None = Non
                     equity_curve = equity_curve_records(trades, capital_history)[:500]
 
         except Exception:
+            skipped_runs.append(
+                {
+                    "run_id": run_dir.name,
+                    "status": "unknown",
+                    "reason": "failed to inspect run",
+                }
+            )
             continue
 
     # Aggregate across runs
@@ -5212,11 +5539,23 @@ def build_analysis_portfolio_stats(paths: RuntimePaths, run_id: str | None = Non
         "avg_total_return": _avg("total_return"),
         "avg_annualized_return": _avg("annualized_return"),
     }
+    diagnostics = {
+        "checked_run_count": len(run_dirs[:10]),
+        "performance_run_count": len(results),
+        "skipped_run_count": len(skipped_runs),
+        "status_counts": status_counts,
+        "skipped_runs": skipped_runs[:10],
+    }
+    if not results:
+        diagnostics["empty_reason"] = (
+            "최근 실행에서 trades.json을 찾지 못해 포트폴리오 성과를 계산할 수 없습니다."
+        )
 
     return {
         "aggregate": aggregate,
         "runs": results,
         "equity_curve": equity_curve,
+        "diagnostics": diagnostics,
     }
 
 

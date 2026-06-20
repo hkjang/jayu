@@ -605,12 +605,16 @@ def test_dashboard_toss_portfolio_auto_selects_first_account_and_holdings(tmp_pa
     assert report["holdings"][0]["sector"] == "Technology"
     assert report["holdings"][0]["warning_count"] == 1
     assert "TOSS_WARNING" in report["holdings"][0]["situation_tags"]
+    assert report["holdings"][0]["primary_portfolio_type"] in {"swing", "long_term"}
+    assert report["holdings"][0]["primary_portfolio_type_label"] in {"중타", "장타"}
+    assert "portfolio_mapping.json" in report["holdings"][0]["portfolio_type_source"]
     us_holding = next(item for item in report["holdings"] if item["symbol"] == "AAPL")
     assert us_holding["market_region"] == "US"
     assert us_holding["market_value_krw"] == 336000
     assert us_holding["fx_rate_to_krw"] == 1400
     assert us_holding["day_change_pct"] == 0.04
     assert "UP_3PCT_TODAY" in us_holding["situation_tags"]
+    assert {"중타", "장타"}.issubset(set(us_holding["portfolio_type_labels"]))
     assert report["fx_rates"][1]["base_currency"] == "USD"
     assert report["fx_rates"][1]["rate"] == 1400
     assert {item["region"]: item["count"] for item in report["region_totals"]} == {"KR": 1, "US": 1}
@@ -622,6 +626,11 @@ def test_dashboard_toss_portfolio_auto_selects_first_account_and_holdings(tmp_pa
     assert {item["sector"]: item["count"] for item in report["sector_totals"]} == {
         "TECHNOLOGY": 2
     }
+    portfolio_types = {item["label"]: item for item in report["portfolio_type_totals"]}
+    assert set(portfolio_types) == {"단타", "중타", "장타", "배당"}
+    assert portfolio_types["중타"]["count"] == 2
+    assert portfolio_types["중타"]["market_value_krw"] == 1036000
+    assert portfolio_types["중타"]["source"] == "portfolio_mapping.json · Toss holdings/stocks metadata"
     assert report["enrichment"]["stocks_covered"] == 2
     assert report["enrichment"]["prices_covered"] == 2
     assert report["enrichment"]["day_change_covered"] == 2
@@ -687,6 +696,7 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert (static_dir / "app.js").exists()
     content = (static_dir / "app.js").read_text(encoding="utf-8")
     html = (static_dir / "index.html").read_text(encoding="utf-8")
+    css = (static_dir / "styles.css").read_text(encoding="utf-8")
     assert "Toss Account" in html
     assert "Toss Market" in html
     assert "Trader Lens" in html
@@ -697,10 +707,27 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "renderTossRegionTabs" in content
     assert "renderExposureDonut" in content
     assert "renderSituationTags" in content
+    assert "renderPortfolioTypeCards" in content
+    assert "포트폴리오 타입별 요약" in content
+    assert "투자 타입" in content
+    assert "portfolio-type-grid" in css
+    assert "portfolio-type-cell" in css
     assert "Category split" in content
     assert "Sector exposure" in content
+    assert "renderDataSourceNote" in content
+    assert "renderSourceLabel" in content
+    assert "renderSourceCaption" in content
+    assert "data-source-inline" in css
+    assert "data-source-caption" in css
+    assert "Data sources:" in content
+    assert "Toss warnings endpoint" in content
+    assert "TradingView scanner popup-technicals" in content
+    assert "Yahoo Finance OHLCV · derived RSI" in content
+    assert "Toss /api/v1/stocks/{symbol}/warnings" in content
+    assert "runs/*/manifest.json" in content
     assert "TradingView 상세 스냅샷" in content
     assert "초단기 상세 진단" in content
+    assert "성과 산출 가능한 실행 없음" in content
     assert "NAV 프리미엄" in content
     assert "renderTraderLens" in content
     assert "data-toss-account" in content
@@ -960,6 +987,34 @@ def test_build_dashboard_analysis_bad_ticker(tmp_path, monkeypatch):
 
     result = build_dashboard_analysis(paths, ticker="BADTICKER", macro_series="FEDFUNDS", period="1y")
     assert "error" in result["stock"]
+
+
+def test_build_analysis_portfolio_stats_explains_failed_runs(tmp_path):
+    from jayu.dashboard import build_analysis_portfolio_stats
+
+    paths = _paths(tmp_path)
+    run_dir = paths.runs_dir / "run-failed"
+    run_dir.mkdir()
+    atomic_write_json(
+        run_dir / "manifest.json",
+        {
+            "run_id": "run-failed",
+            "command": "simulate",
+            "status": "failed",
+            "failure_code": "SURVIVORSHIP_GATE_FAILED",
+            "error": "research requires universe.policy=strict",
+            "started_at": "2026-06-20T00:00:00+00:00",
+        },
+    )
+
+    result = build_analysis_portfolio_stats(paths)
+
+    assert result["aggregate"]["run_count"] == 0
+    assert result["diagnostics"]["checked_run_count"] == 1
+    assert result["diagnostics"]["performance_run_count"] == 0
+    assert result["diagnostics"]["status_counts"]["failed"] == 1
+    assert result["diagnostics"]["skipped_runs"][0]["failure_code"] == "SURVIVORSHIP_GATE_FAILED"
+    assert "trades.json" in result["diagnostics"]["empty_reason"]
 
 
 def test_tradingview_technical_summary_maps_scores(monkeypatch):

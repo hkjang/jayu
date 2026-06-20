@@ -30,6 +30,7 @@ class TickerMapping:
     underlying_group: str | None = None
     sector: str = "other"
     factors: tuple[str, ...] = ("unmapped",)
+    portfolio_types: tuple[str, ...] = ()
     currency: str | None = None
 
     @classmethod
@@ -37,12 +38,18 @@ class TickerMapping:
         factors = raw.get("factors", ("unmapped",))
         if isinstance(factors, str):
             factors = (factors,)
+        portfolio_types = raw.get("portfolio_types", raw.get("investment_types", ()))
+        if isinstance(portfolio_types, str):
+            portfolio_types = (portfolio_types,)
+        elif not isinstance(portfolio_types, Sequence):
+            portfolio_types = ()
         return cls(
             ticker=ticker.upper(),
             leverage_factor=float(raw.get("leverage_factor", 1.0)),
             underlying_group=str(raw.get("underlying_group") or ticker.upper()),
             sector=str(raw.get("sector", "other")),
             factors=tuple(str(factor) for factor in factors),
+            portfolio_types=tuple(str(item) for item in portfolio_types if str(item).strip()),
             currency=str(raw["currency"]).upper() if raw.get("currency") else None,
         )
 

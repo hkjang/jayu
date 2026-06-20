@@ -7,6 +7,7 @@
       "underlying_group": "samsung_electronics",
       "sector": "semiconductors",
       "factors": ["semiconductors", "technology", "korea"],
+      "portfolio_types": ["long_term", "dividend"],
       "currency": "KRW"
     },
     "DFEN": {
@@ -14,6 +15,7 @@
       "underlying_group": "aerospace_defense",
       "sector": "industrials",
       "factors": ["aerospace_defense", "industrials", "leveraged"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "FAS": {
@@ -21,6 +23,7 @@
       "underlying_group": "financials",
       "sector": "financials",
       "factors": ["financials", "leveraged"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "IONQ": {
@@ -28,6 +31,7 @@
       "underlying_group": "quantum",
       "sector": "quantum",
       "factors": ["quantum", "technology", "speculative_growth"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "MSTU": {
@@ -35,6 +39,7 @@
       "underlying_group": "bitcoin_proxy",
       "sector": "crypto_equity",
       "factors": ["bitcoin_proxy", "speculative_growth", "leveraged"],
+      "portfolio_types": ["short_term"],
       "currency": "USD"
     },
     "NVDA": {
@@ -42,6 +47,7 @@
       "underlying_group": "nvidia",
       "sector": "semiconductors",
       "factors": ["semiconductors", "ai", "technology", "growth"],
+      "portfolio_types": ["swing", "long_term"],
       "currency": "USD"
     },
     "NVDL": {
@@ -49,6 +55,7 @@
       "underlying_group": "nvidia",
       "sector": "semiconductors",
       "factors": ["semiconductors", "ai", "technology", "growth", "leveraged"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "NVDU": {
@@ -56,6 +63,7 @@
       "underlying_group": "nvidia",
       "sector": "semiconductors",
       "factors": ["semiconductors", "ai", "technology", "growth", "leveraged"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "NVDW": {
@@ -63,6 +71,7 @@
       "underlying_group": "nvidia",
       "sector": "semiconductors",
       "factors": ["semiconductors", "ai", "technology", "growth"],
+      "portfolio_types": ["swing", "long_term"],
       "currency": "USD"
     },
     "NVDX": {
@@ -70,6 +79,7 @@
       "underlying_group": "nvidia",
       "sector": "semiconductors",
       "factors": ["semiconductors", "ai", "technology", "growth", "leveraged"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "QBTS": {
@@ -77,6 +87,7 @@
       "underlying_group": "quantum",
       "sector": "quantum",
       "factors": ["quantum", "technology", "speculative_growth"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "QQQ": {
@@ -84,6 +95,7 @@
       "underlying_group": "nasdaq100",
       "sector": "technology",
       "factors": ["nasdaq100", "technology", "growth"],
+      "portfolio_types": ["long_term", "swing"],
       "currency": "USD"
     },
     "RGTI": {
@@ -91,6 +103,7 @@
       "underlying_group": "quantum",
       "sector": "quantum",
       "factors": ["quantum", "technology", "speculative_growth"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "SOXL": {
@@ -98,6 +111,7 @@
       "underlying_group": "semiconductors",
       "sector": "semiconductors",
       "factors": ["semiconductors", "technology", "growth", "leveraged"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "SOXX": {
@@ -105,6 +119,7 @@
       "underlying_group": "semiconductors",
       "sector": "semiconductors",
       "factors": ["semiconductors", "technology", "growth"],
+      "portfolio_types": ["long_term", "swing"],
       "currency": "USD"
     },
     "TQQQ": {
@@ -112,6 +127,7 @@
       "underlying_group": "nasdaq100",
       "sector": "technology",
       "factors": ["nasdaq100", "technology", "growth", "leveraged"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     },
     "TSLA": {
@@ -119,6 +135,7 @@
       "underlying_group": "tesla",
       "sector": "consumer_growth",
       "factors": ["ev", "consumer_growth", "growth"],
+      "portfolio_types": ["swing", "long_term"],
       "currency": "USD"
     },
     "TSLL": {
@@ -126,6 +143,7 @@
       "underlying_group": "tesla",
       "sector": "consumer_growth",
       "factors": ["ev", "consumer_growth", "growth", "leveraged"],
+      "portfolio_types": ["short_term", "swing"],
       "currency": "USD"
     }
   }

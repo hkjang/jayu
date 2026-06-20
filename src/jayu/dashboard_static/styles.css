@@ -508,6 +508,23 @@ main {
   line-height: 1.35;
 }
 
+.data-source-inline,
+.data-source-caption {
+  display: block;
+  margin-top: 6px;
+  color: #8a95a4;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.data-source-caption {
+  margin: 8px 0 0;
+}
+
+.panel > .data-source-caption {
+  padding: 0 13px 11px;
+}
+
 .metric-bar {
   height: 5px;
   margin-top: 10px;
@@ -949,6 +966,88 @@ tbody tr:last-child td {
   font-weight: 700;
 }
 
+.portfolio-type-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.portfolio-type-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px;
+  background: #fafbfc;
+  border: 1px solid #dfe5ec;
+  border-radius: 7px;
+}
+
+.portfolio-type-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.portfolio-type-card-head strong {
+  font-size: 15px;
+}
+
+.portfolio-type-card p,
+.portfolio-type-card small,
+.portfolio-type-symbols,
+.portfolio-type-cell small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.portfolio-type-card p {
+  margin: 0;
+}
+
+.portfolio-type-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.portfolio-type-metrics span {
+  min-width: 0;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #e4e9ef;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.portfolio-type-metrics b {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.portfolio-type-card ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 16px;
+  color: #475467;
+  font-size: 11px;
+}
+
+.portfolio-type-symbols {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.portfolio-type-cell small {
+  display: block;
+  margin-top: 3px;
+}
+
 .provider-chip {
   display: inline-flex;
   min-width: 58px;
@@ -1222,6 +1321,10 @@ tbody tr:last-child td {
 @media (max-width: 1280px) {
   .metric-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .portfolio-type-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .context-meta > div:nth-child(2) {
@@ -1987,6 +2090,14 @@ tbody tr:last-child td {
 }
 
 @media (max-width: 600px) {
+  .portfolio-type-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .portfolio-type-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .calendar-event {
     grid-template-columns: 30px 1fr;
     grid-template-rows: auto auto;

@@ -314,6 +314,142 @@ function pageTitle(page) {
   }[page];
 }
 
+const PAGE_DATA_SOURCES = {
+  overview: ["run manifest", "safety_verdict.json", "health report", "today_signals sidecar"],
+  "data-quality": ["data_sources.json", "provider_disagreement_report.json", "OHLCV provider cache"],
+  risk: ["risk report", "portfolio_mapping.json", "portfolio.csv", "Toss holdings snapshot"],
+  signals: ["today_signals.json", "signal sidecar", "data quality gate", "risk gate"],
+  "trader-lens": ["signals artifact", "risk gate", "provider trust map", "safety verdict"],
+  promotion: ["promotion state", "shadow run history", "health report", "signal history"],
+  settings: ["config.json", ".env / environment", "provider policy", "survivorship audit"],
+  "toss-account": ["Toss Open API GET", "accounts", "holdings", "exchange-rate", "portfolio_mapping.json"],
+  toss: ["Toss Open API GET", "prices", "stocks", "warnings", "market calendar"],
+  "api-monitoring": ["provider audit", "events.jsonl", "cache directories", "latest run artifacts"],
+  analysis: ["Yahoo Finance", "FRED", "TradingView scanner", "Toss Open API", "run artifacts"],
+};
+
+const METRIC_DATA_SOURCE_BY_PAGE = {
+  overview: {
+    "데이터 검증": "data_sources.json · provider_disagreement_report.json",
+    "리스크 게이트": "risk report · portfolio.csv",
+    "생존편향 정책": "survivorship audit",
+    "Shadow 승격": "promotion state · shadow run history",
+    "오늘의 신호": "today_signals.json · signal sidecar",
+    Health: "health report",
+    __default: "latest run manifest",
+  },
+  "data-quality": {
+    "검증 성공률": "data_sources.json",
+    "Provider 수": "provider audit config · data_sources.json",
+    불일치: "provider_disagreement_report.json",
+    "차단 ticker": "provider_disagreement_report.json",
+    "Provider 실패": "data_sources.json",
+    상태: "data quality summary",
+    __default: "data quality artifacts",
+  },
+  risk: {
+    "승인 신호": "risk report",
+    "차단 신호": "risk report",
+    대기: "risk report",
+    "실패 게이트": "risk gate details",
+    "최상위 사유": "risk report reason counts",
+    "판정 상태": "risk report summary",
+    __default: "risk report",
+  },
+  signals: {
+    "출판 상태": "signal sidecar",
+    "검토 가능 매수": "today_signals.json · risk gate",
+    "차단 매수": "today_signals.json · risk gate",
+    대기: "today_signals.json",
+    "데이터 검증": "today_signals.json · data quality gate",
+    "신호 hash": "signal sidecar",
+    __default: "today_signals.json",
+  },
+  "trader-lens": {
+    "Avg reward/risk": "signal ladder artifact",
+    "Signals reviewed": "today_signals.json",
+    "Eligible / blocked": "risk gate",
+    "Provider issues": "provider trust map",
+    "Risk issues": "risk concentration",
+    Controls: "dashboard policy",
+    __default: "run-local review artifacts",
+  },
+  promotion: {
+    "Shadow 일수": "shadow run history",
+    "완료 신호": "signal history",
+    "데이터 성공률": "promotion metrics",
+    불일치율: "provider disagreement metrics",
+    "리스크 통과율": "risk gate history",
+    "신호 안정성": "signal history",
+    __default: "promotion state",
+  },
+  settings: {
+    "차단 규칙": "settings validation rules",
+    경고: "settings validation rules",
+    "Provider 점검": "provider policy audit",
+    생존편향: "survivorship audit",
+    승격: "promotion audit",
+    비밀값: ".env / environment presence check",
+    __default: "config.json · environment",
+  },
+  "toss-account": {
+    계좌: "Toss Open API accounts GET",
+    "총 평가금액(KRW)": "Toss holdings GET · exchange-rate GET",
+    "평가손익(KRW)": "Toss holdings GET · exchange-rate GET",
+    "USD/KRW": "Toss exchange-rate GET",
+    "조회 실패": "Toss account section status",
+    __default: "Toss holdings GET",
+  },
+  toss: {
+    "API 키": "environment variable presence check",
+    Secret: "environment variable presence check",
+    계좌: "environment / selected Toss account",
+    "GET 엔드포인트": "TOSS_GET_ENDPOINTS registry",
+    "계좌 필요 API": "TOSS_GET_ENDPOINTS registry",
+    "POST 요청": "dashboard read-only policy",
+    "조회 종목": "Toss symbol normalization",
+    "성공 섹션": "Toss market snapshot GET results",
+    "실패 섹션": "Toss market snapshot GET results",
+    "계좌 섹션": "Toss account-scoped GET results",
+    "Read-only": "dashboard read-only policy",
+    "다음 행동": "Toss snapshot summary",
+    __default: "Toss Open API GET",
+  },
+  "api-monitoring": {
+    "전체 Provider": "provider registry",
+    "자격증명 설정": "environment / config presence check",
+    "활성 Provider": "config.json provider settings",
+    실패: "latest run API logs",
+    불일치: "provider disagreement report",
+    "알림 실패": "notification logs",
+    __default: "API monitoring artifacts",
+  },
+};
+
+function renderSourceLabel(source, className = "data-source-inline") {
+  const text = Array.isArray(source) ? source.filter(Boolean).join(" · ") : String(source || "").trim();
+  if (!text) return "";
+  return `<span class="${className}">출처: ${escapeHtml(text)}</span>`;
+}
+
+function renderSourceCaption(source) {
+  return renderSourceLabel(source, "data-source-caption");
+}
+
+function metricSourceFor(label) {
+  const sources = METRIC_DATA_SOURCE_BY_PAGE[state.page] || {};
+  return sources[label] || sources.__default || "";
+}
+
+function renderDataSourceNote(page, extra = []) {
+  const seen = new Set();
+  const sources = [...(PAGE_DATA_SOURCES[page] || []), ...extra]
+    .map((item) => String(item || "").trim())
+    .filter((item) => item && !seen.has(item) && seen.add(item));
+  if (!sources.length) return "";
+  return `<p class="metric-detail data-source-note" style="margin:6px 0 14px;color:var(--muted);font-size:11px;line-height:1.4">데이터 출처 · Data sources: ${sources.map(escapeHtml).join(" · ")}</p>`;
+}
+
 function render() {
   els.root.hidden = false;
   if (state.page === "data-quality") renderDataQuality();
@@ -348,11 +484,13 @@ function renderOverview() {
       </div>
       ${statusBadge(run.execution_status, "실행")} 
     </div>
+    ${renderDataSourceNote("overview")}
     <section class="decision-grid" aria-label="오늘 결론">
       <article class="decision-card status-${statusClass(decision.overall)}" aria-labelledby="status-title">
         <div class="decision-eyebrow">${statusBadge(decision.overall)} <span>${escapeHtml(String(run.mode || "unknown").toUpperCase())}</span></div>
         <h2 id="status-title">${escapeHtml(decisionHeadline(decision.overall))}</h2>
         <p>${escapeHtml(decision.headline)}</p>
+        ${renderSourceLabel("safety_verdict.json · latest run manifest")}
         <div class="decision-meta">
           <span>실행 ${escapeHtml(STATUS_LABELS[run.execution_status] || run.execution_status || "미검증")}</span>
           <span>운영 ${escapeHtml(STATUS_LABELS[run.safety_decision] || run.safety_decision || "미검증")}</span>
@@ -385,6 +523,7 @@ function renderOverview() {
         </div>
         <div class="panel-body">
           ${renderReasons(reasons, actions)}
+          ${renderSourceCaption("safety_verdict.json · decision reasons")}
         </div>
       </section>
       <section class="panel">
@@ -399,6 +538,7 @@ function renderOverview() {
               }>${escapeHtml(action.label)}</button>`
             ).join("") : '<span class="muted">추가 조치가 없습니다.</span>'}
           </div>
+          ${renderSourceCaption("recommended_actions from safety verdict")}
           <p id="command-feedback" class="metric-detail" hidden></p>
         </div>
       </section>
@@ -409,6 +549,7 @@ function renderOverview() {
         <button class="button button-secondary" type="button" data-go="risk">리스크 상세</button>
       </div>
       ${renderSignalTable(signals.rows)}
+      ${renderSourceCaption("today_signals.json · risk gate status")}
     </section>
   `;
 }
@@ -424,6 +565,7 @@ function renderDataQuality() {
       </div>
       ${statusBadge(summary.status)}
     </div>
+    ${renderDataSourceNote("data-quality")}
     <section class="status-banner status-${statusClass(summary.status)}">
       <div>${statusBadge(summary.status)}</div>
       <div>
@@ -449,10 +591,12 @@ function renderDataQuality() {
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header"><div><h2>Provider 수집 결과</h2><p>행 수, 기간, hash와 실패 원인</p></div></div>
       ${renderSourcesTable(data.sources)}
+      ${renderSourceCaption("data_sources.json")}
     </section>
     <section class="panel">
       <div class="panel-header"><div><h2>불일치 상세</h2><p>날짜와 provider별 원본값을 함께 표시합니다.</p></div></div>
       ${renderMismatchTable(data.mismatches)}
+      ${renderSourceCaption("provider_disagreement_report.json")}
     </section>
   `;
 }
@@ -470,6 +614,7 @@ function renderRisk() {
       </div>
       ${statusBadge(summary.status)}
     </div>
+    ${renderDataSourceNote("risk")}
     <section class="status-banner status-${statusClass(summary.status)}">
       <div>${statusBadge(summary.status)}</div>
       <div>
@@ -489,10 +634,12 @@ function renderRisk() {
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header"><div><h2>게이트별 판정</h2><p>수치는 0으로 보정하지 않고 미계산 상태를 유지합니다.</p></div></div>
       ${renderRiskChecks(checks)}
+      ${renderSourceCaption("risk report gate details")}
     </section>
     <section class="panel">
       <div class="panel-header"><div><h2>종목별 판정</h2><p>요청 비중과 승인 비중, 차단 사유</p></div></div>
       ${renderRiskSignals(data.signals)}
+      ${renderSourceCaption("risk report signal rows · portfolio.csv")}
     </section>
   `;
 }
@@ -509,6 +656,7 @@ function renderSignals() {
       </div>
       ${statusBadge(summary.status)}
     </div>
+    ${renderDataSourceNote("signals")}
     <section class="status-banner status-${statusClass(summary.status)}">
       <div>${statusBadge(summary.status)}</div>
       <div>
@@ -528,6 +676,7 @@ function renderSignals() {
     <section class="panel">
       <div class="panel-header"><div><h2>신호 목록</h2><p>진입가, 손절가, 목표가, 유동성, reason code</p></div></div>
       ${renderSignalDetailTable(data.rows)}
+      ${renderSourceCaption("today_signals.json · signal publication sidecar")}
     </section>
   `;
 }
@@ -544,6 +693,7 @@ function renderTraderLens() {
       </div>
       ${statusBadge(summary.status)}
     </div>
+    ${renderDataSourceNote("trader-lens")}
     <section class="status-banner status-${statusClass(summary.status)}">
       <div>${statusBadge(summary.status)}</div>
       <div>
@@ -567,12 +717,16 @@ function renderTraderLens() {
           <button class="button button-secondary" type="button" data-go="signals">Open Signals</button>
         </div>
         ${renderTraderSignalLadder(data.signal_ladder || [])}
+        ${renderSourceCaption("today_signals.json · risk gate · data verification flags")}
       </section>
       <section class="panel">
         <div class="panel-header">
           <div><h2>Top decision notes</h2><p>The most important blockers from the run verdict.</p></div>
         </div>
-        <div class="panel-body">${renderTraderDecisionNotes(notes)}</div>
+        <div class="panel-body">
+          ${renderTraderDecisionNotes(notes)}
+          ${renderSourceCaption("safety_verdict.json · decision notes")}
+        </div>
       </section>
     </div>
     <div class="section-grid">
@@ -582,13 +736,17 @@ function renderTraderLens() {
           <button class="button button-secondary" type="button" data-go="data-quality">Data Quality</button>
         </div>
         ${renderProviderTrustMap(data.provider_trust || [])}
+        ${renderSourceCaption("data_sources.json · provider_disagreement_report.json")}
       </section>
       <section class="panel">
         <div class="panel-header">
           <div><h2>Risk concentration</h2><p>Blocked reason codes grouped by count and excess.</p></div>
           <button class="button button-secondary" type="button" data-go="risk">Risk Gate</button>
         </div>
-        <div class="panel-body">${renderRiskConcentration(data.risk_concentration || [])}</div>
+        <div class="panel-body">
+          ${renderRiskConcentration(data.risk_concentration || [])}
+          ${renderSourceCaption("risk report reason counts")}
+        </div>
       </section>
     </div>
   `;
@@ -606,6 +764,7 @@ function renderPromotion() {
       </div>
       ${statusBadge(summary.status)}
     </div>
+    ${renderDataSourceNote("promotion")}
     <section class="status-banner status-${statusClass(summary.status)}">
       <div>${statusBadge(summary.status)}</div>
       <div>
@@ -626,10 +785,12 @@ function renderPromotion() {
       <section class="panel">
         <div class="panel-header"><div><h2>승격 조건</h2><p>현재값과 필수 기준 비교</p></div></div>
         ${renderCriteriaTable(data.criteria)}
+        ${renderSourceCaption("promotion state · promotion policy")}
       </section>
       <section class="panel">
         <div class="panel-header"><div><h2>Shadow 이력</h2><p>최근 일자별 근거</p></div></div>
         ${renderPromotionHistory(data.history)}
+        ${renderSourceCaption("shadow run history artifacts")}
       </section>
     </div>
   `;
@@ -646,6 +807,7 @@ function renderSettingsValidation() {
       </div>
       ${statusBadge(summary.status)}
     </div>
+    ${renderDataSourceNote("settings")}
     <section class="status-banner status-${statusClass(summary.status)}">
       <div>${statusBadge(summary.status)}</div>
       <div>
@@ -665,6 +827,7 @@ function renderSettingsValidation() {
     <section class="panel">
       <div class="panel-header"><div><h2>검증 규칙</h2><p>현재값, 필수 기준, 영향</p></div></div>
       ${renderSettingsRules(data.rules)}
+      ${renderSourceCaption("config.json · environment · policy audits")}
     </section>
   `;
 }
@@ -691,56 +854,65 @@ function renderTossAccountDashboard() {
       ${renderTossRegionTabs(data.region_totals || [])}
       <section class="panel" style="margin-bottom:14px">
         <div class="panel-header">
+          <div><h2>포트폴리오 타입별 요약</h2><p>보유종목을 단타, 중타, 장타, 배당 관리 관점으로 나눠 확인합니다.</p></div>
+        </div>
+        <div class="panel-body">${renderPortfolioTypeCards(data.portfolio_type_totals || [])}</div>
+      </section>
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header">
           <div><h2>Account selector</h2><p>버튼을 누르지 않아도 첫 계좌가 자동으로 선택됩니다. 다른 계좌를 고르면 즉시 다시 조회합니다.</p></div>
           ${statusBadge(data.read_only ? "success" : "blocked", "read only")}
         </div>
         ${renderTossAccountCards(accounts, selected)}
+        ${renderSourceCaption("Toss Open API accounts GET")}
       </section>
       <div class="visual-grid">
         <section class="panel">
           <div class="panel-header"><div><h2>Market split</h2><p>KRW 환산 기준 한국/미국/기타 비중입니다.</p></div></div>
-          <div class="panel-body">${renderExposureDonut(data.region_totals || [], "region")}</div>
+          <div class="panel-body">${renderExposureDonut(data.region_totals || [], "region")}${renderSourceCaption("Toss holdings GET · KRW conversion")}</div>
         </section>
         <section class="panel">
           <div class="panel-header"><div><h2>Currency split</h2><p>USD와 KRW가 섞여도 KRW 환산 기준으로 비교합니다.</p></div></div>
-          <div class="panel-body">${renderExposureDonut(data.currency_totals || [], "currency")}</div>
+          <div class="panel-body">${renderExposureDonut(data.currency_totals || [], "currency")}${renderSourceCaption("Toss holdings GET · currency fields")}</div>
         </section>
         <section class="panel">
           <div class="panel-header"><div><h2>FX rates</h2><p>환산에 사용한 환율과 유효 시각입니다.</p></div></div>
-          <div class="panel-body">${renderFxRateCards(data.fx_rates || [])}</div>
+          <div class="panel-body">${renderFxRateCards(data.fx_rates || [])}${renderSourceCaption("Toss exchange-rate GET")}</div>
         </section>
       </div>
       <div class="visual-grid">
         <section class="panel">
           <div class="panel-header"><div><h2>Category split</h2><p>주식, ETF, 레버리지 ETF 같은 종목 유형별 노출입니다.</p></div></div>
-          <div class="panel-body">${renderExposureDonut(data.category_totals || [], "category")}</div>
+          <div class="panel-body">${renderExposureDonut(data.category_totals || [], "category")}${renderSourceCaption("portfolio_mapping.json · holdings enrichment")}</div>
         </section>
         <section class="panel">
           <div class="panel-header"><div><h2>Sector exposure</h2><p>종목 메타데이터에서 읽은 섹터 기준 상위 노출입니다.</p></div></div>
-          <div class="panel-body">${renderExposureDonut(data.sector_totals || [], "sector")}</div>
+          <div class="panel-body">${renderExposureDonut(data.sector_totals || [], "sector")}${renderSourceCaption("portfolio_mapping.json sector metadata")}</div>
         </section>
         <section class="panel">
           <div class="panel-header"><div><h2>Situation tags</h2><p>집중도, 손익, 당일 급등락, 경고 상태를 태그로 묶었습니다.</p></div></div>
-          <div class="panel-body">${renderSituationTags(data.situation_totals || [])}</div>
+          <div class="panel-body">${renderSituationTags(data.situation_totals || [])}${renderSourceCaption("Toss holdings GET · warnings enrichment · price changes")}</div>
         </section>
       </div>
       <div class="section-grid">
         <section class="panel">
           <div class="panel-header"><div><h2>Holding allocation</h2><p>${activeRegionLabel} 탭의 KRW 환산 평가금액 기준 보유 비중입니다.</p></div></div>
-          <div class="panel-body">${renderHoldingAllocation(allocation)}</div>
+          <div class="panel-body">${renderHoldingAllocation(allocation)}${renderSourceCaption("Toss holdings GET · selected market filter")}</div>
         </section>
         <section class="panel">
           <div class="panel-header"><div><h2>P/L contributors</h2><p>KRW 환산 평가손익 기여도가 큰 종목입니다.</p></div></div>
-          <div class="panel-body">${renderPnlContributors(visibleHoldings)}</div>
+          <div class="panel-body">${renderPnlContributors(visibleHoldings)}${renderSourceCaption("Toss holdings GET · unrealized P/L fields")}</div>
         </section>
       </div>
       <section class="panel">
         <div class="panel-header"><div><h2>Holdings</h2><p>수량, 평균단가, 현재가, 평가금액, 손익률을 한 표에서 확인합니다.</p></div></div>
         ${renderTossHoldingsTable(visibleHoldings)}
+        ${renderSourceCaption("Toss Open API holdings GET · exchange-rate GET")}
       </section>
       <section class="panel" style="margin-top:14px">
         <div class="panel-header"><div><h2>Account GET status</h2><p>계좌 화면에서 자동 호출한 GET endpoint 결과입니다.</p></div></div>
         ${renderTossSectionTable(sections)}
+        ${renderSourceCaption("Toss account endpoint status from latest dashboard fetch")}
       </section>
     `;
   }
@@ -753,7 +925,8 @@ function renderTossAccountDashboard() {
       </div>
       ${statusBadge(summary.status || data.status)}
     </div>
-    
+    ${renderDataSourceNote("toss-account", ["Toss warnings endpoint", "today_signals broker readiness"])}
+
     <div class="segmented-tabs" role="tablist" style="margin-bottom:14px">
       <button class="${state.tossSubTab === 'overview' ? 'is-active' : ''}" type="button" data-toss-subtab="overview">
         <span>자산 요약 (Asset Summary)</span>
@@ -916,6 +1089,7 @@ function renderReconciliation(reconciliation) {
         </div>
       </div>
       ${tableHtml}
+      ${renderSourceCaption("portfolio.csv · Toss holdings GET")}
     </section>
     ${unmappedHtml}
   `;
@@ -941,6 +1115,7 @@ function renderOrderPlan(orderPlanData) {
           <div class="metric-card" style="border:none;box-shadow:none;padding:0">
             <span class="value" style="font-size:24px">${krOpen ? "개장 중 (OPEN)" : "휴장/장마감 (CLOSED)"}</span>
             <span class="status ${krOpen ? "success" : "not_evaluated"}" style="margin-top:5px;display:inline-block">${krOpen ? "실시간 거래 가능" : "주문 보류"}</span>
+            ${renderSourceLabel("Toss market-calendar KR GET")}
           </div>
         </div>
       </div>
@@ -950,6 +1125,7 @@ function renderOrderPlan(orderPlanData) {
           <div class="metric-card" style="border:none;box-shadow:none;padding:0">
             <span class="value" style="font-size:24px">${usOpen ? "개장 중 (OPEN)" : "휴장/장마감 (CLOSED)"}</span>
             <span class="status ${usOpen ? "success" : "not_evaluated"}" style="margin-top:5px;display:inline-block">${usOpen ? "실시간 거래 가능" : "주문 보류"}</span>
+            ${renderSourceLabel("Toss market-calendar US GET")}
           </div>
         </div>
       </div>
@@ -959,6 +1135,7 @@ function renderOrderPlan(orderPlanData) {
           <div class="metric-card" style="border:none;box-shadow:none;padding:0">
             <span class="value" style="font-size:24px">${orders.length} 건</span>
             <span class="status ${orders.length ? "success" : "not_evaluated"}" style="margin-top:5px;display:inline-block">${orders.length ? "수동 매수 slip 대기" : "주문 대상 없음"}</span>
+            ${renderSourceLabel("order_plan.json")}
           </div>
         </div>
       </div>
@@ -1077,6 +1254,7 @@ function renderOrderPlan(orderPlanData) {
           ${statusBadge(orders.length ? "success" : "not_evaluated")}
         </div>
         ${slipsHtml}
+        ${renderSourceCaption("order_plan.json · today_signals.json")}
       </section>
       
       <section class="panel">
@@ -1086,6 +1264,7 @@ function renderOrderPlan(orderPlanData) {
         </div>
         <div class="panel-body">
           <pre class="code" style="max-height: 250px; overflow-y: auto; font-size: 11px; white-space: pre-wrap; margin:0">${escapeHtml(markdownPlan)}</pre>
+          ${renderSourceCaption("order_plan.json 쨌 today_signals.json 쨌 generated markdown slips")}
         </div>
       </section>
     </div>
@@ -1096,6 +1275,7 @@ function renderOrderPlan(orderPlanData) {
         ${statusBadge("success", "준비도 검사 완료")}
       </div>
       ${readinessHtml}
+      ${renderSourceCaption("today_signals.json · stock_warning_gate.json · Toss /api/v1/stocks/{symbol}/warnings")}
     </section>
   `;
 }
@@ -1115,6 +1295,7 @@ function renderTossMarket() {
       </div>
       ${statusBadge(status.status === "configured" ? "success" : "warning")}
     </div>
+    ${renderDataSourceNote("toss", ["Toss warnings endpoint", "Toss price-limit/orderbook/trades/candles GET"])}
     <section class="status-banner status-${status.status === "configured" ? "success" : "warning"}">
       <div>${statusBadge(status.status === "configured" ? "success" : "warning")}</div>
       <div>
@@ -1137,6 +1318,7 @@ function renderTossMarket() {
         ${statusBadge(accountData.status === "success" ? "success" : accountData.status === "failed" ? "failed" : "warning")}
       </div>
       ${renderTossAccountSetup(accountData, accounts)}
+      ${renderSourceCaption("Toss Open API accounts GET")}
     </section>
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header">
@@ -1157,12 +1339,14 @@ function renderTossMarket() {
         </label>
         <button class="button button-primary" type="submit">조회</button>
       </form>
+      ${renderSourceCaption("Toss prices/stocks/warnings/price-limits/orderbook/trades/candles GET")}
       <p id="toss-feedback" class="metric-detail" hidden></p>
     </section>
     ${market ? renderTossSnapshot(market) : renderTossEmptyState(status)}
     <section class="panel">
       <div class="panel-header"><div><h2>구현된 GET 엔드포인트</h2><p>토큰 발급을 제외한 API 호출은 모두 GET입니다.</p></div></div>
       ${renderTossEndpointTable(endpointRows)}
+      ${renderSourceCaption("TOSS_GET_ENDPOINTS registry")}
     </section>
   `;
 }
@@ -1298,6 +1482,45 @@ function renderSituationTags(rows) {
     .join("")}</div>`;
 }
 
+function renderPortfolioTypeCards(rows) {
+  const items = rows || [];
+  if (!items.length) {
+    return '<div class="empty-state"><strong>포트폴리오 타입 데이터가 없습니다.</strong><span>holdings 응답과 portfolio_mapping.json을 읽으면 자동으로 채워집니다.</span></div>';
+  }
+  return `<div class="portfolio-type-grid">${items
+    .map((row) => {
+      const status = Number(row.warning_count || 0) > 0 ? "warning" : Number(row.count || 0) ? "success" : "not_evaluated";
+      return `
+        <article class="portfolio-type-card">
+          <div class="portfolio-type-card-head">
+            <strong>${escapeHtml(row.label || row.type || "-")}</strong>
+            ${statusBadge(status, row.risk_level || "risk")}
+          </div>
+          <p>${escapeHtml(row.description || "")}</p>
+          <div class="portfolio-type-metrics">
+            <span><b>${formatNumber(row.count, 0)}</b>종목</span>
+            <span><b>${formatPercent(row.weight, 1)}</b>비중</span>
+            <span><b>${formatCurrency(row.market_value_krw, "KRW")}</b></span>
+          </div>
+          <small>확인: ${escapeHtml(row.focus || "-")}</small>
+          ${(row.checklist || []).length ? `<ul>${row.checklist.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+          ${row.symbols?.length ? `<span class="portfolio-type-symbols">${row.symbols.map(escapeHtml).join(" · ")}</span>` : ""}
+          ${renderSourceLabel(row.source || "portfolio_mapping.json · Toss holdings/stocks metadata")}
+        </article>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderPortfolioTypeBadges(row) {
+  const labels = row.portfolio_type_labels?.length
+    ? row.portfolio_type_labels
+    : row.primary_portfolio_type_label
+      ? [row.primary_portfolio_type_label]
+      : [];
+  if (!labels.length) return "-";
+  return labels.map((label) => `<span>${escapeHtml(label)}</span>`).join("");
+}
+
 function renderPnlContributors(rows) {
   const ranked = [...(rows || [])]
     .filter((row) => row.unrealized_pnl_krw !== null && row.unrealized_pnl_krw !== undefined)
@@ -1386,11 +1609,12 @@ function renderTossHoldingsTable(rows) {
   }
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>Symbol</th><th>Market</th><th>Category</th><th>Sector</th><th>Name</th><th class="numeric">Qty</th><th class="numeric">KRW value</th><th class="numeric">P/L KRW</th><th class="numeric">P/L %</th><th class="numeric">Day %</th><th class="numeric">Weight</th><th>Tags</th></tr></thead>
+      <thead><tr><th>Symbol</th><th>Market</th><th>투자 타입</th><th>Category</th><th>Sector</th><th>Name</th><th class="numeric">Qty</th><th class="numeric">KRW value</th><th class="numeric">P/L KRW</th><th class="numeric">P/L %</th><th class="numeric">Day %</th><th class="numeric">Weight</th><th>Tags</th></tr></thead>
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${escapeHtml(row.symbol || "-")}</td>
           <td>${statusBadge(row.market_region === "US" ? "warning" : row.market_region === "KR" ? "success" : "not_evaluated", row.market_region || "-")}</td>
+          <td class="tag-cell portfolio-type-cell">${renderPortfolioTypeBadges(row)}<small>${escapeHtml(row.portfolio_type_focus || "-")}</small>${renderSourceLabel(row.portfolio_type_source || "portfolio_mapping.json · Toss holdings/stocks metadata")}</td>
           <td>${escapeHtml(row.category || row.asset_type || "-")}</td>
           <td>${escapeHtml(row.sector || "-")}</td>
           <td>${escapeHtml(row.name || "-")}</td>
@@ -1436,10 +1660,12 @@ function renderTossSnapshot(market) {
       <section class="panel">
         <div class="panel-header"><div><h2>Market Data 결과</h2><p>가격, 종목정보, 호가, 체결, 캔들 응답 요약</p></div></div>
         ${renderTossSectionTable(sections)}
+        ${renderSourceCaption("Toss prices/stocks/warnings/price-limits/orderbook/trades/candles GET")}
       </section>
       <section class="panel">
         <div class="panel-header"><div><h2>계좌 범위 결과</h2><p>선택한 경우에만 호출됩니다.</p></div></div>
         ${renderTossSectionTable(accountSections)}
+        ${renderSourceCaption("Toss holdings/sellable-quantity GET")}
       </section>
     </div>
   `;
@@ -1452,6 +1678,7 @@ function renderTossEmptyState(status) {
         status.status === "configured" ? "아직 조회한 종목이 없습니다." : "Toss API 키가 아직 준비되지 않았습니다.",
         status.status === "configured" ? "위 폼에서 AAPL, 005930 같은 심볼을 입력해 조회하세요." : "TS_API_KEY와 TS_SECRET_KEY를 설정한 뒤 새로고침하세요."
       )}
+      ${renderSourceCaption("Toss status config 쨌 symbol form input 쨌 read-only GET policy")}
     </section>
   `;
 }
@@ -1488,13 +1715,15 @@ function renderTossSectionTable(sections) {
     </table></div>`;
 }
 
-function metricCard(label, value, status, detail, ratio = null) {
+function metricCard(label, value, status, detail, ratio = null, source = null) {
   const width = ratio == null ? 0 : Math.max(0, Math.min(100, Number(ratio) * 100));
+  const resolvedSource = source === null ? metricSourceFor(label) : source;
   return `
     <article class="metric-card">
       <div class="metric-label"><span>${escapeHtml(label)}</span>${statusBadge(status)}</div>
       <strong class="metric-value">${escapeHtml(value)}</strong>
       <span class="metric-detail">${escapeHtml(detail || "")}</span>
+      ${renderSourceLabel(resolvedSource)}
       ${ratio == null ? "" : `<div class="metric-bar" aria-hidden="true"><span style="width:${width}%"></span></div>`}
     </article>
   `;
@@ -1507,6 +1736,7 @@ function renderPrimaryAction(action) {
         <span class="metric-label">가장 중요한 다음 행동</span>
         <strong>추가 조치 없음</strong>
         <p>현재 run에서 즉시 수행할 안전 조치가 없습니다.</p>
+        ${renderSourceLabel("recommended_actions from safety verdict")}
       </article>`;
   }
   const attrs = action.page
@@ -1520,6 +1750,7 @@ function renderPrimaryAction(action) {
       <span class="metric-label">가장 중요한 다음 행동</span>
       <strong>${escapeHtml(action.label || "검토 계속")}</strong>
       <p>${escapeHtml(detail)}</p>
+      ${renderSourceLabel("recommended_actions from safety verdict")}
       <button class="button button-primary" type="button" ${attrs}>${escapeHtml(action.label || "확인")}</button>
     </article>`;
 }
@@ -1917,6 +2148,7 @@ function renderApiMonitoring() {
         ${statusBadge(summary.status)}
       </div>
     </div>
+    ${renderDataSourceNote("api-monitoring")}
     <section class="status-banner status-${statusClass(summary.status)}">
       <div>${statusBadge(summary.status)}</div>
       <div>
@@ -1946,6 +2178,7 @@ function renderApiMonitoring() {
             ${configItem("Supplemental", (config.supplemental_providers || []).join(", ") || "없음")}
             ${configItem("불일치 정책", config.price_disagreement_policy || "-")}
           </div>
+          ${renderSourceCaption("config.json provider settings")}
         </div>
       </section>
       <section class="panel">
@@ -1957,6 +2190,7 @@ function renderApiMonitoring() {
             ${configItem("REST API Key", kakao.has_rest_api_key ? "설정됨 ✓" : "미설정")}
             ${configItem("Client Secret", kakao.has_client_secret ? "설정됨 ✓" : "미설정")}
           </div>
+          ${renderSourceCaption("environment / Kakao credential presence check")}
         </div>
       </section>
     </div>
@@ -1993,7 +2227,7 @@ function renderProviderCards(providers, categories) {
     html += '</div>';
   }
 
-  html += '</section>';
+  html += `${renderSourceCaption("provider registry · config.json · latest run API events")}</section>`;
   return html;
 }
 
@@ -2122,7 +2356,7 @@ function renderCacheStatsPanel(cacheStats) {
     return `
       <section class="panel" style="margin-bottom:14px">
         <div class="panel-header"><div><h2>캐시 상태</h2><p>캐시 디렉터리 통계입니다.</p></div></div>
-        <div class="panel-body"><div class="empty-state"><strong>캐시 데이터 없음</strong>실행 후 캐시가 생성됩니다.</div></div>
+        <div class="panel-body"><div class="empty-state"><strong>캐시 데이터 없음</strong>실행 후 캐시가 생성됩니다.</div>${renderSourceCaption("provider cache directories")}</div>
       </section>
     `;
   }
@@ -2144,6 +2378,7 @@ function renderCacheStatsPanel(cacheStats) {
             </div>
           `).join("")}
         </div>
+        ${renderSourceCaption("provider cache directories")}
       </div>
     </section>
   `;
@@ -2162,6 +2397,7 @@ function renderEnvTemplatePanel(providers, kakao) {
       </div>
       <div class="panel-body">
         <pre class="code-block" style="background:#1e1e1e; color:#d4d4d4; padding:16px; border-radius:6px; font-family:'Cascadia Code',Consolas,monospace; font-size:12px; line-height:1.6; overflow-x:auto; margin:0;" id="env-template-text">${renderEnvTemplateText(providers, kakao)}</pre>
+        ${renderSourceCaption("provider registry · missing environment keys")}
       </div>
     </section>
   `;
@@ -2205,7 +2441,7 @@ function renderApiLogsPanel(logs) {
     return `
       <section class="panel" style="margin-bottom:14px" id="api-logs-section">
         <div class="panel-header"><div><h2>최근 연동 에러/경고 로그</h2><p>최근 run에서 기록된 API 연동 관련 로그가 없습니다.</p></div></div>
-        <div class="panel-body"><div class="empty-state"><strong>기록된 로그 없음</strong>모든 연동 요청이 경고 없이 수행되었습니다.</div></div>
+        <div class="panel-body"><div class="empty-state"><strong>기록된 로그 없음</strong>모든 연동 요청이 경고 없이 수행되었습니다.</div>${renderSourceCaption("latest run logs/events.jsonl")}</div>
       </section>
     `;
   }
@@ -2251,6 +2487,7 @@ function renderApiLogsPanel(logs) {
           }).join("")}
         </tbody>
       </table></div>
+      ${renderSourceCaption("latest run logs/events.jsonl")}
     </section>
   `;
 }
@@ -2297,6 +2534,7 @@ function renderDisagreementsPanel(disagreements) {
           </tr>`).join("")}
         </tbody>
       </table></div>
+      ${renderSourceCaption("provider_disagreement_report.json")}
     </section>
   `;
 }
@@ -2319,6 +2557,7 @@ function renderNotificationFailuresPanel(failures) {
           </tr>`).join("")}
         </tbody>
       </table></div>
+      ${renderSourceCaption("notification logs · Kakao send failure records")}
     </section>
   `;
 }
@@ -2953,31 +3192,37 @@ function _renderTradingViewDetailsPanel(details, { compact = false } = {}) {
             <span class="metric-label">섹터 / 국가</span>
             <span class="metric-value" style="font-size:15px">${escapeHtml(profile.sector || "-")}</span>
             <span class="metric-sub">${escapeHtml(profile.country_code_fund || profile.country || "-")}</span>
+            ${renderSourceLabel("TradingView scanner right-details")}
           </div>
           <div class="metric-card">
             <span class="metric-label">52주 범위</span>
             <span class="metric-value" style="font-size:15px">${_$(quote.price_52_week_low)} - ${_$(quote.price_52_week_high)}</span>
             <span class="metric-sub">TradingView right-details</span>
+            ${renderSourceLabel("TradingView scanner right-details")}
           </div>
           <div class="metric-card">
             <span class="metric-label">1개월 범위</span>
             <span class="metric-value" style="font-size:15px">${_$(quote.low_1m)} - ${_$(quote.high_1m)}</span>
             <span class="metric-sub">고가/저가</span>
+            ${renderSourceLabel("TradingView scanner right-details")}
           </div>
           <div class="metric-card">
             <span class="metric-label">평균 거래량</span>
             <span class="metric-value" style="font-size:15px">${_volume(volume.average_10d)} / ${_volume(volume.average_30d)}</span>
             <span class="metric-sub">10일 / 30일</span>
+            ${renderSourceLabel("TradingView scanner right-details")}
           </div>
           <div class="metric-card">
             <span class="metric-label">NAV 프리미엄</span>
             <span class="metric-value ${_chgCls(nav)}" style="font-size:15px">${_pct(nav)}</span>
             <span class="metric-sub">ETF 괴리율</span>
+            ${renderSourceLabel("TradingView scanner right-details")}
           </div>
           <div class="metric-card">
             <span class="metric-label">추천 점수</span>
             <span class="metric-value" style="font-size:15px;color:${_signalToneColor(recommendation.tone)}">${_score(quote.recommend_all)}</span>
             <span class="metric-sub">${escapeHtml(recommendation.label || "-")}</span>
+            ${renderSourceLabel("TradingView scanner right-details")}
           </div>
         </section>
         ${compact ? "" : `
@@ -2995,9 +3240,11 @@ function _renderTradingViewDetailsPanel(details, { compact = false } = {}) {
             </tbody>
           </table>
         </div>
+        ${renderSourceCaption("TradingView scanner right-details performance fields")}
         ${hasDerivativeData ? `
         <div style="margin-top:10px;color:var(--muted);font-size:12px">
           옵션성 지표: OI ${_volume(derivatives.open_interest)} · IV ${_pct(derivatives.iv)} · Δ ${_score(derivatives.delta)} · Θ ${_score(derivatives.theta)} · Theo ${_$(derivatives.theo_price)}
+          ${renderSourceLabel("TradingView scanner right-details derivative fields")}
         </div>` : ""}`}
       </div>
     </section>`;
@@ -3025,7 +3272,7 @@ function renderAnalysis() {
       </div>
     </div>`;
 
-  els.root.innerHTML = pageHead + tabBar + `<div id="analysis-tab-content"></div>`;
+  els.root.innerHTML = pageHead + renderDataSourceNote("analysis") + tabBar + `<div id="analysis-tab-content"></div>`;
 
   const content = document.querySelector("#analysis-tab-content");
 
@@ -3051,7 +3298,7 @@ function renderAnalysisMarket(container) {
   const data = state.analysisMarketOverview || {};
 
   if (!data.indices) {
-    container.innerHTML = `<div class="analysis-loading">⏳ 시장 데이터를 불러오는 중... <button id="btn-load-market" class="button button-primary" style="margin-left:12px">조회</button></div>`;
+    container.innerHTML = renderDataSourceNote("analysis", ["Yahoo Finance index/sector ETFs", "VIX proxy"]) + `<div class="analysis-loading">⏳ 시장 데이터를 불러오는 중... <button id="btn-load-market" class="button button-primary" style="margin-left:12px">조회</button></div>`;
     return;
   }
 
@@ -3112,6 +3359,7 @@ function renderAnalysisMarket(container) {
   }).join("");
 
   container.innerHTML = `
+    ${renderDataSourceNote("analysis", ["Yahoo Finance index/sector ETFs", "VIX proxy"])}
     <div class="analysis-market-grid">
       <!-- Fear & Greed + VIX -->
       <section class="panel analysis-fg-panel">
@@ -3122,6 +3370,7 @@ function renderAnalysisMarket(container) {
             <div style="font-size:28px;font-weight:800;color:${fgColor}">${fg.value}</div>
             <div style="font-size:13px;font-weight:600;color:${fgColor}">${fg.label}</div>
             <div style="font-size:12px;color:var(--muted);margin-top:4px">VIX = ${_num(fg.vix)}</div>
+            ${renderSourceLabel("Yahoo Finance VIX proxy")}
           </div>
         </div>
       </section>
@@ -3143,6 +3392,7 @@ function renderAnalysisMarket(container) {
                 <div class="idx-price">${_num(idx.price, idx.price > 1000 ? 0 : 2)}</div>
                 <div class="idx-chg ${_chgCls(idx.change_pct)}">${_pct(idx.change_pct)}</div>
                 <div class="idx-spark">${sparkSvg(idx.sparkline, up)}</div>
+                ${renderSourceLabel("Yahoo Finance quote/history")}
               </div>`;
             }).join("")}
           </div>
@@ -3154,6 +3404,7 @@ function renderAnalysisMarket(container) {
         <div class="panel-header"><div><h2>🗺️ 섹터 히트맵</h2><p>전일 대비 섹터 ETF 등락률</p></div></div>
         <div class="panel-body">
           <div class="sector-heatmap">${sectorHeatmap}</div>
+          ${renderSourceCaption("Yahoo Finance sector ETF daily change")}
         </div>
       </section>
     </div>`;
@@ -3203,7 +3454,7 @@ function renderAnalysisBasic(container, ticker, macro, period) {
     </section>`;
 
   if (!data.stock) {
-    container.innerHTML = controlPanel + `<div class="analysis-loading">종목, 지표, 기간을 선택 후 조회 버튼을 누르세요.</div>`;
+    container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV/news", "FRED series", "TradingView right-details", "Toss holdings"]) + `<div class="analysis-loading">종목, 지표, 기간을 선택 후 조회 버튼을 누르세요.</div>`;
     return;
   }
 
@@ -3250,53 +3501,60 @@ function renderAnalysisBasic(container, ticker, macro, period) {
             </tr>`;
           }).join("")}</tbody>
         </table>
+        ${renderSourceCaption("Toss Open API holdings GET")}
       </div>
     </section>`;
   }
 
-  container.innerHTML = controlPanel + `
+  container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV/news", "FRED series", "TradingView right-details", "Toss holdings"]) + `
     <section class="metric-grid" style="margin-bottom:14px">
       <div class="metric-card">
         <span class="metric-label">현재가</span>
         <span class="metric-value" style="font-size:22px">${_$(stock.latest_price)}</span>
         <span class="metric-sub">${escapeHtml(stock.ticker||ticker)}</span>
+        ${renderSourceLabel("Yahoo Finance OHLCV")}
       </div>
       <div class="metric-card">
         <span class="metric-label">전일 대비</span>
         <span class="metric-value ${_chgCls(stock.change_pct)}" style="font-size:22px">${_pct(stock.change_pct)}</span>
         <span class="metric-sub">일간 수익률</span>
+        ${renderSourceLabel("Yahoo Finance OHLCV")}
       </div>
       <div class="metric-card">
         <span class="metric-label">기간 최고가</span>
         <span class="metric-value">${_$(stock.fifty_two_week_high)}</span>
         <span class="metric-sub">구간 내 최고</span>
+        ${renderSourceLabel("Yahoo Finance OHLCV")}
       </div>
       <div class="metric-card">
         <span class="metric-label">기간 최저가</span>
         <span class="metric-value">${_$(stock.fifty_two_week_low)}</span>
         <span class="metric-sub">구간 내 최저</span>
+        ${renderSourceLabel("Yahoo Finance OHLCV")}
       </div>
       ${!macroData.error ? `
       <div class="metric-card">
         <span class="metric-label">${escapeHtml((macroData.name||macro).slice(0,32))}</span>
         <span class="metric-value">${_num(macroData.latest_value,2)}</span>
         <span class="metric-sub">${escapeHtml(macroData.latest_date||"-")}</span>
+        ${renderSourceLabel("FRED series")}
       </div>
       <div class="metric-card">
         <span class="metric-label">지표 변화</span>
         <span class="metric-value ${_chgCls(macroData.change)}">${macroData.change!=null?(macroData.change>=0?"+":"")+_num(macroData.change,3):"-"}</span>
         <span class="metric-sub">전기 대비</span>
+        ${renderSourceLabel("FRED series")}
       </div>` : ""}
     </section>
     ${tradingViewDetailsHtml}
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header"><div><h2>가격 & ${macroLabel} 차트</h2></div></div>
-      <div class="panel-body" style="padding:0 4px">${chartHtml}</div>
+      <div class="panel-body" style="padding:0 4px">${chartHtml}${renderSourceCaption("Yahoo Finance OHLCV · FRED series")}</div>
     </section>
     ${tossHtml}
     <section class="panel" style="margin-top:14px">
       <div class="panel-header"><div><h2>📰 뉴스 & 감성 분석</h2></div></div>
-      <div class="panel-body"><div class="analysis-news-list">${newsHtml}</div></div>
+      <div class="panel-body"><div class="analysis-news-list">${newsHtml}</div>${renderSourceCaption("Finnhub / Alpha Vantage news providers")}</div>
     </section>`;
 }
 
@@ -3331,7 +3589,7 @@ function renderAnalysisTechnical(container, ticker, period) {
     </section>`;
 
   if (!data.records) {
-    container.innerHTML = controlPanel + `<div class="analysis-loading">종목을 선택하고 조회 버튼을 누르세요.</div>`;
+    container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV", "TradingView scanner popup-technicals", "TradingView right-details"]) + `<div class="analysis-loading">종목을 선택하고 조회 버튼을 누르세요.</div>`;
     return;
   }
 
@@ -3370,34 +3628,40 @@ function renderAnalysisTechnical(container, ticker, period) {
           <span class="metric-label">RSI / Stoch</span>
           <span class="metric-value" style="font-size:15px">${_num(tvOsc.rsi)} / ${_num(tvOsc.stoch_k)}</span>
           <span class="metric-sub">D ${_num(tvOsc.stoch_d)} · Stoch RSI ${_num(tvOsc.stoch_rsi_k)}</span>
+          ${renderSourceLabel("TradingView scanner popup-technicals")}
         </div>
         <div class="metric-card">
           <span class="metric-label">ADX 방향성</span>
           <span class="metric-value" style="font-size:15px">${_num(tvOsc.adx)}</span>
           <span class="metric-sub">+DI ${_num(tvOsc.adx_plus_di)} / -DI ${_num(tvOsc.adx_minus_di)}</span>
+          ${renderSourceLabel("TradingView scanner popup-technicals")}
         </div>
         <div class="metric-card">
           <span class="metric-label">MACD / Momentum</span>
           <span class="metric-value" style="font-size:15px">${_score(tvOsc.macd)} / ${_score(tvOsc.macd_signal)}</span>
           <span class="metric-sub">Mom ${_score(tvOsc.mom)} · AO ${_score(tvOsc.ao)}</span>
+          ${renderSourceLabel("TradingView scanner popup-technicals")}
         </div>
         <div class="metric-card">
           <span class="metric-label">이평선 위치</span>
           <span class="metric-value" style="font-size:15px">${_$(tvDetail.close)}</span>
           <span class="metric-sub">EMA20 ${_$(tvMas.ema20)} · EMA200 ${_$(tvMas.ema200)}</span>
+          ${renderSourceLabel("TradingView scanner popup-technicals")}
         </div>
         <div class="metric-card">
           <span class="metric-label">근접 지지</span>
           <span class="metric-value" style="font-size:13px">${pivotLabel(tvNearest.support)}</span>
           <span class="metric-sub">월간 피벗 기준</span>
+          ${renderSourceLabel("TradingView scanner popup-technicals")}
         </div>
         <div class="metric-card">
           <span class="metric-label">근접 저항</span>
           <span class="metric-value" style="font-size:13px">${pivotLabel(tvNearest.resistance)}</span>
           <span class="metric-sub">월간 피벗 기준</span>
+          ${renderSourceLabel("TradingView scanner popup-technicals")}
         </div>
       </div>
-      <div>${rationaleHtml}</div>
+      <div>${rationaleHtml}${renderSourceCaption("TradingView scanner popup-technicals · derived rationale")}</div>
     </section>` : "";
   const tradingViewHtml = (tv.status === "ok" || tv.status === "partial") && tvRows.length ? `
     <section class="panel" style="margin-bottom:14px">
@@ -3414,16 +3678,19 @@ function renderAnalysisTechnical(container, ticker, period) {
             <span class="metric-label">최종 액션</span>
             <span class="metric-value" style="font-size:22px;color:${_signalToneColor(tvConsensus.tone)}">${escapeHtml(tvConsensus.label || "-")}</span>
             <span class="metric-sub">평균 점수 ${tvScore(tv.consensus_score)}</span>
+            ${renderSourceLabel("TradingView scanner popup-technicals")}
           </div>
           <div class="metric-card">
             <span class="metric-label">신뢰도</span>
             <span class="metric-value">${Math.round((tv.confidence || 0) * 100)}%</span>
             <span class="metric-sub">점수 절대값 기반</span>
+            ${renderSourceLabel("TradingView scanner popup-technicals")}
           </div>
           <div class="metric-card">
             <span class="metric-label">강한 신호</span>
             <span class="metric-value">${tv.strong_signal_count || 0}</span>
             <span class="metric-sub">강한 매수/매도 시간대</span>
+            ${renderSourceLabel("TradingView scanner popup-technicals")}
           </div>
         </div>
         <div style="overflow-x:auto">
@@ -3455,6 +3722,7 @@ function renderAnalysisTechnical(container, ticker, period) {
             </tbody>
           </table>
         </div>
+        ${renderSourceCaption("TradingView scanner popup-technicals by timeframe")}
         ${tvErrors.length ? `<p style="margin:10px 0 0;color:var(--muted);font-size:12px">일부 시간대 실패: ${tvErrors.map(err => escapeHtml(err.label || err.timeframe || "-")).join(", ")}</p>` : ""}
         ${tvDetailHtml}
       </div>
@@ -3467,39 +3735,44 @@ function renderAnalysisTechnical(container, ticker, period) {
   const dates = recs.map(r => r.date);
   const chartHtml = _renderTechnicalCharts(recs, dates);
 
-  container.innerHTML = controlPanel + `
+  container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV", "TradingView scanner popup-technicals", "TradingView right-details"]) + `
     <section class="metric-grid" style="margin-bottom:14px">
       <div class="metric-card">
         <span class="metric-label">현재가</span>
         <span class="metric-value" style="font-size:22px">${_$(data.latest_price)}</span>
         <span class="metric-sub ${_chgCls(data.change_pct)}">${_pct(data.change_pct)} 전일 대비</span>
+        ${renderSourceLabel("Yahoo Finance OHLCV")}
       </div>
       <div class="metric-card">
         <span class="metric-label">시장 레짐</span>
         <span class="metric-value" style="font-size:16px;color:${regimeColor}">${regimeLabel}</span>
         <span class="metric-sub">EMA200 기준</span>
+        ${renderSourceLabel("Yahoo Finance OHLCV · derived EMA200")}
       </div>
       <div class="metric-card">
         <span class="metric-label">RSI(14)</span>
         <span class="metric-value" style="color:${rsiColor}">${_num(rsi)}</span>
         <span class="metric-sub" style="color:${rsiColor}">${rsiLabel}</span>
+        ${renderSourceLabel("Yahoo Finance OHLCV · derived RSI")}
       </div>
       <div class="metric-card">
         <span class="metric-label">EMA 20 / 50 / 200</span>
         <span class="metric-value" style="font-size:13px">${_$(data.latest_ema20,2)} / ${_$(data.latest_ema50,2)}</span>
         <span class="metric-sub">EMA200 = ${_$(data.latest_ema200,2)}</span>
+        ${renderSourceLabel("Yahoo Finance OHLCV · derived EMA")}
       </div>
       <div class="metric-card">
         <span class="metric-label">ATR(14) 일간 변동성</span>
         <span class="metric-value">${_$(data.latest_atr)}</span>
         <span class="metric-sub">±${data.latest_atr && data.latest_price ? _num(data.latest_atr/data.latest_price*100)+"%" : "-"}</span>
+        ${renderSourceLabel("Yahoo Finance OHLCV · derived ATR")}
       </div>
     </section>
     ${tradingViewHtml}
     ${tradingViewDetailsHtml}
     <section class="panel">
       <div class="panel-header"><div><h2>기술적 지표 차트</h2><p>가격·볼린저·EMA / MACD / RSI / 거래량</p></div></div>
-      <div class="panel-body" style="padding:0 4px">${chartHtml}</div>
+      <div class="panel-body" style="padding:0 4px">${chartHtml}${renderSourceCaption("Yahoo Finance OHLCV · derived Bollinger/EMA/MACD/RSI/volume")}</div>
     </section>`;
 }
 
@@ -3535,7 +3808,7 @@ function renderAnalysisCompare(container, period) {
     </section>`;
 
   if (!data.dates) {
-    container.innerHTML = controlPanel + `<div class="analysis-loading">종목과 기간을 설정하고 비교 버튼을 누르세요.</div>`;
+    container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance adjusted close series"]) + `<div class="analysis-loading">종목과 기간을 설정하고 비교 버튼을 누르세요.</div>`;
     return;
   }
 
@@ -3582,7 +3855,7 @@ function renderAnalysisCompare(container, period) {
       <span style="width:18px;height:2px;display:inline-block;background:${COMPARE_COLORS[ti]};border-radius:1px"></span>${t}
     </span>`).join("");
 
-  container.innerHTML = controlPanel + `
+  container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance adjusted close series"]) + `
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header"><div><h2>정규화 수익률 차트 (시작 = 100)</h2></div></div>
       <div class="panel-body" style="padding:4px">
@@ -3601,6 +3874,7 @@ function renderAnalysisCompare(container, period) {
           <line x1="${PL}" y1="${PT+innerH}" x2="${PL+innerW}" y2="${PT+innerH}" stroke="#cbd5e1" stroke-width="1"/>
           ${yLabels}${xLabels}
         </svg>
+        ${renderSourceCaption("Yahoo Finance adjusted close series")}
       </div>
     </section>
     <section class="panel">
@@ -3634,6 +3908,7 @@ function renderAnalysisCompare(container, period) {
             }).join("")}
           </tbody>
         </table>
+        ${renderSourceCaption("Yahoo Finance adjusted close series · normalized return calculation")}
       </div>
     </section>`;
 }
@@ -3646,15 +3921,72 @@ function renderAnalysisPortfolio(container) {
   const agg = data.aggregate || {};
   const runs = data.runs || [];
   const curve = data.equity_curve || [];
+  const diagnostics = data.diagnostics || {};
+  const skippedRuns = diagnostics.skipped_runs || [];
+  const statusCounts = diagnostics.status_counts || {};
 
   const loadBtn = `<div style="display:flex;justify-content:flex-end;margin-bottom:10px">
     <button id="btn-portfolio-fetch" class="button button-primary" type="button">📊 실행 데이터 조회</button>
   </div>`;
+  const portfolioSourceNote = renderDataSourceNote("analysis", ["runs/*/manifest.json", "trades.json", "equity curve artifacts"]);
 
   if (!data.aggregate) {
-    container.innerHTML = loadBtn + `<div class="analysis-loading">전략 실행 성과 데이터를 불러옵니다.</div>`;
+    container.innerHTML = loadBtn + portfolioSourceNote + `<div class="analysis-loading">전략 실행 성과 데이터를 불러옵니다.</div>`;
     return;
   }
+  const emptyPortfolioHtml = !runs.length ? `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>성과 산출 가능한 실행 없음</h2>
+          <p>${escapeHtml(diagnostics.empty_reason || "최근 실행에서 매매 결과를 찾지 못했습니다.")}</p>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="metric-grid" style="margin-bottom:12px">
+          <div class="metric-card">
+            <span class="metric-label">검사한 실행</span>
+            <span class="metric-value">${diagnostics.checked_run_count ?? 0}</span>
+            <span class="metric-sub">최근 실행 기준</span>
+            ${renderSourceLabel("runs/*/manifest.json")}
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">성과 가능 실행</span>
+            <span class="metric-value">${diagnostics.performance_run_count ?? 0}</span>
+            <span class="metric-sub">trades.json 포함</span>
+            ${renderSourceLabel("trades.json discovery")}
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">실패 실행</span>
+            <span class="metric-value">${statusCounts.failed ?? 0}</span>
+            <span class="metric-sub">최근 검사 범위</span>
+            ${renderSourceLabel("runs/*/manifest.json status")}
+          </div>
+        </div>
+        <p style="margin:0 0 10px;color:var(--muted);font-size:13px">
+          현재 최근 실행은 매매 로그가 생성되기 전에 중단되었습니다. 실패 코드를 먼저 해결한 뒤 simulate를 다시 실행하면 Sharpe, Sortino, MDD가 채워집니다.
+        </p>
+        ${skippedRuns.length ? `
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="border-bottom:2px solid var(--border)">
+              <th style="text-align:left;padding:6px 8px">실행 ID</th>
+              <th style="text-align:left;padding:6px 8px">상태</th>
+              <th style="text-align:left;padding:6px 8px">실패 코드</th>
+              <th style="text-align:left;padding:6px 8px">건너뛴 이유</th>
+            </tr></thead>
+            <tbody>
+              ${skippedRuns.map(r => `<tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:5px 8px;font-family:monospace;font-size:11px">${escapeHtml(String(r.run_id || "").slice(-24))}</td>
+                <td style="padding:5px 8px">${statusBadge(r.status || "unknown")}</td>
+                <td style="padding:5px 8px;font-family:monospace;font-size:11px">${escapeHtml(r.failure_code || "-")}</td>
+                <td style="padding:5px 8px;color:var(--muted)">${escapeHtml(r.error || r.reason || "-")}</td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>` : ""}
+      </div>
+    </section>` : "";
 
   // Equity curve chart
   let eqChart = "<p style='color:var(--muted);font-size:13px'>에쿼티 커브 데이터 없음</p>";
@@ -3699,43 +4031,50 @@ function renderAnalysisPortfolio(container) {
     </svg>`;
   }
 
-  container.innerHTML = loadBtn + `
+  container.innerHTML = loadBtn + portfolioSourceNote + `
     <section class="metric-grid" style="margin-bottom:14px">
       <div class="metric-card">
         <span class="metric-label">분석 실행 수</span>
         <span class="metric-value" style="font-size:24px">${agg.run_count??"-"}</span>
         <span class="metric-sub">최근 10개 기준</span>
+        ${renderSourceLabel("runs/*/manifest.json · trades.json")}
       </div>
       <div class="metric-card">
         <span class="metric-label">평균 Sharpe 비율</span>
         <span class="metric-value ${_chgCls(agg.avg_sharpe)}">${_num(agg.avg_sharpe)}</span>
         <span class="metric-sub">연환산 일간</span>
+        ${renderSourceLabel("trades.json · equity curve artifacts")}
       </div>
       <div class="metric-card">
         <span class="metric-label">평균 Sortino 비율</span>
         <span class="metric-value ${_chgCls(agg.avg_sortino)}">${_num(agg.avg_sortino)}</span>
         <span class="metric-sub">하방 표준편차 기준</span>
+        ${renderSourceLabel("trades.json · equity curve artifacts")}
       </div>
       <div class="metric-card">
         <span class="metric-label">평균 승률</span>
         <span class="metric-value">${_num(agg.avg_win_rate)}%</span>
         <span class="metric-sub">전체 매매 기준</span>
+        ${renderSourceLabel("trades.json")}
       </div>
       <div class="metric-card">
         <span class="metric-label">평균 MDD</span>
         <span class="metric-value analysis-negative">-${_num(agg.avg_max_drawdown)}%</span>
         <span class="metric-sub">최대 낙폭</span>
+        ${renderSourceLabel("equity curve artifacts")}
       </div>
       <div class="metric-card">
         <span class="metric-label">평균 수익률</span>
         <span class="metric-value ${_chgCls(agg.avg_total_return)}">${_pct(agg.avg_total_return)}</span>
         <span class="metric-sub">누적 기준</span>
+        ${renderSourceLabel("trades.json · final capital")}
       </div>
     </section>
+    ${emptyPortfolioHtml}
     ${curve.length > 1 ? `
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header"><div><h2>에쿼티 커브</h2><p>최근 실행 자본금 추이</p></div></div>
-      <div class="panel-body" style="padding:0 4px">${eqChart}</div>
+      <div class="panel-body" style="padding:0 4px">${eqChart}${renderSourceCaption("equity curve artifacts from completed runs")}</div>
     </section>` : ""}
     <section class="panel">
       <div class="panel-header"><div><h2>실행 이력</h2></div></div>
@@ -3764,6 +4103,7 @@ function renderAnalysisPortfolio(container) {
             </tr>`).join("")}
           </tbody>
         </table>
+        ${renderSourceCaption("runs/*/manifest.json · trades.json")}
       </div>
     </section>`;
 }
@@ -3778,9 +4118,10 @@ function renderAnalysisCalendar(container) {
   const loadBtn = `<div style="display:flex;justify-content:flex-end;margin-bottom:10px">
     <button id="btn-calendar-fetch" class="button button-primary" type="button">📅 캘린더 로드</button>
   </div>`;
+  const calendarSourceNote = renderDataSourceNote("analysis", ["FRED economic series", "release cadence estimates"]);
 
   if (!events.length) {
-    container.innerHTML = loadBtn + `<div class="analysis-loading">FRED 경제 지표 발표 일정을 불러옵니다.</div>`;
+    container.innerHTML = loadBtn + calendarSourceNote + `<div class="analysis-loading">FRED 경제 지표 발표 일정을 불러옵니다.</div>`;
     return;
   }
 
@@ -3813,11 +4154,12 @@ function renderAnalysisCalendar(container) {
     </div>`;
   }).join("");
 
-  container.innerHTML = loadBtn + `
+  container.innerHTML = loadBtn + calendarSourceNote + `
     <section class="panel">
       <div class="panel-header"><div><h2>📅 주요 경제 지표 발표 일정</h2><p>기준일: ${today} | FRED 최신 데이터 기반, 다음 발표일은 추정치입니다.</p></div></div>
       <div class="panel-body">
         <div class="calendar-list">${rows}</div>
+        ${renderSourceCaption("FRED economic series · release cadence estimates")}
       </div>
     </section>`;
 }
