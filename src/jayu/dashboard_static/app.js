@@ -218,6 +218,14 @@ async function api(path) {
   return response.json();
 }
 
+const RUN_CONTEXT_OPTIONAL_PAGES = new Set(["analysis", "portfolio-hub", "autotrading"]);
+const TERMINAL_RUN_STATUSES = new Set(["success", "failed", "error", "cancelled", "canceled"]);
+
+function isCompletedRun(run) {
+  const status = String(run?.status || "").toLowerCase();
+  return Boolean(run?.is_complete || run?.finished_at || TERMINAL_RUN_STATUSES.has(status));
+}
+
 async function loadRuns() {
   const payload = await api("/api/v1/runs");
   state.runs = payload.runs || [];
@@ -231,7 +239,10 @@ async function loadRuns() {
         )
         .join("")
     : '<option value="latest">완료된 실행 없음</option>';
-  if (state.runId === "latest" && state.runs[0]) state.runId = state.runs[0].run_id;
+  if (state.runId === "latest" && state.runs[0]) {
+    const defaultRun = state.runs.find(isCompletedRun) || state.runs[0];
+    state.runId = defaultRun.run_id;
+  }
   els.runSelector.value = state.runId;
 }
 
@@ -240,8 +251,19 @@ async function loadPage() {
   try {
     if (!state.runs.length) await loadRuns();
     const run = encodeURIComponent(state.runId);
-    state.decision = await api(`/api/v1/decision?run_id=${run}`);
-    state.overview = await api(`/api/v1/overview?run_id=${run}`);
+    if (RUN_CONTEXT_OPTIONAL_PAGES.has(state.page)) {
+      try {
+        state.decision = await api(`/api/v1/decision?run_id=${run}`);
+        state.overview = await api(`/api/v1/overview?run_id=${run}`);
+      } catch (err) {
+        console.warn("Run context is unavailable; rendering standalone page", err);
+        state.decision = state.decision || null;
+        state.overview = state.overview || null;
+      }
+    } else {
+      state.decision = await api(`/api/v1/decision?run_id=${run}`);
+      state.overview = await api(`/api/v1/overview?run_id=${run}`);
+    }
     if (!state.portfolioHub) {
       try {
         state.portfolioHub = await api("/api/v1/portfolio-hub");
@@ -376,7 +398,7 @@ const PAGE_DATA_SOURCES = {
   "toss-account": ["Toss Open API GET", "accounts", "holdings", "exchange-rate", "portfolio_mapping.json"],
   toss: ["Toss Open API GET", "prices", "stocks", "warnings", "market calendar"],
   "api-monitoring": ["provider audit", "events.jsonl", "cache directories", "latest run artifacts"],
-  analysis: ["Yahoo Finance", "FRED", "TradingView scanner", "Toss Open API", "run artifacts"],
+  analysis: ["Yahoo Finance", "FRED", "TradingView scanner", "TradingView news-mediator", "Toss Open API", "run artifacts"],
 };
 
 const METRIC_DATA_SOURCE_BY_PAGE = {
@@ -3427,6 +3449,7 @@ const _volume = (v) => {
 };
 const _signalToneColor = (tone) => tone === "buy" ? "#16a34a" : tone === "sell" ? "#dc2626" : "#64748b";
 const _statusForAction = (action) => action === "buy" ? "success" : action === "sell" ? "failed" : "warning";
+const _statusForTone = (tone) => tone === "buy" ? "success" : tone === "sell" ? "failed" : tone === "warning" ? "warning" : "not-evaluated";
 
 // ── SVG helpers ────────────────────────────────────────────────────────────
 function _svgScale(vals, h, pad = 0.08) {
@@ -3542,6 +3565,114 @@ function _renderTradingViewDetailsPanel(details, { compact = false } = {}) {
           옵션성 지표: OI ${_volume(derivatives.open_interest)} · IV ${_pct(derivatives.iv)} · Δ ${_score(derivatives.delta)} · Θ ${_score(derivatives.theta)} · Theo ${_$(derivatives.theo_price)}
           ${renderSourceLabel("TradingView scanner right-details derivative fields")}
         </div>` : ""}`}
+      </div>
+    </section>`;
+}
+
+function _renderTradingViewNewsFlow(newsFlow, { compact = false } = {}) {
+  const source = "TradingView news-mediator news-flow";
+  if (!newsFlow || !newsFlow.status) return "";
+  if (newsFlow.status === "unavailable") {
+    return newsFlow.error ? `
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header"><div><h2>TradingView 뉴스 플로우</h2><p>${escapeHtml(newsFlow.error)}</p></div></div>
+        <div class="panel-body">${renderSourceCaption(source)}</div>
+      </section>` : "";
+  }
+
+  const items = Array.isArray(newsFlow.items) ? newsFlow.items : [];
+  const related = Array.isArray(newsFlow.related_symbols) ? newsFlow.related_symbols : [];
+  const visibleItems = items.slice(0, compact ? 4 : 8);
+  const visibleRelated = related.slice(0, compact ? 8 : 12);
+  const context = newsFlow.news_context || {};
+  const themes = Array.isArray(context.theme_counts) ? context.theme_counts : [];
+  const dominantTheme = context.dominant_theme || themes[0] || {};
+  const notes = Array.isArray(context.context_notes) ? context.context_notes : [];
+  const providerCounts = newsFlow.provider_counts || {};
+  const providers = Object.entries(providerCounts)
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+    .slice(0, 3)
+    .map(([name, count]) => `${escapeHtml(name)} ${escapeHtml(count)}`);
+  const themeToneClass = (tone) => ({
+    buy: "is-buy",
+    sell: "is-sell",
+    warning: "is-warning",
+  }[tone] || "is-neutral");
+  const themeSymbols = (theme) => Array.isArray(theme?.symbols) ? theme.symbols.filter(Boolean).slice(0, 4).join(" · ") : "";
+  const contextHtml = themes.length || notes.length ? `
+    <section class="tv-news-context">
+      <div class="tv-news-dominant ${themeToneClass(dominantTheme.tone)}">
+        <span>주요 뉴스 맥락</span>
+        <strong>${escapeHtml(dominantTheme.label || "테마 미분류")}</strong>
+        <small>${escapeHtml(themeSymbols(dominantTheme) || "연관 심볼 없음")} · ${escapeHtml(dominantTheme.mention_count ?? 0)}회</small>
+        ${renderSourceLabel(context.source || "TradingView news-mediator relatedSymbols · derived role map")}
+      </div>
+      <div class="tv-news-theme-list">
+        ${themes.slice(0, compact ? 4 : 6).map((theme) => `
+          <span class="tv-news-theme ${themeToneClass(theme.tone)}" title="${escapeHtml(theme.description || "")}">
+            <strong>${escapeHtml(theme.label || "-")}</strong>
+            <small>${escapeHtml(theme.mention_count ?? 0)}회 · ${escapeHtml(theme.symbol_count ?? 0)}종목</small>
+          </span>`).join("")}
+      </div>
+      ${notes.length ? `
+        <div class="tv-news-context-notes">
+          ${notes.map((note) => `<span class="status-badge status-${_statusForTone(note.tone)}">${escapeHtml(note.text || "")}</span>`).join("")}
+        </div>` : ""}
+    </section>` : "";
+  const relatedHtml = visibleRelated.length ? `
+    <div class="tv-related-symbols">
+      ${visibleRelated.map((row) => `
+        <span class="tv-related-symbol" title="${escapeHtml(row.latest_title || "")}">
+          <strong>${escapeHtml(row.symbol || "-")}</strong>
+          <small>${escapeHtml(row.count ?? 0)}건 · ${escapeHtml(row.role?.label || "기타")}</small>
+        </span>`).join("")}
+    </div>
+    ${renderSourceCaption("TradingView news-mediator relatedSymbols")}` : `
+    <p style="margin:0;color:var(--muted);font-size:12px">연관 심볼 데이터가 없습니다.</p>
+    ${renderSourceCaption("TradingView news-mediator relatedSymbols")}`;
+
+  const newsHtml = visibleItems.length ? visibleItems.map((item) => {
+    const provider = item.provider || {};
+    const relatedSymbols = Array.isArray(item.related_symbols) ? item.related_symbols.filter((row) => !row.is_primary).slice(0, 7) : [];
+    const relatedLine = relatedSymbols.length ? `
+      <div class="tv-news-related-line">
+        ${relatedSymbols.map((row) => `<span title="${escapeHtml(row.role?.label || "")}">${escapeHtml(row.symbol || "-")}</span>`).join("")}
+      </div>` : "";
+    return `
+      <article class="analysis-news-item tv-news-item">
+        <div class="analysis-news-meta">
+          <span class="analysis-badge-neu">urgency ${escapeHtml(item.urgency ?? "-")}</span>
+          <span class="analysis-news-source">${escapeHtml(provider.name || provider.id || "-")}</span>
+          ${renderSourceLabel(source)}
+          <span class="analysis-news-date">${formatDate(item.published_at)}</span>
+        </div>
+        <a class="analysis-news-title" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener">${escapeHtml(item.title || "제목 없음")}</a>
+        ${relatedLine}
+      </article>`;
+  }).join("") : `<p style="color:var(--muted);padding:10px 0">TradingView 뉴스 플로우 항목이 없습니다.</p>`;
+
+  return `
+    <section class="panel tv-news-panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>TradingView 뉴스 플로우</h2>
+          <p>${escapeHtml(newsFlow.symbol || "-")} · 최신 ${formatDate(newsFlow.latest_published_at)}${providers.length ? ` · ${providers.join(" · ")}` : ""}</p>
+        </div>
+        <span class="status-badge status-${items.length ? "success" : "not-evaluated"}">${escapeHtml(items.length)}건</span>
+      </div>
+      <div class="panel-body">
+        ${contextHtml}
+        <div class="tv-news-grid">
+          <section>
+            <h3>동반 언급 심볼</h3>
+            ${relatedHtml}
+          </section>
+          <section>
+            <h3>최근 뉴스</h3>
+            <div class="analysis-news-list">${newsHtml}</div>
+            ${renderSourceCaption(source)}
+          </section>
+        </div>
       </div>
     </section>`;
 }
@@ -3716,6 +3847,7 @@ function renderAnalysisBasic(container, ticker, macro, period) {
   const news = data.news || [];
   const toss = data.toss || {};
   const tvDetails = data.tradingview_details || {};
+  const tvNews = data.tradingview_news || {};
 
   const macroLabel = MACRO_OPTIONS.find(m => m.id === macro)?.label || macro;
 
@@ -3747,11 +3879,11 @@ function renderAnalysisBasic(container, ticker, macro, period) {
           </div>
         </div>
       </div>
-      ${renderSourceCaption("Yahoo Finance OHLCV/news 쨌 FRED series 쨌 TradingView right-details 쨌 Toss holdings")}
+      ${renderSourceCaption("Yahoo Finance OHLCV/news · FRED series · TradingView right-details · TradingView news-mediator · Toss holdings")}
     </section>`;
 
   if (!data.stock) {
-    container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV/news", "FRED series", "TradingView right-details", "Toss holdings"]) + `<div class="analysis-loading">종목, 지표, 기간을 선택 후 조회 버튼을 누르세요.</div>`;
+    container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV/news", "FRED series", "TradingView right-details", "TradingView news-mediator", "Toss holdings"]) + `<div class="analysis-loading">종목, 지표, 기간을 선택 후 조회 버튼을 누르세요.</div>`;
     return;
   }
 
@@ -3773,6 +3905,7 @@ function renderAnalysisBasic(container, ticker, macro, period) {
 
   const chartHtml = _renderDualAxisChart(stock.history || [], macroData.history || []);
   const tradingViewDetailsHtml = _renderTradingViewDetailsPanel(tvDetails);
+  const tradingViewNewsHtml = _renderTradingViewNewsFlow(tvNews);
 
   let tossHtml = "";
   if (toss.positions?.length) {
@@ -3803,7 +3936,7 @@ function renderAnalysisBasic(container, ticker, macro, period) {
     </section>`;
   }
 
-  container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV/news", "FRED series", "TradingView right-details", "Toss holdings"]) + `
+  container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV/news", "FRED series", "TradingView right-details", "TradingView news-mediator", "Toss holdings"]) + `
     <section class="metric-grid" style="margin-bottom:14px">
       <div class="metric-card">
         <span class="metric-label">현재가</span>
@@ -3844,6 +3977,7 @@ function renderAnalysisBasic(container, ticker, macro, period) {
       </div>` : ""}
     </section>
     ${tradingViewDetailsHtml}
+    ${tradingViewNewsHtml}
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header"><div><h2>가격 & ${macroLabel} 차트</h2></div></div>
       <div class="panel-body" style="padding:0 4px">${chartHtml}${renderSourceCaption("Yahoo Finance OHLCV · FRED series")}</div>
@@ -3883,11 +4017,11 @@ function renderAnalysisTechnical(container, ticker, period) {
           </div>
         </div>
       </div>
-      ${renderSourceCaption("Yahoo Finance OHLCV 쨌 TradingView scanner popup-technicals 쨌 TradingView right-details")}
+      ${renderSourceCaption("Yahoo Finance OHLCV · TradingView scanner popup-technicals · TradingView right-details · TradingView news-mediator")}
     </section>`;
 
   if (!data.records) {
-    container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV", "TradingView scanner popup-technicals", "TradingView right-details"]) + `<div class="analysis-loading">종목을 선택하고 조회 버튼을 누르세요.</div>`;
+    container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV", "TradingView scanner popup-technicals", "TradingView right-details", "TradingView news-mediator"]) + `<div class="analysis-loading">종목을 선택하고 조회 버튼을 누르세요.</div>`;
     return;
   }
 
@@ -3906,6 +4040,7 @@ function renderAnalysisTechnical(container, ticker, period) {
   const tvSignalLabel = (row) => escapeHtml(row?.recommendation?.label || "데이터 없음");
   const tvRows = Array.isArray(tv.timeframes) ? tv.timeframes : [];
   const tradingViewDetailsHtml = _renderTradingViewDetailsPanel(data.tradingview_details || {}, { compact: true });
+  const tradingViewNewsHtml = _renderTradingViewNewsFlow(data.tradingview_news || {}, { compact: true });
   const tvErrors = Array.isArray(tv.errors) ? tv.errors : [];
   const tvDetail = tvRows.find(row => row.timeframe === "1") || tvRows[tvRows.length - 1] || {};
   const tvOsc = tvDetail.oscillators || {};
@@ -4033,7 +4168,7 @@ function renderAnalysisTechnical(container, ticker, period) {
   const dates = recs.map(r => r.date);
   const chartHtml = _renderTechnicalCharts(recs, dates);
 
-  container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV", "TradingView scanner popup-technicals", "TradingView right-details"]) + `
+  container.innerHTML = controlPanel + renderDataSourceNote("analysis", ["Yahoo Finance OHLCV", "TradingView scanner popup-technicals", "TradingView right-details", "TradingView news-mediator"]) + `
     <section class="metric-grid" style="margin-bottom:14px">
       <div class="metric-card">
         <span class="metric-label">현재가</span>
@@ -4067,6 +4202,7 @@ function renderAnalysisTechnical(container, ticker, period) {
       </div>
     </section>
     ${tradingViewHtml}
+    ${tradingViewNewsHtml}
     ${tradingViewDetailsHtml}
     <section class="panel">
       <div class="panel-header"><div><h2>기술적 지표 차트</h2><p>가격·볼린저·EMA / MACD / RSI / 거래량</p></div></div>

@@ -41,6 +41,7 @@ DATA_FAILURE_CODES = {
     FailureCode.UNVERIFIED_PRICE_DATA.value,
     FailureCode.SIGNAL_PUBLICATION_INVALID.value,
 }
+TERMINAL_RUN_STATUSES = {"success", "failed", "error", "cancelled", "canceled"}
 
 PORTFOLIO_TYPE_ORDER = ("short_term", "swing", "long_term", "dividend")
 PORTFOLIO_TYPE_ALIASES = {
@@ -169,14 +170,18 @@ def list_dashboard_runs(paths: RuntimePaths, *, limit: int = 100) -> list[dict[s
         if not manifest:
             continue
         result = _mapping(manifest.get("result"))
+        status = str(manifest.get("status") or "unknown")
+        finished_at = manifest.get("finished_at")
+        is_complete = _is_completed_run({"status": status, "finished_at": finished_at})
         rows.append(
             {
                 "run_id": str(manifest.get("run_id") or run_dir.name),
                 "mode": str(result.get("mode") or manifest.get("execution_mode") or "unknown"),
-                "status": str(manifest.get("status") or "unknown"),
+                "status": status,
                 "failure_code": manifest.get("failure_code"),
                 "started_at": manifest.get("started_at"),
-                "finished_at": manifest.get("finished_at"),
+                "finished_at": finished_at,
+                "is_complete": is_complete,
                 "command": manifest.get("command"),
             }
         )
@@ -184,6 +189,18 @@ def list_dashboard_runs(paths: RuntimePaths, *, limit: int = 100) -> list[dict[s
         key=lambda item: str(item.get("finished_at") or item.get("started_at") or ""), reverse=True
     )
     return rows[:limit]
+
+
+def _is_completed_run(run: Mapping[str, Any]) -> bool:
+    status = str(run.get("status") or "").lower()
+    return bool(run.get("finished_at")) or status in TERMINAL_RUN_STATUSES
+
+
+def _select_latest_completed_run_id(runs: Sequence[Mapping[str, Any]]) -> str:
+    for run in runs:
+        if _is_completed_run(run):
+            return str(run.get("run_id"))
+    return str(runs[0].get("run_id"))
 
 
 def build_dashboard_overview(
@@ -316,6 +333,11 @@ def build_dashboard_decision(
         if isinstance(item, Mapping)
     ]
     primary_action = actions[0] if actions else _default_action(str(decision.get("overall")))
+    blockers = [
+        reason
+        for reason in reasons
+        if str(reason.get("severity") or "blocking") in {"blocking", "blocked"}
+    ]
     affected_tickers = sorted(
         {
             str(ticker)
@@ -332,7 +354,7 @@ def build_dashboard_decision(
         "overall": decision.get("overall", "not_evaluated"),
         "headline": decision.get("headline"),
         "status_rank": _decision_rank(str(decision.get("overall"))),
-        "top_blockers": [_decision_blocker(reason) for reason in reasons],
+        "top_blockers": [_decision_blocker(reason) for reason in blockers],
         "recommended_next_action": primary_action,
         "recommended_actions": actions,
         "affected_tickers": affected_tickers,
@@ -2177,7 +2199,7 @@ def _resolve_run_dir(paths: RuntimePaths, run_id: str) -> Path | None:
     runs = list_dashboard_runs(paths)
     if not runs:
         return None
-    selected = runs[0]["run_id"] if run_id == "latest" else run_id
+    selected = _select_latest_completed_run_id(runs) if run_id == "latest" else run_id
     candidate = (paths.runs_dir / selected).resolve()
     root = paths.runs_dir.resolve()
     if candidate.parent != root or not candidate.is_dir():
@@ -4152,11 +4174,13 @@ def _overview_reasons(
     for item in _sequence(verdict.get("reasons")):
         if isinstance(item, Mapping):
             code = str(item.get("code") or "UNKNOWN")
+            component = str(item.get("component") or "safety")
             reasons.append(
                 _reason(
                     code,
-                    component=str(item.get("component") or "safety"),
+                    component=component,
                     message=str(item.get("message") or "") or None,
+                    severity=_reason_severity(code, component, manifest),
                 )
             )
     failure_code = manifest.get("failure_code")
@@ -4204,6 +4228,14 @@ def _overview_reasons(
     return sorted(unique.values(), key=lambda item: priority.get(item["component"], 9))
 
 
+def _reason_severity(code: str, component: str, manifest: Mapping[str, Any]) -> str:
+    if component == "survivorship":
+        audit = _mapping(manifest.get("survivorship_audit"))
+        if audit.get("valid") is True and str(code).startswith("SURVIVORSHIP_BIAS_RISK"):
+            return "warning"
+    return "blocking"
+
+
 def _reason(
     code: str,
     *,
@@ -4211,6 +4243,7 @@ def _reason(
     message: str | None = None,
     affected_tickers: Any = None,
     count: Any = None,
+    severity: str = "blocking",
 ) -> dict[str, Any]:
     catalog_message, remediation = FAILURE_CATALOG.get(
         code,
@@ -4219,7 +4252,7 @@ def _reason(
     return {
         "code": code,
         "component": component,
-        "severity": "blocking",
+        "severity": severity,
         "message": message or catalog_message,
         "remediation": remediation,
         "affected_tickers": affected_tickers or [],
@@ -4228,9 +4261,16 @@ def _reason(
 
 
 def _headline(status: str, reasons: Sequence[Mapping[str, Any]], mode: str) -> str:
-    if reasons:
-        first = reasons[0]
+    blockers = [
+        reason
+        for reason in reasons
+        if str(reason.get("severity") or "blocking") in {"blocking", "blocked"}
+    ]
+    if blockers:
+        first = blockers[0]
         return f"{first.get('message')} 현재 {mode} 실행은 운영 검토가 필요합니다."
+    if status == "warning":
+        return "필수 게이트는 통과했지만 검토 경고가 있습니다."
     if status == "success":
         return "필수 검증을 통과했습니다. 알림 전 최종 리포트를 확인하세요."
     if status == "validating":
@@ -5251,6 +5291,7 @@ def build_dashboard_analysis(
         "news": news_data,
         "toss": toss_portfolio,
         "tradingview_details": build_tradingview_symbol_details(ticker),
+        "tradingview_news": build_tradingview_news_flow(ticker),
     }
 
 
@@ -5437,10 +5478,15 @@ TRADINGVIEW_TECHNICAL_FIELDS = (
 )
 
 TRADINGVIEW_TIMEFRAMES = (
+    ("1M", "1개월", "1M"),
+    ("1W", "1주", "1W"),
     ("1D", "1일", ""),
     ("240", "4시간", "240"),
     ("120", "2시간", "120"),
     ("60", "1시간", "60"),
+    ("30", "30분", "30"),
+    ("15", "15분", "15"),
+    ("5", "5분", "5"),
     ("1", "1분", "1"),
 )
 
@@ -5908,6 +5954,419 @@ def build_tradingview_symbol_details(ticker: str = "SOXL") -> dict[str, Any]:
     }
 
 
+def _tradingview_news_url(story_path: Any) -> str | None:
+    if not story_path:
+        return None
+    path = str(story_path)
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+    if path.startswith("/"):
+        return f"https://www.tradingview.com{path}"
+    return f"https://www.tradingview.com/news/{path.lstrip('/')}"
+
+
+def _timestamp_to_iso(value: Any) -> str | None:
+    try:
+        return datetime.fromtimestamp(float(value), UTC).isoformat()
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+TRADINGVIEW_RELATED_SYMBOL_ROLES: dict[str, dict[str, Any]] = {
+    "semiconductor": {
+        "label": "반도체 직접 테마",
+        "tone": "buy",
+        "priority": 10,
+        "description": "SOXL의 기초 섹터와 직접 맞물리는 반도체/AI/DRAM 심볼입니다.",
+        "symbols": {
+            "CBOE:DRAM",
+            "NASDAQ:SMH",
+            "NASDAQ:SOXX",
+            "NASDAQ:NVDA",
+            "NASDAQ:AMD",
+            "NASDAQ:AVGO",
+        },
+    },
+    "broad_market": {
+        "label": "미국 주식 베타",
+        "tone": "neutral",
+        "priority": 30,
+        "description": "S&P 500, Nasdaq, Russell 등 시장 전체 자금 흐름을 반영합니다.",
+        "symbols": {
+            "AMEX:SPY",
+            "AMEX:VOO",
+            "AMEX:IVV",
+            "AMEX:SPYM",
+            "NASDAQ:QQQ",
+            "NASDAQ:QQQM",
+            "AMEX:IWM",
+        },
+    },
+    "leveraged_peer": {
+        "label": "레버리지/고베타 동조",
+        "tone": "warning",
+        "priority": 20,
+        "description": "레버리지 ETF나 고베타 상품과 함께 언급되어 변동성 민감도가 큽니다.",
+        "symbols": {
+            "AMEX:SOXL",
+            "NASDAQ:TQQQ",
+            "NASDAQ:NVDL",
+            "NASDAQ:TSLL",
+            "AMEX:SPXL",
+        },
+    },
+    "defensive_rotation": {
+        "label": "방어/금리 회전",
+        "tone": "sell",
+        "priority": 25,
+        "description": "채권, 현금성 ETF, 금 등 방어적 자산으로의 회전을 시사할 수 있습니다.",
+        "symbols": {
+            "AMEX:BIL",
+            "AMEX:LQD",
+            "AMEX:SGOV",
+            "NASDAQ:BND",
+            "NASDAQ:TLT",
+            "CBOE:JMUB",
+            "AMEX:GLD",
+            "AMEX:SLV",
+        },
+    },
+    "crypto_alternative": {
+        "label": "대체 위험자산",
+        "tone": "warning",
+        "priority": 50,
+        "description": "비트코인/대체자산 ETF가 함께 언급된 위험선호 맥락입니다.",
+        "symbols": {
+            "NASDAQ:IBIT",
+            "AMEX:BITO",
+            "NASDAQ:BITB",
+        },
+    },
+    "international_flow": {
+        "label": "해외/신흥국 자금",
+        "tone": "neutral",
+        "priority": 60,
+        "description": "미국 외 지역 ETF와 함께 언급되어 글로벌 자금 이동을 보여줍니다.",
+        "symbols": {
+            "AMEX:EWZ",
+            "AMEX:IEMG",
+            "AMEX:SCHF",
+            "AMEX:VEA",
+            "NASDAQ:VXUS",
+            "CBOE:BBEU",
+        },
+    },
+    "thematic_growth": {
+        "label": "성장/테마 자금",
+        "tone": "buy",
+        "priority": 40,
+        "description": "테마형 성장 ETF와 동반 언급된 위험선호 흐름입니다.",
+        "symbols": {
+            "CBOE:ARKK",
+            "CBOE:COWZ",
+        },
+    },
+}
+
+
+def _tradingview_related_symbol_role(
+    related_symbol: str,
+    *,
+    primary_symbol: str,
+) -> dict[str, Any]:
+    if related_symbol == primary_symbol:
+        return {
+            "id": "primary",
+            "label": "조회 종목",
+            "tone": "neutral",
+            "priority": 0,
+            "description": "현재 분석 중인 기본 심볼입니다.",
+        }
+
+    for role_id, role in TRADINGVIEW_RELATED_SYMBOL_ROLES.items():
+        if related_symbol in role["symbols"]:
+            return {
+                "id": role_id,
+                "label": str(role["label"]),
+                "tone": str(role["tone"]),
+                "priority": int(role["priority"]),
+                "description": str(role["description"]),
+            }
+
+    return {
+        "id": "other",
+        "label": "기타 동반 심볼",
+        "tone": "neutral",
+        "priority": 99,
+        "description": "뉴스 기사에서 함께 언급된 기타 심볼입니다.",
+    }
+
+
+def _tradingview_news_context(
+    *,
+    primary_symbol: str,
+    primary_mentions: Mapping[str, Any] | None,
+    related_symbols: Sequence[Mapping[str, Any]],
+    item_count: int,
+) -> dict[str, Any]:
+    theme_by_id: dict[str, dict[str, Any]] = {}
+    for related in related_symbols:
+        role = _mapping(related.get("role"))
+        role_id = str(role.get("id") or "other")
+        theme = theme_by_id.setdefault(
+            role_id,
+            {
+                "id": role_id,
+                "label": role.get("label") or "기타 동반 심볼",
+                "tone": role.get("tone") or "neutral",
+                "priority": int(role.get("priority") or 99),
+                "description": role.get("description") or "",
+                "mention_count": 0,
+                "symbol_count": 0,
+                "symbols": [],
+            },
+        )
+        count = int(related.get("count") or 0)
+        theme["mention_count"] = int(theme["mention_count"]) + count
+        theme["symbol_count"] = int(theme["symbol_count"]) + 1
+        symbols = theme["symbols"]
+        if isinstance(symbols, list) and len(symbols) < 6:
+            symbols.append(related.get("symbol"))
+
+    theme_counts = sorted(
+        theme_by_id.values(),
+        key=lambda item: (
+            -int(item.get("mention_count") or 0),
+            int(item.get("priority") or 99),
+            str(item.get("label") or ""),
+        ),
+    )
+    theme_lookup = {str(item.get("id")): item for item in theme_counts}
+    dominant = theme_counts[0] if theme_counts else None
+    primary_count = int(primary_mentions.get("count") or 0) if primary_mentions else 0
+
+    notes: list[dict[str, str]] = []
+    if dominant:
+        notes.append(
+            {
+                "tone": str(dominant.get("tone") or "neutral"),
+                "text": (
+                    f"{dominant.get('label')} 심볼이 {dominant.get('mention_count')}회로 "
+                    "가장 자주 동반 언급됩니다."
+                ),
+            }
+        )
+
+    if "semiconductor" in theme_lookup:
+        notes.append(
+            {
+                "tone": "buy",
+                "text": "SMH/DRAM/NVDA 계열 동반 언급은 SOXL의 직접 섹터 뉴스 민감도를 높입니다.",
+            }
+        )
+
+    if "broad_market" in theme_lookup and "semiconductor" in theme_lookup:
+        notes.append(
+            {
+                "tone": "neutral",
+                "text": "시장 대표 ETF와 반도체 심볼이 함께 잡혀 시장 베타와 섹터 모멘텀을 같이 봐야 합니다.",
+            }
+        )
+    elif "broad_market" in theme_lookup:
+        notes.append(
+            {
+                "tone": "neutral",
+                "text": "SPY/QQQ/VOO 계열 동반 언급은 개별 섹터보다 ETF 자금 흐름 뉴스 성격이 강합니다.",
+            }
+        )
+
+    if "leveraged_peer" in theme_lookup:
+        notes.append(
+            {
+                "tone": "warning",
+                "text": "TQQQ/TSLL/NVDL 같은 고베타 상품 동반 언급은 변동성 확대 구간일 수 있습니다.",
+            }
+        )
+
+    if "defensive_rotation" in theme_lookup:
+        notes.append(
+            {
+                "tone": "sell",
+                "text": "채권·현금성·금 ETF가 함께 나오면 위험자산 선호 약화 가능성을 같이 점검하세요.",
+            }
+        )
+
+    if item_count and primary_count >= item_count:
+        notes.append(
+            {
+                "tone": "neutral",
+                "text": f"{primary_symbol}가 반환 뉴스 {item_count}건 모두에 직접 포함되어 관련성은 높습니다.",
+            }
+        )
+
+    return {
+        "dominant_theme": dominant,
+        "theme_counts": theme_counts,
+        "context_notes": notes[:6],
+        "related_symbol_count": len(related_symbols),
+        "primary_mention_rate": round(primary_count / item_count, 4) if item_count else None,
+        "source": "TradingView news-mediator relatedSymbols · derived role map",
+    }
+
+
+def build_tradingview_news_flow(ticker: str = "SOXL", limit: int = 12) -> dict[str, Any]:
+    """Return TradingView news-flow items plus related symbol frequency."""
+    import requests
+
+    symbol = _tradingview_symbol(ticker)
+    try:
+        response = requests.get(
+            "https://news-mediator.tradingview.com/public/news-flow/v2/news",
+            params=[
+                ("filter", "lang:en"),
+                ("filter", f"symbol:{symbol}"),
+                ("client", "landing"),
+                ("streaming", "false"),
+                ("user_prostatus", "non_pro"),
+            ],
+            headers=_tradingview_headers(),
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "source": "TradingView news-mediator",
+            "symbol": symbol,
+            "error": str(exc),
+            "items": [],
+            "related_symbols": [],
+            "news_context": {
+                "dominant_theme": None,
+                "theme_counts": [],
+                "context_notes": [],
+                "related_symbol_count": 0,
+                "primary_mention_rate": None,
+                "source": "TradingView news-mediator relatedSymbols · derived role map",
+            },
+        }
+
+    raw_items = payload.get("items") if isinstance(payload, Mapping) else None
+    items: list[dict[str, Any]] = []
+    related_by_symbol: dict[str, dict[str, Any]] = {}
+    provider_counts: dict[str, int] = {}
+    urgency_counts: dict[str, int] = {}
+
+    raw_news_items = list(_sequence(raw_items))[: max(0, limit)]
+    for raw in raw_news_items:
+        if not isinstance(raw, Mapping):
+            continue
+        provider = raw.get("provider") if isinstance(raw.get("provider"), Mapping) else {}
+        provider_name = str(provider.get("name") or provider.get("id") or "").strip() or None
+        if provider_name:
+            provider_counts[provider_name] = provider_counts.get(provider_name, 0) + 1
+
+        urgency = raw.get("urgency")
+        urgency_key = str(urgency) if urgency is not None else "unknown"
+        urgency_counts[urgency_key] = urgency_counts.get(urgency_key, 0) + 1
+
+        related_symbols: list[dict[str, Any]] = []
+        published_at = _timestamp_to_iso(raw.get("published"))
+        for related in _sequence(raw.get("relatedSymbols")):
+            if not isinstance(related, Mapping):
+                continue
+            related_symbol = str(related.get("symbol") or "").strip().upper()
+            if not related_symbol:
+                continue
+            role = _tradingview_related_symbol_role(
+                related_symbol,
+                primary_symbol=symbol,
+            )
+            related_item = {
+                "symbol": related_symbol,
+                "logoid": related.get("logoid"),
+                "is_primary": related_symbol == symbol,
+                "role": role,
+            }
+            related_symbols.append(related_item)
+
+            bucket = related_by_symbol.setdefault(
+                related_symbol,
+                {
+                    "symbol": related_symbol,
+                    "logoid": related.get("logoid"),
+                    "count": 0,
+                    "is_primary": related_symbol == symbol,
+                    "role": role,
+                    "latest_title": None,
+                    "latest_published_at": None,
+                },
+            )
+            bucket["count"] = int(bucket.get("count") or 0) + 1
+            if not bucket.get("latest_published_at") or (
+                published_at and published_at > str(bucket.get("latest_published_at"))
+            ):
+                bucket["latest_title"] = raw.get("title")
+                bucket["latest_published_at"] = published_at
+                if related.get("logoid"):
+                    bucket["logoid"] = related.get("logoid")
+
+        items.append(
+            {
+                "id": raw.get("id"),
+                "title": raw.get("title"),
+                "published": raw.get("published"),
+                "published_at": published_at,
+                "urgency": urgency,
+                "provider": {
+                    "id": provider.get("id"),
+                    "name": provider_name,
+                    "url": provider.get("url"),
+                    "logo_id": provider.get("logo_id"),
+                },
+                "url": _tradingview_news_url(raw.get("storyPath")),
+                "story_path": raw.get("storyPath"),
+                "related_symbols": related_symbols,
+            }
+        )
+
+    related_symbols = [
+        item
+        for item in related_by_symbol.values()
+        if not bool(item.get("is_primary"))
+    ]
+    related_symbols.sort(
+        key=lambda item: (-int(item.get("count") or 0), str(item.get("symbol") or ""))
+    )
+    primary_mentions = related_by_symbol.get(symbol)
+    latest_published_at = max(
+        (item["published_at"] for item in items if item.get("published_at")),
+        default=None,
+    )
+    news_context = _tradingview_news_context(
+        primary_symbol=symbol,
+        primary_mentions=primary_mentions,
+        related_symbols=related_symbols,
+        item_count=len(items),
+    )
+
+    return {
+        "status": "ok" if items else "empty",
+        "source": "TradingView news-mediator",
+        "symbol": symbol,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "latest_published_at": latest_published_at,
+        "item_count": len(items),
+        "primary_mentions": primary_mentions,
+        "provider_counts": provider_counts,
+        "urgency_counts": urgency_counts,
+        "news_context": news_context,
+        "related_symbols": related_symbols[:16],
+        "items": items,
+    }
+
+
 def build_analysis_technical(
     ticker: str = "SOXL",
     period: str = "1y",
@@ -6003,6 +6462,7 @@ def build_analysis_technical(
             "period": period,
             "tradingview": build_tradingview_technical_summary(ticker),
             "tradingview_details": build_tradingview_symbol_details(ticker),
+            "tradingview_news": build_tradingview_news_flow(ticker),
             "latest_price": round(latest_price, 2),
             "change_pct": round(change_pct, 2),
             "latest_rsi": rsi14[latest],

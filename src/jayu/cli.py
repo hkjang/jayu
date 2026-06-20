@@ -340,7 +340,10 @@ def _best_fitness(best_all: dict[str, Any]) -> float | None:
             if not isinstance(regime_data, dict):
                 continue
             for key in ("val_metrics", "metrics"):
-                value = regime_data.get(key, {}).get("fitness")
+                metrics = regime_data.get(key)
+                if not isinstance(metrics, dict):
+                    continue
+                value = metrics.get("fitness")
                 if isinstance(value, (int, float)):
                     values.append(float(value))
     return max(values) if values else None

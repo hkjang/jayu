@@ -89,6 +89,22 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+KNOWN_REGIMES = {"bull", "bear", "sideways"}
+
+
+def _normalize_signal_regime(value: object) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized:
+            return normalized
+    return "unknown"
+
+
+def _strategy_regime_key(value: object) -> str | None:
+    regime = _normalize_signal_regime(value)
+    return regime if regime in KNOWN_REGIMES else None
+
+
 # ── 설정 ──────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_SETTINGS = Settings()
@@ -946,7 +962,8 @@ def run(
         print(f"\n  [{t}]")
         sig_data = signals.get(t, {})
         sig = sig_data.get("signal", "?")
-        today_reg = sig_data.get("regime", "?")
+        today_reg = _normalize_signal_regime(sig_data.get("regime"))
+        strategy_regime = _strategy_regime_key(today_reg)
         print(f"   오늘의 국면: {today_reg.upper()} | 신호: {sig}")
 
         for regime in ["bull", "bear", "sideways"]:
@@ -956,7 +973,7 @@ def run(
             m = data.get("val_metrics") or data.get("metrics", {})
             p = data["params"]
             tag = "[검증]" if data.get("val_metrics") else "[학습]"
-            star = "⭐" if regime == today_reg else "  "
+            star = "⭐" if regime == strategy_regime else "  "
             print(
                 f"   {star} [{regime.upper()}] {tag} | 수익 {m.get('total_return', '?')}% | Sharpe {m.get('sharpe', '?')} | Sortino {m.get('sortino', '?')}"
             )
@@ -968,7 +985,7 @@ def run(
             )
 
         # 오늘 활성 국면 정보로 카카오 전송용 요약 작성
-        active_data = best_all.get(t, {}).get(today_reg, {})
+        active_data = best_all.get(t, {}).get(strategy_regime, {}) if strategy_regime else {}
         if active_data:
             m = active_data.get("val_metrics") or active_data.get("metrics", {})
             kakao_lines.append(
@@ -981,9 +998,10 @@ def run(
     print("  🎯 오늘의 진입 신호")
     print(f"{'=' * 68}")
     for t, sig_data in signals.items():
+        signal_regime = _normalize_signal_regime(sig_data.get("regime"))
         print(
             f"  [{t}] {sig_data.get('signal', '?')} "
-            f"(국면: {sig_data.get('regime', '?').upper()}) | "
+            f"(국면: {signal_regime.upper()}) | "
             f"현재가: {format_market_price(t, sig_data.get('price'))}"
         )
         for cond_name, cond_val in sig_data.get("conditions", {}).items():

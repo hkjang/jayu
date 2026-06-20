@@ -807,6 +807,97 @@ def test_dashboard_lists_runs_and_rejects_path_traversal(tmp_path: Path):
         build_dashboard_overview(paths, run_id="../state")
 
 
+def test_dashboard_latest_prefers_completed_run_over_stale_running(tmp_path: Path):
+    paths = _paths(tmp_path)
+    completed_dir = paths.runs_dir / "run-completed"
+    completed_dir.mkdir()
+    atomic_write_json(
+        completed_dir / "manifest.json",
+        {
+            "run_id": "run-completed",
+            "command": "simulate",
+            "execution_mode": "research",
+            "status": "success",
+            "started_at": "2026-06-21T07:24:00+09:00",
+            "finished_at": "2026-06-21T07:24:36+09:00",
+            "result": {"mode": "research"},
+        },
+    )
+    running_dir = paths.runs_dir / "run-running"
+    running_dir.mkdir()
+    atomic_write_json(
+        running_dir / "manifest.json",
+        {
+            "run_id": "run-running",
+            "command": "simulate",
+            "execution_mode": "research",
+            "status": "running",
+            "started_at": "2026-06-21T07:25:01+09:00",
+            "finished_at": None,
+            "result": {"mode": "research"},
+        },
+    )
+
+    runs = list_dashboard_runs(paths)
+    assert runs[0]["run_id"] == "run-running"
+    assert runs[0]["is_complete"] is False
+    assert runs[1]["is_complete"] is True
+
+    report = build_dashboard_overview(paths, run_id="latest")
+    assert report["run"]["run_id"] == "run-completed"
+
+
+def test_dashboard_survivorship_exception_warning_is_not_blocker(tmp_path: Path):
+    paths = _paths(tmp_path)
+    run_dir = paths.runs_dir / "run-survivorship-review"
+    run_dir.mkdir()
+    atomic_write_json(
+        run_dir / "manifest.json",
+        {
+            "run_id": "run-survivorship-review",
+            "command": "simulate",
+            "execution_mode": "research",
+            "status": "success",
+            "started_at": "2026-06-21T07:24:00+09:00",
+            "finished_at": "2026-06-21T07:24:36+09:00",
+            "survivorship_audit": {
+                "policy": "strict",
+                "valid": True,
+                "universe_source": "manual_current_universe",
+                "universe_as_of": "2026-06-21",
+                "includes_delisted": False,
+                "exception_reason": "local research exception",
+                "warnings": [
+                    "SURVIVORSHIP_BIAS_RISK: manual_current_universe is not point-in-time membership"
+                ],
+            },
+            "result": {"mode": "research"},
+        },
+    )
+    atomic_write_json(
+        run_dir / "safety_verdict.json",
+        {
+            "overall": "review",
+            "reasons": [
+                {
+                    "component": "survivorship",
+                    "code": "SURVIVORSHIP_BIAS_RISK",
+                    "message": "SURVIVORSHIP_BIAS_RISK: manual_current_universe is not point-in-time membership",
+                }
+            ],
+        },
+    )
+
+    overview = build_dashboard_overview(paths, run_id="latest")
+    decision = build_dashboard_decision(paths, run_id="latest")
+
+    assert overview["gates"]["survivorship"]["status"] == "pass"
+    assert overview["decision"]["overall"] == "warning"
+    assert overview["decision"]["top_reasons"][0]["severity"] == "warning"
+    assert "SURVIVORSHIP_BIAS_RISK" not in overview["decision"]["headline"]
+    assert decision["top_blockers"] == []
+
+
 def test_dashboard_static_assets_are_bundled_without_order_actions():
     static_dir = dashboard_static_dir()
     assert (static_dir / "index.html").exists()
@@ -837,6 +928,9 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "renderDataSourceNote" in content
     assert "renderSourceLabel" in content
     assert "renderSourceCaption" in content
+    assert "RUN_CONTEXT_OPTIONAL_PAGES" in content
+    assert "function isCompletedRun" in content
+    assert "state.runs.find(isCompletedRun)" in content
     assert "renderMetricDictionaryStrip" in content
     assert "renderTodayBoard" in content
     assert "renderHubSignalConflictPanel" in content
@@ -853,6 +947,8 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "portfolio_type_overrides.json" in content
     assert "data-source-inline" in css
     assert "data-source-caption" in css
+    assert "tv-news-context" in css
+    assert "tv-related-symbol" in css
     assert "metric-help-panel" in css
     assert "metric-help-grid" in css
     assert "today-board" in css
@@ -865,6 +961,10 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "Toss status config" in content
     assert "generated markdown slips" in content
     assert "TradingView scanner popup-technicals" in content
+    assert "TradingView 뉴스 플로우" in content
+    assert "동반 언급 심볼" in content
+    assert "주요 뉴스 맥락" in content
+    assert "TradingView news-mediator relatedSymbols · derived role map" in content
     assert "Yahoo Finance OHLCV · derived RSI" in content
     assert "Yahoo Finance adjusted close series" in content
     assert "Toss /api/v1/stocks/{symbol}/warnings" in content
@@ -1198,6 +1298,7 @@ def test_build_dashboard_analysis_structure(tmp_path, monkeypatch):
     # Toss portfolio is empty dict (no credentials)
     assert isinstance(result["toss"], dict)
     assert result["tradingview_details"]["status"] == "unavailable"
+    assert result["tradingview_news"]["status"] == "unavailable"
 
 
 def test_build_dashboard_analysis_bad_ticker(tmp_path, monkeypatch):
@@ -1250,6 +1351,8 @@ def test_build_analysis_portfolio_stats_explains_failed_runs(tmp_path):
 def test_tradingview_technical_summary_maps_scores(monkeypatch):
     from jayu.dashboard import build_tradingview_technical_summary
 
+    requested_fields = []
+
     class FakeResp:
         def __init__(self, fields: str):
             self.fields = fields
@@ -1284,6 +1387,7 @@ def test_tradingview_technical_summary_maps_scores(monkeypatch):
         assert params["symbol"] == "AMEX:SOXL"
         assert headers["Referer"] == "https://www.tradingview.com/"
         assert timeout == 10
+        requested_fields.append(params["fields"])
         return FakeResp(params["fields"])
 
     import requests as req_module
@@ -1297,7 +1401,24 @@ def test_tradingview_technical_summary_maps_scores(monkeypatch):
     assert result["consensus"]["signal"] == "strong_buy"
     assert result["consensus"]["action"] == "buy"
     assert result["consensus_score"] == 0.6
-    assert len(result["timeframes"]) == 5
+    assert len(result["timeframes"]) == 10
+    assert [row["timeframe"] for row in result["timeframes"]] == [
+        "1M",
+        "1W",
+        "1D",
+        "240",
+        "120",
+        "60",
+        "30",
+        "15",
+        "5",
+        "1",
+    ]
+    assert any("Recommend.All|5" in fields for fields in requested_fields)
+    assert any("Recommend.All|15" in fields for fields in requested_fields)
+    assert any("Recommend.All|30" in fields for fields in requested_fields)
+    assert any("Recommend.All|1W" in fields for fields in requested_fields)
+    assert any("Recommend.All|1M" in fields for fields in requested_fields)
     assert result["timeframes"][0]["recommend_ma"] == 0.8
     assert result["timeframes"][0]["recommendation"]["label"] == "강한 매수"
     assert result["timeframes"][0]["oscillators"]["rsi"] == 61.5
@@ -1339,7 +1460,7 @@ def test_tradingview_technical_summary_keeps_partial_timeframes(monkeypatch):
 
     assert result["status"] == "partial"
     assert result["consensus"]["label"] == "매수"
-    assert len(result["timeframes"]) == 4
+    assert len(result["timeframes"]) == 9
     assert result["errors"][0]["timeframe"] == "1"
 
 
@@ -1396,3 +1517,74 @@ def test_tradingview_symbol_details_normalizes_right_panel_fields(monkeypatch):
     assert result["performance"]["one_month"] == 97.7414
     assert result["volume"]["average_10d"] == 71218496
     assert result["fund"]["nav_discount_premium"] == -0.0432
+
+
+def test_tradingview_news_flow_summarizes_related_symbols(monkeypatch):
+    from jayu.dashboard import build_tradingview_news_flow
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "items": [
+                    {
+                        "id": "etfcom:1",
+                        "title": "DRAM Powers Another Big Week of ETF Inflows",
+                        "published": 1778533216,
+                        "urgency": 2,
+                        "storyPath": "/news/etfcom:1-dram-powers/",
+                        "provider": {"id": "etfcom", "name": "etf.com", "url": "https://www.etf.com/"},
+                        "relatedSymbols": [
+                            {"symbol": "AMEX:SOXL", "logoid": "direxion"},
+                            {"symbol": "NASDAQ:SMH", "logoid": "vaneck"},
+                            {"symbol": "NASDAQ:QQQ", "logoid": "invesco"},
+                        ],
+                    },
+                    {
+                        "id": "etfcom:2",
+                        "title": "US Stocks Reclaim the Lead",
+                        "published": 1777899600,
+                        "urgency": 2,
+                        "storyPath": "/news/etfcom:2-us-stocks/",
+                        "provider": {"id": "etfcom", "name": "etf.com"},
+                        "relatedSymbols": [
+                            {"symbol": "AMEX:SOXL", "logoid": "direxion"},
+                            {"symbol": "NASDAQ:SMH", "logoid": "vaneck"},
+                            {"symbol": "AMEX:VOO", "logoid": "vanguard"},
+                        ],
+                    },
+                ]
+            }
+
+    def fake_get(url, *, params, headers, timeout):
+        assert url == "https://news-mediator.tradingview.com/public/news-flow/v2/news"
+        assert ("filter", "lang:en") in params
+        assert ("filter", "symbol:AMEX:SOXL") in params
+        assert ("client", "landing") in params
+        assert headers["Referer"] == "https://www.tradingview.com/"
+        assert timeout == 10
+        return FakeResp()
+
+    import requests as req_module
+
+    monkeypatch.setattr(req_module, "get", fake_get)
+
+    result = build_tradingview_news_flow("SOXL")
+
+    assert result["status"] == "ok"
+    assert result["source"] == "TradingView news-mediator"
+    assert result["item_count"] == 2
+    assert result["items"][0]["url"] == "https://www.tradingview.com/news/etfcom:1-dram-powers/"
+    assert result["items"][0]["related_symbols"][0]["is_primary"] is True
+    assert result["primary_mentions"]["count"] == 2
+    assert result["related_symbols"][0]["symbol"] == "NASDAQ:SMH"
+    assert result["related_symbols"][0]["count"] == 2
+    assert result["related_symbols"][0]["role"]["id"] == "semiconductor"
+    assert result["related_symbols"][1]["role"]["id"] == "broad_market"
+    assert result["news_context"]["dominant_theme"]["id"] == "semiconductor"
+    assert result["news_context"]["theme_counts"][0]["mention_count"] == 2
+    assert result["news_context"]["primary_mention_rate"] == 1.0
+    assert any("직접 섹터" in note["text"] for note in result["news_context"]["context_notes"])
+    assert result["provider_counts"]["etf.com"] == 2

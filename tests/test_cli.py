@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 from jayu.artifacts import RunContext
 from jayu.cli import (
     _annotate_shadow_signals,
+    _best_fitness,
     _compare_experiment_rows,
     _enforce_inline_notification_readiness,
     _failed_market_tickers,
@@ -40,6 +41,20 @@ def _operational_settings(mode: str) -> Settings:
             },
         }
     )
+
+
+def test_best_fitness_ignores_missing_metric_payloads():
+    best = {
+        "SOXL": {
+            "bull": {"metrics": None, "val_metrics": {"fitness": 1.2}},
+            "bear": None,
+        },
+        "TQQQ": {
+            "sideways": {"metrics": {"fitness": 0.7}, "val_metrics": None},
+        },
+    }
+
+    assert _best_fitness(best) == 1.2
 
 
 def test_validate_config_includes_strategy_space_audit(monkeypatch):
