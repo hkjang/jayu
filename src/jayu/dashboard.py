@@ -17,6 +17,100 @@ from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
+import sys
+import subprocess
+import threading
+
+# 시뮬레이션 로그 스트리밍을 위한 글로벌 버퍼 및 프로세스 관리
+SIMULATION_BUFFER: list[str] = [
+    "====================================================================\n"
+    "  🔬 단타 시뮬레이션 v4  |  2026-06-21 08:25\n"
+    "  종목: ['SOXL', 'TQQQ', 'TSLA', 'IONQ', 'NVDL', 'QBTS']\n"
+    "  500회/종목/국면 | 유전(65%)+메타가중 / 랜덤(35%)\n"
+    "  Walk-Forward: 멀티윈도우 3구간 | ADX 스위칭 필터 | 국면별 독립 파라미터\n"
+    "====================================================================\n"
+    "INFO simulation started\n"
+    "  📉 현재 VIX 지수: 16.40\n"
+    "  📈 지수 ^IXIC 모멘텀 수집 완료\n"
+    "  📈 지수 ^SOX 모멘텀 수집 완료\n"
+    "\n"
+    "[SOXL] 데이터 로드 중...\n"
+    "  1056행 | 워밍업 제외 199행 | 지표: RSI/EMA/MACD/BB/StochRSI/OBV/ADX/Regime\n"
+    "INFO indicators calculated\n"
+    "  └ [BULL 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 0개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [BULL] 기존 유지 (Sharpe 11.7 | 수익 7.0%)\n"
+    "  └ [BEAR 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 0개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [BEAR] 기존 유지 (Sharpe 11.7 | 수익 7.0%)\n"
+    "  └ [SIDEWAYS 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 0개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [SIDEWAYS] 기존 유지 (Sharpe 11.7 | 수익 7.0%)\n"
+    "\n"
+    "[TQQQ] 데이터 로드 중...\n"
+    "  1056행 | 워밍업 제외 199행 | 지표: RSI/EMA/MACD/BB/StochRSI/OBV/ADX/Regime\n"
+    "INFO indicators calculated\n"
+    "  └ [BULL 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 1개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [BULL] 기존 유지 (Sharpe 29.81 | 수익 3.7%)\n"
+    "  └ [BEAR 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 1개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [BEAR] 기존 유지 (Sharpe 29.81 | 수익 3.7%)\n"
+    "  └ [SIDEWAYS 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 1개)...\n"
+]
+SIMULATION_LOCK = threading.Lock()
+SIMULATION_PROCESS: subprocess.Popen | None = None
+SIMULATION_THREAD: threading.Thread | None = None
+SIMULATION_STATUS: str = "idle"  # "idle" | "running" | "completed" | "failed"
+
+def _run_simulation_thread(project_root: Path, tickers: list[str] | None = None) -> None:
+    global SIMULATION_PROCESS, SIMULATION_STATUS
+    
+    cmd = [sys.executable, "-m", "jayu.cli", "simulate"]
+    if tickers:
+        for t in tickers:
+            cmd.extend(["--ticker", t])
+            
+    try:
+        with SIMULATION_LOCK:
+            SIMULATION_STATUS = "running"
+            SIMULATION_BUFFER.append(f"INFO simulation starting (Command: {' '.join(cmd)})\n")
+            
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(project_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        SIMULATION_PROCESS = process
+        
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            with SIMULATION_LOCK:
+                SIMULATION_BUFFER.append(line)
+                
+        rc = process.wait()
+        with SIMULATION_LOCK:
+            if rc == 0:
+                SIMULATION_STATUS = "completed"
+                SIMULATION_BUFFER.append("\nINFO simulation finished successfully.\n")
+            else:
+                SIMULATION_STATUS = "failed"
+                SIMULATION_BUFFER.append(f"\nERROR simulation failed with exit code {rc}.\n")
+    except Exception as e:
+        with SIMULATION_LOCK:
+            SIMULATION_STATUS = "failed"
+            SIMULATION_BUFFER.append(f"\nERROR failed to start simulation process: {e}\n")
+    finally:
+        with SIMULATION_LOCK:
+            SIMULATION_PROCESS = None
+
+
 from .failure_codes import FailureCode
 from .io import read_json, stable_hash
 from .metric_dictionary import metric_dictionary_payload
@@ -2008,6 +2102,24 @@ def _dashboard_handler(
                     if segments[4] == "trader-lens":
                         self._json(build_dashboard_trader_lens(paths, run_id=run_id))
                         return
+                    if segments[4] == "log":
+                        run_dir = paths.runs_dir / run_id
+                        events_file = run_dir / "logs" / "events.jsonl"
+                        logs = []
+                        if events_file.exists():
+                            try:
+                                with open(events_file, "r", encoding="utf-8") as f:
+                                    for line in f:
+                                        line = line.strip()
+                                        if line:
+                                            try:
+                                                logs.append(json.loads(line))
+                                            except Exception:
+                                                pass
+                            except Exception as e:
+                                logs.append({"timestamp": "", "level": "ERROR", "message": f"로그 로드 오류: {e}"})
+                        self._json({"run_id": run_id, "logs": logs})
+                        return
                 if parsed.path == "/api/v1/analysis":
                     query = parse_qs(parsed.query)
                     ticker = query.get("ticker", ["SOXL"])[0].upper()
@@ -2064,6 +2176,13 @@ def _dashboard_handler(
                 # ── 자동매매 준비 상태 ────────────────────────────────────────
                 if parsed.path == "/api/v1/autotrading-status":
                     self._json(build_autotrading_status_data())
+                    return
+                if parsed.path == "/api/v1/simulation/log":
+                    with SIMULATION_LOCK:
+                        self._json({
+                            "status": SIMULATION_STATUS,
+                            "logs": "".join(SIMULATION_BUFFER)
+                        })
                     return
                 if parsed.path == "/api/v1/promotion":
                     self._json(build_dashboard_promotion(paths))
@@ -2137,6 +2256,29 @@ def _dashboard_handler(
                     cache_type = payload.get("cache_type")
                     result = clear_provider_cache(paths, cache_type)
                     self._json(result)
+                    return
+                if parsed.path == "/api/v1/simulation/run":
+                    global SIMULATION_THREAD, SIMULATION_STATUS
+                    with SIMULATION_LOCK:
+                        if SIMULATION_STATUS == "running":
+                            self._json({
+                                "status": "running",
+                                "message": "Simulation is already running."
+                            })
+                            return
+                        SIMULATION_BUFFER.clear()
+                        SIMULATION_STATUS = "running"
+                    tickers = payload.get("tickers")
+                    SIMULATION_THREAD = threading.Thread(
+                        target=_run_simulation_thread,
+                        args=(paths.project_root, tickers),
+                        daemon=True
+                    )
+                    SIMULATION_THREAD.start()
+                    self._json({
+                        "status": "started",
+                        "message": "Simulation started successfully."
+                    })
                     return
                 if parsed.path == "/api/v1/toss/reconciliation/sync":
                     settings = _load_dashboard_settings(paths)

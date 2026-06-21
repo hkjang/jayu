@@ -3299,3 +3299,333 @@ tbody tr:last-child td {
   opacity: 1;
   transform: translateX(-50%) translateY(-5px);
 }
+
+/* ── Simulation Log UI ────────────────────────────────────────────────────── */
+
+.sim-controls-panel {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.sim-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.sim-input-group label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.sim-input {
+  padding: 8px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.sim-input:focus {
+  border-color: #3b82f6;
+}
+
+.terminal-container {
+  display: flex;
+  flex-direction: column;
+  background: #0f172a;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
+  height: 100%;
+  min-height: 500px;
+  border: 1px solid #1e293b;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1e293b;
+  padding: 10px 16px;
+  border-bottom: 1px solid #334155;
+  user-select: none;
+}
+
+.terminal-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.term-btn {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.term-red { background: #ef4444; }
+.term-yellow { background: #f59e0b; }
+.term-green { background: #10b981; }
+
+.terminal-title {
+  color: #94a3b8;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.terminal-body {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.terminal-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.sim-layout-row {
+  display: flex;
+  gap: 20px;
+  align-items: stretch;
+  margin-top: 16px;
+}
+
+.sim-layout-main {
+  flex: 1.2;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sim-layout-terminal {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sim-analysis-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.sim-analysis-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+
+.sim-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 6px;
+}
+
+.sim-card-desc {
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.sim-results-empty {
+  text-align: center;
+  padding: 40px 20px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #64748b;
+}
+
+.sim-results-empty p {
+  font-weight: 600;
+  margin: 0 0 4px 0;
+}
+
+.sim-results-empty small {
+  font-size: 11px;
+}
+
+.sim-ticker-analysis-container {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.sim-ticker-result-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+
+.sim-ticker-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 6px;
+}
+
+.sim-ticker-result-header strong {
+  font-size: 16px;
+  color: #0f172a;
+}
+
+.sim-ticker-data-meta {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.sim-indicator-chip {
+  font-size: 10px;
+  background: #f1f5f9;
+  color: #475569;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.sim-regime-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  background: #f8fafc;
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+
+.sim-regime-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.sim-regime-label {
+  font-weight: 600;
+}
+
+.sim-regime-status {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+@media (max-width: 1024px) {
+  .sim-layout-row {
+    flex-direction: column;
+  }
+  .sim-layout-terminal {
+    position: static;
+    width: 100%;
+  }
+}
+
+.sim-guide-panel {
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px dashed #cbd5e1;
+}
+
+.sim-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.sim-guide-box {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 12px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+}
+
+.sim-guide-box strong {
+  display: block;
+  font-size: 12px;
+  color: #1e3a8a;
+  margin-bottom: 6px;
+  border-bottom: 1px solid #eff6ff;
+  padding-bottom: 4px;
+}
+
+.sim-guide-box p {
+  font-size: 11.5px;
+  color: #475569;
+  line-height: 1.45;
+  margin: 0;
+}
+
+/* ── Ticker Custom Tooltip ────────────────────────────────────────────────── */
+
+.ticker-tooltip-trigger {
+  display: inline-block;
+  cursor: help;
+  font-weight: 700;
+  border-bottom: 1px dashed #94a3b8;
+  padding-bottom: 1px;
+}
+
+.global-ticker-tooltip {
+  display: none;
+  position: absolute;
+  z-index: 999999 !important;
+  width: 280px;
+  background-color: #0f172a;
+  color: #f1f5f9;
+  text-align: left;
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: normal;
+  white-space: normal;
+  border: 1px solid #334155;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  transform: translateY(6px);
+}
+
+.global-ticker-tooltip.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.global-ticker-tooltip strong {
+  color: #3b82f6;
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+
+

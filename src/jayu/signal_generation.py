@@ -145,10 +145,17 @@ def check_today_signals(
                     break
 
         if not data or "params" not in data:
+            latest_index = df[ticker].index[-1]
+            signal_date = (
+                latest_index.date().isoformat() if hasattr(latest_index, "date") else str(latest_index)
+            )
             today_sigs[ticker] = {
                 "signal": "재검증필요" if require_approved else "설정없음",
+                "signal_date": signal_date,
                 "action": "hold",
                 "eligible": False,
+                "regime": today_regime,
+                "price": round(float(row["Close"]), 2) if "Close" in row else None,
             }
             continue
 
