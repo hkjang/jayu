@@ -536,6 +536,7 @@ const METRIC_DATA_SOURCE_BY_PAGE = {
     "총 평가금액(KRW)": "Toss holdings GET · exchange-rate GET",
     "평가손익(KRW)": "Toss holdings GET · exchange-rate GET",
     "USD/KRW": "Toss exchange-rate GET",
+    "FX 당일효과": "Toss holdings GET · Toss prices GET · Toss exchange-rate GET",
     "조회 실패": "Toss account section status",
     OrderIntent: "order_plan.json · jayu.paper_trading",
     OrderPlan: "order_plan.json · today_signals.json · jayu.paper_trading",
@@ -712,6 +713,59 @@ function render() {
   bindPageActions();
 }
 
+function renderDecisionTimeline(timeline) {
+  const events = Array.isArray(timeline) ? timeline : [];
+  const rows = events.length ? events.map((event) => {
+    const action = event.next_action || {};
+    const attrs = action.page
+      ? `data-go="${escapeHtml(action.page)}"`
+      : action.command
+        ? `data-command="${escapeHtml(action.command)}"`
+        : "";
+    const actionButton = attrs
+      ? `<button class="button button-secondary timeline-action" type="button" ${attrs}>${escapeHtml(action.label || "확인")}</button>`
+      : "";
+    const meta = [
+      event.occurred_at ? `시각 ${formatDate(event.occurred_at)}` : "",
+      event.failure_code ? `실패 코드 ${event.failure_code}` : "",
+      event.evidence ? `근거 ${event.evidence}` : "",
+    ].filter(Boolean);
+    return `
+      <article class="timeline-item status-${statusClass(event.status || "not_evaluated")}">
+        <div class="timeline-marker">${escapeHtml(event.step || "")}</div>
+        <div class="timeline-content">
+          <div class="timeline-title">
+            <strong>${escapeHtml(event.label || "판단 단계")}</strong>
+            ${statusBadge(event.status || "not_evaluated")}
+          </div>
+          <p>${escapeHtml(event.summary || "")}</p>
+          <span>${escapeHtml(event.detail || "")}</span>
+          ${meta.length ? `<div class="timeline-meta">${meta.map((item) => `<small>${escapeHtml(item)}</small>`).join("")}</div>` : ""}
+          ${renderSourceLabel(event.source || event.evidence || "latest run artifacts")}
+        </div>
+        ${actionButton}
+      </article>
+    `;
+  }).join("") : `
+    <div class="timeline-empty">
+      <strong>투자 판단 타임라인 없음</strong>
+      <span>완료된 실행 또는 관련 artifact가 생기면 여기에 시간순 판단 흐름이 표시됩니다.</span>
+    </div>
+  `;
+  return `
+    <section class="decision-timeline" aria-label="투자 판단 타임라인">
+      <div class="timeline-header">
+        <div>
+          <h2>투자 판단 타임라인</h2>
+          <p>데이터 수집부터 알림 준비까지 오늘 결론이 만들어진 순서를 보여줍니다.</p>
+        </div>
+        ${renderSourceLabel("manifest.json · data_sources.json · signals_risk.json · risk_explanation.json · state artifacts")}
+      </div>
+      <div class="timeline-list">${rows}</div>
+    </section>
+  `;
+}
+
 function renderOverview() {
   const data = state.overview;
   const run = data.run;
@@ -747,6 +801,7 @@ function renderOverview() {
     </section>
     ${renderOverviewPortfolioHub(state.portfolioHub)}
     ${renderTodayBoard(data.today_board)}
+    ${renderDecisionTimeline(data.decision_timeline)}
     <section class="metric-grid" aria-label="핵심 운영 지표">
       ${metricCard("데이터 검증", ratioValue(gates.data.verified, gates.data.total), gates.data.status,
         gates.data.total ? `${formatPercent(gates.data.validation_rate)} · provider ${gates.data.provider_count}` : "가격 데이터 미검증",
@@ -922,6 +977,8 @@ function renderSignals() {
       ${metricCard("데이터 검증", `${summary.data_verified_count}/${summary.total_count}`, summary.data_verified_count === summary.total_count && summary.total_count ? "success" : summary.total_count ? "data_error" : "not_evaluated", "가격 신뢰도", summary.data_verified_rate)}
       ${metricCard("신호 hash", shortHash(publication.signal_hash), publication.signal_hash ? "success" : "not_evaluated", "출판 근거")}
     </section>
+    ${renderSignalHistoryCards(data.signal_history)}
+    ${renderSignalOutcomePanel(data.signal_outcome)}
     ${renderMetricDictionaryStrip(data.metric_dictionary?.signals, "신호 지표 쉬운 설명")}
     ${renderSignalTypeTabs(state.portfolioHub)}
     <section class="panel">
@@ -1086,6 +1143,7 @@ function renderSettingsValidation() {
 function renderTossAccountDashboard() {
   const data = state.tossPortfolio || {};
   const summary = data.summary || {};
+  const fxImpactSummary = data.fx_impact?.summary || {};
   const accounts = data.accounts || [];
   const selected = data.selected_account || {};
   const holdings = data.holdings || [];
@@ -1132,6 +1190,10 @@ function renderTossAccountDashboard() {
         <section class="panel">
           <div class="panel-header"><div><h2>FX rates</h2><p>환산에 사용한 환율과 유효 시각입니다.</p></div></div>
           <div class="panel-body">${renderFxRateCards(data.fx_rates || [])}${renderSourceCaption("Toss exchange-rate GET")}</div>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><div><h2>FX impact split</h2><p>당일 KRW 변화를 가격 효과와 환율 효과로 나눕니다.</p></div></div>
+          <div class="panel-body">${renderFxImpactPanel(data.fx_impact)}${renderSourceCaption(data.fx_impact?.source || "Toss holdings GET · Toss prices GET · Toss exchange-rate GET")}</div>
         </section>
       </div>
       <div class="visual-grid">
@@ -1207,6 +1269,7 @@ function renderTossAccountDashboard() {
       ${metricCard("총 평가금액(KRW)", formatCurrency(visibleSummary.total_market_value_krw, "KRW"), summary.failed_section_count ? "warning" : "success", "FX converted")}
       ${metricCard("평가손익(KRW)", formatCurrency(visibleSummary.unrealized_pnl_krw, "KRW"), Number(visibleSummary.unrealized_pnl_krw || 0) < 0 ? "warning" : "success", formatPercent(visibleSummary.unrealized_pnl_pct, 2))}
       ${metricCard("USD/KRW", fxRateLabel(data.fx_rates, "USD"), fxRateStatus(data.fx_rates, "USD"), fxRateDetail(data.fx_rates, "USD"))}
+      ${metricCard("FX 당일효과", formatCurrency(fxImpactSummary.fx_effect_krw, "KRW"), data.fx_impact?.status || "not_evaluated", `가격효과 ${formatCurrency(fxImpactSummary.asset_effect_krw, "KRW")}`, null, data.fx_impact?.source || "Toss holdings GET · Toss prices GET · Toss exchange-rate GET")}
       ${metricCard("조회 실패", summary.failed_section_count ?? 0, summary.failed_section_count ? "warning" : "success", (summary.failed_sections || []).join(", ") || "없음")}
     </section>
     
@@ -1910,6 +1973,53 @@ function renderFxRateCards(rows) {
     .join("")}</div>`;
 }
 
+function renderFxImpactPanel(impact) {
+  const data = impact || {};
+  const summary = data.summary || {};
+  const rows = data.rows || [];
+  if (!rows.length) {
+    return '<div class="empty-state"><strong>FX 영향 분리 데이터가 없습니다.</strong><span>Toss holdings, prices, exchange-rate 조회가 모두 있어야 계산됩니다.</span></div>';
+  }
+  return `
+    <div class="fx-impact">
+      <div class="fx-impact-summary">
+        <div>
+          <span>가격 효과</span>
+          <strong class="${numericClass(summary.asset_effect_krw)}">${formatCurrency(summary.asset_effect_krw, "KRW")}</strong>
+        </div>
+        <div>
+          <span>환율 효과</span>
+          <strong class="${numericClass(summary.fx_effect_krw)}">${formatCurrency(summary.fx_effect_krw, "KRW")}</strong>
+        </div>
+        <div>
+          <span>교차항</span>
+          <strong class="${numericClass(summary.cross_effect_krw)}">${formatCurrency(summary.cross_effect_krw, "KRW")}</strong>
+        </div>
+      </div>
+      <div class="fx-impact-list">
+        ${rows.map((row) => `
+          <div class="fx-impact-row status-${statusClass(row.fx_impact_status || "not_evaluated")}">
+            <div>
+              <strong>${escapeHtml(row.symbol || "-")}</strong>
+              <span>${escapeHtml(row.currency || "-")} · 가격 ${formatPercent(row.asset_return_pct, 2)} · FX ${formatPercent(row.fx_return_pct, 2)}</span>
+            </div>
+            <div>
+              <strong class="${numericClass(row.total_day_pnl_krw)}">${formatCurrency(row.total_day_pnl_krw, "KRW")}</strong>
+              <span>FX ${formatCurrency(row.fx_effect_krw, "KRW")}</span>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function numericClass(value) {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed === 0) return "";
+  return parsed < 0 ? "negative" : "positive";
+}
+
 function renderSituationTags(rows) {
   const tags = rows || [];
   if (!tags.length) {
@@ -2051,7 +2161,7 @@ function renderTossHoldingsTable(rows) {
   }
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>Symbol</th><th>Market</th><th>투자 타입</th><th>Category</th><th>Sector</th><th>Name</th><th class="numeric">Qty</th><th class="numeric">KRW value</th><th class="numeric">P/L KRW</th><th class="numeric">P/L %</th><th class="numeric">Day %</th><th class="numeric">Weight</th><th>Tags</th></tr></thead>
+      <thead><tr><th>Symbol</th><th>Market</th><th>투자 타입</th><th>Category</th><th>Sector</th><th>Name</th><th class="numeric">Qty</th><th class="numeric">KRW value</th><th class="numeric">P/L KRW</th><th class="numeric">P/L %</th><th class="numeric">Day %</th><th class="numeric">FX day</th><th class="numeric">Weight</th><th>Tags</th></tr></thead>
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.symbol)}</td>
@@ -2065,6 +2175,7 @@ function renderTossHoldingsTable(rows) {
           <td class="numeric ${Number(row.unrealized_pnl_krw || 0) < 0 ? "negative" : "positive"}">${formatCurrency(row.unrealized_pnl_krw, "KRW")}</td>
           <td class="numeric ${Number(row.unrealized_pnl_pct || 0) < 0 ? "negative" : "positive"}">${formatPercent(row.unrealized_pnl_pct, 2)}</td>
           <td class="numeric ${Number(row.day_change_pct || 0) < 0 ? "negative" : "positive"}">${formatPercent(row.day_change_pct, 2)}</td>
+          <td class="numeric ${numericClass(row.fx_effect_krw)}">${formatCurrency(row.fx_effect_krw, "KRW")}</td>
           <td class="numeric">${formatPercent(row.weight, 1)}</td>
           <td class="tag-cell">${(row.situation_tags || []).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") || "-"}</td>
         </tr>`).join("")}</tbody>
@@ -2335,6 +2446,207 @@ function renderRiskSignals(rows) {
           <td class="code">${escapeHtml((row.failed || []).map((item) => item.code).filter(Boolean).join(", ") || "-")}</td>
         </tr>`).join("")}</tbody>
     </table></div>`;
+}
+
+function signalTrendLabel(trend) {
+  return {
+    improving: "개선",
+    deteriorating: "보수 전환",
+    changed: "방향 변경",
+    stable: "유지",
+    insufficient: "이력 부족",
+  }[trend] || "확인";
+}
+
+function signalTrendStatus(trend) {
+  return {
+    improving: "success",
+    deteriorating: "warning",
+    changed: "warning",
+    stable: "not_evaluated",
+    insufficient: "not_evaluated",
+  }[trend] || "not_evaluated";
+}
+
+function renderSignalHistoryCards(history) {
+  const data = history || {};
+  const cards = data.cards || [];
+  const source = data.source || "runs/*/manifest.json · signals_risk.json";
+  const cardsHtml = cards.length ? cards.map((card) => {
+    const seven = card.windows?.["7d"] || {};
+    const thirty = card.windows?.["30d"] || {};
+    const changes = (card.changes || []).slice(-3);
+    const recent = (card.recent || []).slice(-4);
+    const failedCodes = card.latest_failed_codes || [];
+    const reasonCodes = card.latest_reason_codes || [];
+    return `
+      <article class="signal-history-card status-${statusClass(card.status || "not_evaluated")}">
+        <div class="signal-history-head">
+          <div>
+            <strong>${renderTicker(card.ticker)}</strong>
+            <span>${escapeHtml(card.latest_action_label || card.latest_action || "판단 없음")}</span>
+          </div>
+          ${statusBadge(signalTrendStatus(card.trend), signalTrendLabel(card.trend))}
+        </div>
+        <p>${escapeHtml(card.summary || "")}</p>
+        <div class="signal-history-windows">
+          ${renderSignalHistoryWindow("최근 7일", seven)}
+          ${renderSignalHistoryWindow("최근 30일", thirty)}
+        </div>
+        ${changes.length ? `
+          <div class="signal-history-changes">
+            ${changes.map((change) => `
+              <div>
+                <strong>${escapeHtml(formatDate(change.occurred_at))}</strong>
+                <span>${escapeHtml(change.summary || "")}</span>
+              </div>
+            `).join("")}
+          </div>` : `<div class="signal-history-empty">최근 변화 이벤트가 없습니다.</div>`}
+        ${(failedCodes.length || reasonCodes.length) ? `
+          <div class="signal-history-tags">
+            ${failedCodes.map((code) => `<span class="is-failed">${escapeHtml(code)}</span>`).join("")}
+            ${reasonCodes.map((code) => `<span>${escapeHtml(code)}</span>`).join("")}
+          </div>` : ""}
+        ${recent.length ? `
+          <div class="signal-history-recent">
+            ${recent.map((item) => `<span title="${escapeHtml(item.run_id || "")}">${escapeHtml(item.action_label || item.action || "-")} · ${escapeHtml(item.status || "-")}</span>`).join("")}
+          </div>` : ""}
+        ${renderSourceLabel(card.source || source)}
+      </article>
+    `;
+  }).join("") : `
+    <div class="signal-history-empty">
+      <strong>종목별 판단 이력 없음</strong>
+      <span>최근 run의 signals_risk.json이 쌓이면 7일·30일 판단 흐름이 표시됩니다.</span>
+    </div>
+  `;
+  return `
+    <section class="signal-history-section" aria-label="종목별 판단 이력">
+      <div class="signal-history-section-head">
+        <div>
+          <h2>종목별 판단 이력</h2>
+          <p>${escapeHtml(data.summary || "최근 실행 기준으로 종목별 판단 변화를 요약합니다.")}</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <div class="signal-history-grid">${cardsHtml}</div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderSignalHistoryWindow(label, windowData) {
+  return `
+    <div class="signal-history-window">
+      <span>${escapeHtml(label)}</span>
+      <strong>${formatNumber(windowData.run_count || 0, 0)}회</strong>
+      <small>매수 ${formatNumber(windowData.buy_count || 0, 0)} · 운영가능 ${formatNumber(windowData.eligible_count || 0, 0)} · 차단 ${formatNumber(windowData.blocked_count || 0, 0)}</small>
+    </div>
+  `;
+}
+
+function renderSignalOutcomePanel(outcome) {
+  const data = outcome || {};
+  const summary = data.summary || {};
+  const horizonKeys = (data.horizons?.length ? data.horizons : [1, 5, 20]).map((item) => `${item}d`);
+  const aggregate = data.aggregate || {};
+  const source = data.source || "state/signal_outcome.json";
+  const blocked5d = data.blocked_avoidance?.["5d"] || {};
+  const groups = data.by_decision_group || [];
+  const strategies = (data.by_strategy || []).slice(0, 6);
+  const groupsHtml = groups.length ? groups.map((group) => renderSignalOutcomeGroup(group, horizonKeys)).join("") : `
+    <div class="signal-outcome-empty">
+      <strong>사후 성과 없음</strong>
+      <span>jayu report signal-outcome 실행 후 매수 후보, 관망, 차단 신호의 1D/5D/20D 결과가 표시됩니다.</span>
+    </div>
+  `;
+  const strategyHtml = strategies.length ? `
+    <div class="signal-outcome-strategy-list">
+      ${strategies.map((item) => {
+        const five = item.horizons?.["5d"] || {};
+        return `
+          <div class="signal-outcome-strategy-row">
+            <span>${escapeHtml(item.label || item.key || "unknown")}</span>
+            <strong>${formatPercent(five.avg_return)}</strong>
+            <small>적중 ${formatPercent(five.hit_rate)} · n=${formatNumber(five.sample_count || 0, 0)}</small>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  ` : `<div class="signal-outcome-empty compact">전략별 표본이 아직 없습니다.</div>`;
+  return `
+    <section class="signal-outcome-section" aria-label="신호 사후 성과">
+      <div class="signal-outcome-head">
+        <div>
+          <h2>신호 사후 성과</h2>
+          <p>매수 후보, 관망, 차단 신호를 실제 1D/5D/20D 수익률로 되돌려 본 결과입니다.</p>
+        </div>
+        ${statusBadge(data.status || summary.status || "not_evaluated")}
+      </div>
+      <div class="signal-outcome-metrics">
+        ${metricCard("평가 신호", `${formatNumber(summary.evaluated_count || 0, 0)}/${formatNumber(summary.signal_count || 0, 0)}`, data.status || summary.status, "price history matched", null, source)}
+        ${metricCard("1D 평균", formatPercent(aggregate["1d"]?.avg_return), outcomeReturnStatus(aggregate["1d"]?.avg_return), `n=${formatNumber(aggregate["1d"]?.sample_count || 0, 0)}`, null, source)}
+        ${metricCard("5D 평균", formatPercent(aggregate["5d"]?.avg_return), outcomeReturnStatus(aggregate["5d"]?.avg_return), `적중 ${formatPercent(aggregate["5d"]?.hit_rate)}`, null, source)}
+        ${metricCard("차단 회피", formatNumber(blocked5d.avoided_loss_count || 0, 0), blocked5d.avoided_loss_count ? "success" : "not_evaluated", `5D 평균 회피손실 ${formatPercent(blocked5d.avg_avoided_loss)}`, null, source)}
+      </div>
+      <div class="signal-outcome-grid">${groupsHtml}</div>
+      <div class="signal-outcome-strategy">
+        <div class="signal-outcome-subhead">
+          <strong>전략별 5D 평균</strong>
+          <span>표본 수와 적중률 기준</span>
+        </div>
+        ${strategyHtml}
+      </div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderSignalOutcomeGroup(group, horizonKeys) {
+  const key = group.key || "unknown";
+  const horizons = group.horizons || {};
+  const five = horizons["5d"] || {};
+  const status = outcomeGroupStatus(key, five.avg_return);
+  return `
+    <article class="signal-outcome-card status-${statusClass(status)}">
+      <div class="signal-outcome-card-head">
+        <div>
+          <strong>${escapeHtml(group.label || key)}</strong>
+          <span>${formatNumber(group.evaluated_count || 0, 0)}/${formatNumber(group.signal_count || 0, 0)} 평가</span>
+        </div>
+        ${statusBadge(status, signalOutcomeGroupBadge(key, five.avg_return))}
+      </div>
+      <div class="signal-outcome-horizons">
+        ${horizonKeys.map((horizon) => {
+          const stats = horizons[horizon] || {};
+          return `
+            <div class="signal-outcome-horizon">
+              <span>${escapeHtml(horizon.toUpperCase())}</span>
+              <strong>${formatPercent(stats.avg_return)}</strong>
+              <small>적중 ${formatPercent(stats.hit_rate)} · n=${formatNumber(stats.sample_count || 0, 0)}</small>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function outcomeReturnStatus(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "not_evaluated";
+  return Number(value) > 0 ? "success" : Number(value) < 0 ? "warning" : "not_evaluated";
+}
+
+function outcomeGroupStatus(group, value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "not_evaluated";
+  if (group === "blocked_buy") return Number(value) < 0 ? "success" : "warning";
+  return outcomeReturnStatus(value);
+}
+
+function signalOutcomeGroupBadge(group, value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "대기";
+  if (group === "blocked_buy") return Number(value) < 0 ? "차단 유효" : "기회비용";
+  return Number(value) > 0 ? "양호" : Number(value) < 0 ? "부진" : "중립";
 }
 
 function renderSignalDetailTable(rows) {
@@ -5256,6 +5568,9 @@ function renderHubTickerCard(tab, item) {
   const keyMetrics = renderHubKeyMetrics(item.ticker_info || {}, tab);
   const reasons = (sig.reasons || []).slice(0, 2).map(r => `<li>${escapeHtml(r)}</li>`).join("");
   const cautions = (sig.cautions || []).slice(0, 2).map(r => `<li class="hub-caution-item">${escapeHtml(r)}</li>`).join("");
+  const priceSource = "Yahoo Finance OHLCV latest close · daily change";
+  const metricSource = hubMetricSource(tab);
+  const signalSource = "portfolio_hub.py signal rules · Yahoo Finance derived indicators";
 
   const dqColor = { good: "#22c55e", partial: "#f59e0b", poor: "#ef4444", unavailable: "#94a3b8" }[item.data_quality] || "#94a3b8";
 
@@ -5269,15 +5584,38 @@ function renderHubTickerCard(tab, item) {
         <div class="hub-ticker-price">
           <span class="hub-price">${price}</span>
           <span class="hub-change ${chgClass}">${chg}</span>
+          ${renderSourceLabel(priceSource, "data-source-inline hub-price-source")}
         </div>
         ${hubSignalBadge(sigKey)}
       </div>
       ${keyMetrics}
+      ${renderSourceCaption(metricSource)}
       ${reasons || cautions ? `
       <div class="hub-ticker-reasons">
         <ul class="hub-reason-list">${reasons}${cautions}</ul>
       </div>` : ""}
       ${sig.stop_loss_ref ? `<div class="hub-stop-loss">📍 참고 손절가: <strong>$${Number(sig.stop_loss_ref).toFixed(2)}</strong> <small>(ATR × 1.5 기준)</small></div>` : ""}
+      ${renderSourceCaption(signalSource)}
+    </div>`;
+}
+
+function hubMetricSource(tab) {
+  return {
+    short_term: "Yahoo Finance OHLCV · derived RSI(2)/ATR/volume ratio",
+    swing: "Yahoo Finance OHLCV · derived RSI(14)/MACD/EMA",
+    long_term: "Yahoo Finance OHLCV · derived EMA200/52-week range",
+    dividend: "Yahoo Finance info.dividendYield · info.exDividendDate · derived EMA200",
+  }[tab] || "Yahoo Finance OHLCV · portfolio_hub.py derived indicators";
+}
+
+function hubSummaryCard(label, value, color, source) {
+  const colorStyle = color ? ` style="color:${color}"` : "";
+  const borderStyle = color ? ` style="border-top:3px solid ${color}"` : "";
+  return `
+    <div class="hub-stat-card"${borderStyle}>
+      <div class="hub-stat-num"${colorStyle}>${escapeHtml(String(value))}</div>
+      <div class="hub-stat-label">${escapeHtml(label)}</div>
+      ${renderSourceLabel(source, "data-source-inline hub-source-inline")}
     </div>`;
 }
 
@@ -5369,14 +5707,15 @@ function renderHubTabContent(data, tab) {
         <strong style="font-size:11px;color:#64748b">오늘 점검 사항:</strong>
         <ul>${meta.checklist.map(c => `<li>${escapeHtml(c)}</li>`).join("")}</ul>
       </div>` : ""}
+      ${renderSourceCaption("portfolio_hub.py portfolio type meta · portfolio_mapping.json portfolio_types")}
     </div>`;
 
   const summaryCards = `
     <div class="hub-summary-row">
-      <div class="hub-stat-card"><div class="hub-stat-num">${summary.ticker_count || 0}</div><div class="hub-stat-label">종목 수</div></div>
-      <div class="hub-stat-card" style="border-top:3px solid #22c55e"><div class="hub-stat-num" style="color:#22c55e">${summary.buy_candidate_count || 0}</div><div class="hub-stat-label">매수 후보</div></div>
-      <div class="hub-stat-card" style="border-top:3px solid #ef4444"><div class="hub-stat-num" style="color:#ef4444">${summary.sell_candidate_count || 0}</div><div class="hub-stat-label">매도 후보</div></div>
-      <div class="hub-stat-card" style="border-top:3px solid #f59e0b"><div class="hub-stat-num" style="color:#f59e0b">${summary.caution_count || 0}</div><div class="hub-stat-label">점검 필요</div></div>
+      ${hubSummaryCard("종목 수", summary.ticker_count || 0, "", "portfolio_mapping.json portfolio_types")}
+      ${hubSummaryCard("매수 후보", summary.buy_candidate_count || 0, "#22c55e", "portfolio_hub.py signal rules · Yahoo Finance indicators")}
+      ${hubSummaryCard("매도 후보", summary.sell_candidate_count || 0, "#ef4444", "portfolio_hub.py signal rules · Yahoo Finance indicators")}
+      ${hubSummaryCard("점검 필요", summary.caution_count || 0, "#f59e0b", "portfolio_hub.py signal rules · Yahoo Finance indicators")}
     </div>`;
   const dividendCashflow = tab === "dividend" ? renderHubDividendCashflow(data.dividend_cashflow) : "";
 

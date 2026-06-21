@@ -71,6 +71,7 @@ from .safety import (
 )
 from .settings import ExecutionMode, Settings, load_settings
 from .safety_verdict import write_safety_verdict
+from .signal_outcome import write_signal_outcome_report
 from .signal_replay import write_signal_replay_artifact
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
 from .survivorship import audit_survivorship
@@ -1382,6 +1383,28 @@ def report_signal_performance(
     if not isinstance(signal_data, dict) or not isinstance(price_data, dict):
         raise typer.BadParameter("signals and price-json must be JSON objects")
     report = write_signal_performance_report(
+        cast("dict[str, dict[str, Any]]", signal_data),
+        cast("dict[str, list[dict[str, Any]]]", price_data),
+        output_path,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("signal-outcome")
+def report_signal_outcome(
+    price_json: Annotated[Path, typer.Option("--price-json", exists=True)],
+    signals: Annotated[Path | None, typer.Option("--signals")] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    signal_path = signals or paths.signal_file
+    output_path = output or (paths.state_dir / "signal_outcome.json")
+    signal_data = read_json(signal_path, default={})
+    price_data = read_json(price_json, default={})
+    if not isinstance(signal_data, dict) or not isinstance(price_data, dict):
+        raise typer.BadParameter("signals and price-json must be JSON objects")
+    report = write_signal_outcome_report(
         cast("dict[str, dict[str, Any]]", signal_data),
         cast("dict[str, list[dict[str, Any]]]", price_data),
         output_path,

@@ -331,6 +331,7 @@ class FakeTossDashboardClient:
                 "quoteCurrency": quote_currency,
                 "rate": "1400",
                 "midRate": "1395",
+                "changeRate": 0.02,
                 "rateChangeType": "UP",
                 "validFrom": "2026-03-25T09:30:00+09:00",
                 "validUntil": "2026-03-25T09:31:00+09:00",
@@ -360,6 +361,20 @@ def test_dashboard_overview_prioritizes_data_error_and_actions(tmp_path: Path):
     assert report["today_board"]["risky_stocks"][0]["action_type"] == "risk_review"
     assert report["today_board"]["buy_candidates"] == []
     assert report["today_board"]["action_queue"][0]["queue_section"] == "tasks"
+    timeline = report["decision_timeline"]
+    assert [item["id"] for item in timeline] == [
+        "data_collection",
+        "provider_validation",
+        "signal_generation",
+        "risk_review",
+        "toss_reconciliation",
+        "order_review",
+        "notification_ready",
+    ]
+    assert timeline[1]["failure_code"] == "DATA_DISAGREEMENT"
+    assert timeline[3]["failure_code"] == "SECTOR_EXPOSURE_EXCEEDED"
+    assert timeline[3]["next_action"]["page"] == "risk"
+    assert timeline[5]["status"] == "not_evaluated"
     overview_metrics = report["metric_dictionary"]["overview"]
     assert any(item["key"] == "data_validation" for item in overview_metrics)
     assert overview_metrics[0]["plain_name"] == "가격 데이터 신뢰도"
@@ -517,6 +532,33 @@ def test_dashboard_risk_keeps_current_limit_and_excess(tmp_path: Path):
 def test_dashboard_signals_exposes_publication_prices_and_reasons(tmp_path: Path):
     paths = _paths(tmp_path)
     run_dir = _write_run(paths)
+    previous_run = paths.runs_dir / "run-000"
+    previous_run.mkdir()
+    atomic_write_json(
+        previous_run / "manifest.json",
+        {
+            "run_id": "run-000",
+            "command": "signal",
+            "execution_mode": "shadow",
+            "status": "success",
+            "started_at": "2026-06-10T00:00:00+00:00",
+            "finished_at": "2026-06-10T00:05:00+00:00",
+            "result": {"mode": "shadow"},
+        },
+    )
+    atomic_write_json(
+        previous_run / "signals_risk.json",
+        {
+            "SOXL": {
+                "signal": "entry",
+                "action": "buy",
+                "eligible": True,
+                "status": "eligible",
+                "price": 95.0,
+                "reason_codes": ["MOMENTUM_OK"],
+            }
+        },
+    )
     atomic_write_json(
         run_dir / "signal_publication.json",
         {
@@ -524,6 +566,49 @@ def test_dashboard_signals_exposes_publication_prices_and_reasons(tmp_path: Path
             "run_id": "run-001",
             "signal_date": "2026-06-14",
             "failure_code": "SAFETY_VERDICT_BLOCKED",
+        },
+    )
+    atomic_write_json(
+        paths.state_dir / "signal_outcome.json",
+        {
+            "status": "partial",
+            "horizons": [1, 5, 20],
+            "summary": {
+                "status": "partial",
+                "signal_count": 2,
+                "evaluated_count": 1,
+                "pending_count": 1,
+                "buy_candidate_count": 1,
+                "blocked_buy_count": 1,
+                "hold_count": 0,
+                "sell_candidate_count": 0,
+            },
+            "aggregate": {"1d": {"avg_return": -0.03, "sample_count": 1, "hit_rate": 0.0}},
+            "by_decision_group": [
+                {
+                    "key": "blocked_buy",
+                    "label": "차단된 매수",
+                    "signal_count": 1,
+                    "evaluated_count": 1,
+                    "horizons": {
+                        "1d": {
+                            "avg_return": -0.03,
+                            "sample_count": 1,
+                            "hit_rate": 0.0,
+                        }
+                    },
+                }
+            ],
+            "by_strategy": [],
+            "blocked_avoidance": {
+                "1d": {
+                    "blocked_count": 1,
+                    "sample_count": 1,
+                    "avoided_loss_count": 1,
+                    "avg_avoided_loss": 0.03,
+                }
+            },
+            "source": "signals JSON · price history JSON · signal_outcome.py",
         },
     )
 
@@ -540,6 +625,20 @@ def test_dashboard_signals_exposes_publication_prices_and_reasons(tmp_path: Path
     assert row["stop_price"] == 92.0
     assert row["target_price"] == 118.0
     assert row["failed"][0]["code"] == "SECTOR_EXPOSURE_EXCEEDED"
+    history = report["signal_history"]
+    assert history["status"] == "success"
+    card = history["cards"][0]
+    assert card["ticker"] == "SOXL"
+    assert card["windows"]["7d"]["run_count"] == 2
+    assert card["windows"]["7d"]["eligible_count"] == 1
+    assert card["windows"]["7d"]["blocked_count"] == 1
+    assert card["trend"] == "deteriorating"
+    assert "운영 가능 → 차단" in card["changes"][0]["summary"]
+    outcome = report["signal_outcome"]
+    assert outcome["status"] == "partial"
+    assert outcome["summary"]["evaluated_count"] == 1
+    assert outcome["blocked_avoidance"]["1d"]["avg_avoided_loss"] == 0.03
+    assert "state/signal_outcome.json" in outcome["source"]
 
 
 def test_dashboard_trader_lens_builds_reward_risk_and_provider_trust(tmp_path: Path):
@@ -734,6 +833,18 @@ def test_dashboard_toss_portfolio_auto_selects_first_account_and_holdings(tmp_pa
     assert {"중타", "장타"}.issubset(set(us_holding["portfolio_type_labels"]))
     assert report["fx_rates"][1]["base_currency"] == "USD"
     assert report["fx_rates"][1]["rate"] == 1400
+    assert report["fx_rates"][1]["fx_change_pct"] == 0.02
+    fx_impact = report["fx_impact"]
+    assert fx_impact["status"] == "success"
+    assert fx_impact["summary"]["evaluated_count"] == 2
+    assert fx_impact["summary"]["fx_effect_krw"] == pytest.approx(6334.8416)
+    assert fx_impact["summary"]["total_day_pnl_krw"] == pytest.approx(12187.2115)
+    aapl_impact = next(item for item in fx_impact["rows"] if item["symbol"] == "AAPL")
+    assert aapl_impact["asset_return_pct"] == 0.04
+    assert aapl_impact["fx_return_pct"] == 0.02
+    assert aapl_impact["asset_effect_krw"] == pytest.approx(12669.6833)
+    assert aapl_impact["fx_effect_krw"] == pytest.approx(6334.8416)
+    assert aapl_impact["day_return_krw"] == pytest.approx(0.0608)
     assert {item["region"]: item["count"] for item in report["region_totals"]} == {"KR": 1, "US": 1}
     assert {item["currency"]: item["count"] for item in report["currency_totals"]} == {
         "KRW": 1,
@@ -966,8 +1077,19 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "Paper Trading 승격 리포트" in content
     assert "renderMetricDictionaryStrip" in content
     assert "renderTodayBoard" in content
+    assert "renderDecisionTimeline" in content
+    assert "renderSignalHistoryCards" in content
+    assert "renderSignalOutcomePanel" in content
+    assert "renderFxImpactPanel" in content
+    assert "FX impact split" in content
+    assert "FX day" in content
+    assert "state/signal_outcome.json" in content
+    assert "종목별 판단 이력" in content
+    assert "투자 판단 타임라인" in content
     assert "renderHubSignalConflictPanel" in content
     assert "renderHubDividendCashflow" in content
+    assert "hubMetricSource" in content
+    assert "hubSummaryCard" in content
     assert "배당 현금흐름 추정" in content
     assert "ACTION_QUEUE_STATUS_LABELS" in content
     assert "ACTION_TYPE_LABELS" in content
@@ -993,8 +1115,18 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "today-board" in css
     assert "today-card" in css
     assert "today-item-tags" in css
+    assert "decision-timeline" in css
+    assert "timeline-item" in css
+    assert "signal-history-section" in css
+    assert "signal-history-card" in css
+    assert "signal-outcome-section" in css
+    assert "signal-outcome-card" in css
+    assert "fx-impact" in css
+    assert "fx-impact-row" in css
     assert "hub-conflict-section" in css
     assert "hub-dividend-cashflow" in css
+    assert "hub-price-source" in css
+    assert "hub-source-inline" in css
     assert "reconciliation-issue-table" in css
     assert "order-quality-panel" in css
     assert "toss-drift-panel" in css
@@ -1012,8 +1144,13 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "Yahoo Finance OHLCV · derived RSI" in content
     assert "Yahoo Finance adjusted close series" in content
     assert "Yahoo Finance info.dividendYield" in content
+    assert "Yahoo Finance OHLCV latest close · daily change" in content
+    assert "portfolio_hub.py signal rules · Yahoo Finance derived indicators" in content
+    assert "portfolio_hub.py portfolio type meta · portfolio_mapping.json portfolio_types" in content
     assert "Toss /api/v1/stocks/{symbol}/warnings" in content
     assert "runs/*/manifest.json" in content
+    assert "runs/*/manifest.json · signals_risk.json" in content
+    assert "manifest.json · data_sources.json · signals_risk.json" in content
     assert "TradingView 상세 스냅샷" in content
     assert "초단기 상세 진단" in content
     assert "성과 산출 가능한 실행 없음" in content
