@@ -12,6 +12,7 @@ from jayu.dashboard import (
     build_dashboard_decision,
     build_dashboard_data_quality,
     build_dashboard_overview,
+    build_dashboard_api_monitoring,
     build_dashboard_promotion,
     build_dashboard_risk,
     build_dashboard_settings_validation,
@@ -632,6 +633,34 @@ def test_dashboard_toss_status_is_read_only_and_masks_credentials(tmp_path: Path
     assert all("client-secret" not in json.dumps(row) for row in report["endpoints"])
 
 
+def test_dashboard_api_monitoring_exposes_toss_api_drift(tmp_path: Path):
+    paths = _paths(tmp_path)
+    atomic_write_json(
+        paths.state_dir / "toss_api_drift.json",
+        {
+            "last_checked_at": datetime.now(UTC).isoformat(),
+            "status": "drifted",
+            "missing_endpoints": ["/api/v1/new-spec-route"],
+            "extra_endpoints": ["/api/v1/local-only-route"],
+            "fallback_snapshot_used": True,
+            "fetch_error": "HTTP 503",
+        },
+    )
+    atomic_write_json(paths.state_dir / "toss_openapi_snapshot.json", {"paths": {}})
+
+    report = build_dashboard_api_monitoring(paths)
+    drift = report["toss_api_drift"]
+
+    assert report["summary"]["status"] == "warning"
+    assert drift["status"] == "drifted"
+    assert drift["status_label"] == "스펙 변경 감지"
+    assert drift["missing_count"] == 1
+    assert drift["extra_count"] == 1
+    assert drift["fallback_snapshot_used"] is True
+    assert drift["snapshot_available"] is True
+    assert drift["next_action"] == "uv run jayu toss endpoints --sync"
+
+
 def test_dashboard_toss_accounts_normalizes_and_masks_account_rows(tmp_path: Path):
     paths = _paths(tmp_path)
     (tmp_path / "config.json").write_text(
@@ -931,13 +960,23 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "RUN_CONTEXT_OPTIONAL_PAGES" in content
     assert "function isCompletedRun" in content
     assert "state.runs.find(isCompletedRun)" in content
+    assert "renderAutotradingReadiness" in content
+    assert "자동매매 준비 점수" in content
+    assert "renderPaperPromotionReport" in content
+    assert "Paper Trading 승격 리포트" in content
     assert "renderMetricDictionaryStrip" in content
     assert "renderTodayBoard" in content
     assert "renderHubSignalConflictPanel" in content
+    assert "renderHubDividendCashflow" in content
+    assert "배당 현금흐름 추정" in content
     assert "ACTION_QUEUE_STATUS_LABELS" in content
     assert "ACTION_TYPE_LABELS" in content
     assert "order_prepares" in content
     assert "renderPaperOrderContract" in content
+    assert "renderOrderIntentQuality" in content
+    assert "주문 의도 품질 점수" in content
+    assert "renderTossApiDriftPanel" in content
+    assert "Toss OpenAPI Drift Check" in content
     assert "운영 지표 쉬운 설명" in content
     assert "신호 지표 쉬운 설명" in content
     assert "오늘 확인할 항목" in content
@@ -955,7 +994,12 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "today-card" in css
     assert "today-item-tags" in css
     assert "hub-conflict-section" in css
+    assert "hub-dividend-cashflow" in css
     assert "reconciliation-issue-table" in css
+    assert "order-quality-panel" in css
+    assert "toss-drift-panel" in css
+    assert "at-score-section" in css
+    assert "at-paper-report" in css
     assert "Data sources:" in content
     assert "Toss warnings endpoint" in content
     assert "Toss status config" in content
@@ -967,6 +1011,7 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "TradingView news-mediator relatedSymbols · derived role map" in content
     assert "Yahoo Finance OHLCV · derived RSI" in content
     assert "Yahoo Finance adjusted close series" in content
+    assert "Yahoo Finance info.dividendYield" in content
     assert "Toss /api/v1/stocks/{symbol}/warnings" in content
     assert "runs/*/manifest.json" in content
     assert "TradingView 상세 스냅샷" in content
@@ -1079,13 +1124,17 @@ def test_dashboard_toss_order_plan(tmp_path: Path):
                     "action": "BUY",
                     "estimated_quantity": 3,
                     "price": 120,
+                    "arrival_mid": 120.1,
+                    "final_price": 121,
+                    "atr": 2.5,
+                    "relative_spread": 0.001,
                 }
             ]
         },
     )
     atomic_write_json(paths.state_dir / "stock_warning_gate.json", {"AAPL": {"has_warning": False}})
     atomic_write_json(paths.state_dir / "market_session_status.json", {"US": {"open": True}})
-    atomic_write_json(paths.signal_file, {"AAPL": {"eligible": True}})
+    atomic_write_json(paths.signal_file, {"AAPL": {"eligible": True, "signal": "buy_candidate"}})
 
     report = build_dashboard_toss_order_plan(paths)
     assert report["order_plan"]["orders"][0]["ticker"] == "AAPL"
@@ -1096,6 +1145,45 @@ def test_dashboard_toss_order_plan(tmp_path: Path):
     assert report["paper_order_contract"]["intents"][0]["ticker"] == "AAPL"
     assert report["paper_order_contract"]["approval"]["model"] == "OrderApproval"
     assert report["paper_order_contract"]["approval"]["live_order_enabled"] is False
+    quality = report["paper_order_contract"]["intents"][0]["quality"]
+    assert quality["score"] == 100
+    assert quality["status"] == "success"
+    assert {item["id"] for item in quality["checks"]} == {
+        "structure",
+        "signal_alignment",
+        "warning_gate",
+        "market_session",
+        "execution_inputs",
+        "approval_lock",
+    }
+    assert report["paper_order_contract"]["quality_summary"]["average_score"] == 100
+    assert report["paper_order_contract"]["quality_summary"]["rejected_count"] == 0
+
+
+def test_dashboard_toss_order_plan_reports_rejected_order_intents(tmp_path: Path):
+    paths = _paths(tmp_path)
+    paths.state_dir.mkdir(parents=True, exist_ok=True)
+    paths.signals_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(
+        paths.state_dir / "order_plan.json",
+        {
+            "orders": [
+                {"ticker": "MSFT", "action": "BUY", "estimated_quantity": 0, "price": 430},
+                {"ticker": "TSLA", "action": "WATCH", "estimated_quantity": 1, "price": 400},
+            ]
+        },
+    )
+    atomic_write_json(paths.signal_file, {})
+
+    report = build_dashboard_toss_order_plan(paths)
+    contract = report["paper_order_contract"]
+
+    assert contract["intents"] == []
+    assert contract["quality_summary"]["status"] == "blocked"
+    assert contract["quality_summary"]["rejected_count"] == 2
+    assert contract["rejected_intents"][0]["ticker"] == "MSFT"
+    assert "수량" in contract["rejected_intents"][0]["reasons"][0]
+    assert contract["rejected_intents"][1]["ticker"] == "TSLA"
 
 
 def test_dashboard_toss_reconciliation_with_account(tmp_path: Path, monkeypatch):

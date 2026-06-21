@@ -1606,6 +1606,7 @@ function renderOrderPlan(orderPlanData) {
 function renderPaperOrderContract(contract) {
   const intents = contract.intents || [];
   const approval = contract.approval || {};
+  const qualitySummary = contract.quality_summary || {};
   return `
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header">
@@ -1616,13 +1617,16 @@ function renderPaperOrderContract(contract) {
         ${metricCard("OrderIntent", `${intents.length}건`, intents.length ? "success" : "not_evaluated", "paper fill 후보")}
         ${metricCard("OrderPlan", contract.mode || "paper", "not_evaluated", "실행 모드")}
         ${metricCard("OrderApproval", approval.status || "not_requested", approval.live_order_enabled ? "blocked" : "success", approval.reason || "승인 대기")}
+        ${metricCard("품질 점수", qualitySummary.average_score != null ? `${formatNumber(qualitySummary.average_score, 1)}점` : "미검증", qualitySummary.status || "not_evaluated", qualitySummary.summary || "OrderIntent validation")}
       </section>
+      ${renderOrderIntentQuality(contract)}
       ${intents.length ? `
         <div class="table-wrap"><table>
           <thead>
             <tr>
               <th>종목</th>
               <th>Side</th>
+              <th>품질</th>
               <th class="numeric">수량</th>
               <th class="numeric">결정가</th>
               <th class="numeric">도착 중간가</th>
@@ -1634,6 +1638,7 @@ function renderPaperOrderContract(contract) {
               <tr>
                 <td class="ticker-cell"><strong>${renderTicker(intent.ticker)}</strong></td>
                 <td>${escapeHtml(intent.side)}</td>
+                <td>${statusBadge(intent.quality?.status || "not_evaluated", intent.quality?.score != null ? `${formatNumber(intent.quality.score, 1)}점` : "")}</td>
                 <td class="numeric">${formatNumber(intent.quantity, 4)}</td>
                 <td class="numeric">${formatNumber(intent.decision_price, 2)}</td>
                 <td class="numeric">${formatNumber(intent.arrival_mid, 2)}</td>
@@ -1650,6 +1655,71 @@ function renderPaperOrderContract(contract) {
       `}
       ${renderSourceCaption(contract.source || "order_plan.json · today_signals.json · jayu.paper_trading")}
     </section>`;
+}
+
+function renderOrderIntentQuality(contract) {
+  const summary = contract.quality_summary || {};
+  const intents = contract.intents || [];
+  const rejected = contract.rejected_intents || [];
+  const rows = intents.map((intent) => {
+    const quality = intent.quality || {};
+    const checks = quality.checks || [];
+    return `
+      <div class="order-quality-row status-${statusClass(quality.status)}">
+        <div class="order-quality-main">
+          <strong>${renderTicker(intent.ticker)} · ${escapeHtml(intent.side || "-")}</strong>
+          <span>${escapeHtml(quality.summary || "품질 점수 미검증")}</span>
+          ${renderSourceCaption(quality.source || contract.source || "OrderIntent validation")}
+        </div>
+        <div class="order-quality-score">
+          ${statusBadge(quality.status || "not_evaluated")}
+          <b>${quality.score == null ? "미검증" : `${formatNumber(quality.score, 1)}점`}</b>
+          <small>${escapeHtml(quality.grade || "F")}</small>
+        </div>
+        <div class="order-quality-checks">
+          ${checks.map((check) => `
+            <div class="order-quality-check status-${statusClass(check.status)}">
+              <strong>${escapeHtml(check.label || check.id)}</strong>
+              <span>${escapeHtml(check.value || "")}</span>
+              <small>${escapeHtml(check.message || "")}</small>
+              ${renderSourceCaption(check.source || "OrderIntent validation")}
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }).join("");
+  const rejectedRows = rejected.map((item) => `
+    <div class="order-quality-rejected">
+      <strong>${escapeHtml(item.ticker || "-")} · #${escapeHtml(item.index || "")}</strong>
+      <span>${(item.reasons || []).map((reason) => escapeHtml(reason)).join(" · ") || "차단 사유 없음"}</span>
+      ${renderSourceCaption(item.source || "order_plan.json")}
+    </div>
+  `).join("");
+
+  return `
+    <section class="order-quality-panel">
+      <div class="order-quality-summary">
+        <div>
+          <strong>주문 의도 품질 점수</strong>
+          <span>${escapeHtml(summary.summary || "품질 점수를 계산할 유효한 OrderIntent가 없습니다.")}</span>
+          ${renderSourceCaption(summary.source || contract.source || "OrderIntent validation")}
+        </div>
+        <div class="order-quality-summary-score">
+          ${statusBadge(summary.status || "not_evaluated")}
+          <b>${summary.average_score == null ? "미검증" : `${formatNumber(summary.average_score, 1)}점`}</b>
+          <small>${escapeHtml(summary.grade || "F")} · 유효 ${formatNumber(summary.intent_count || 0, 0)}건 · 거절 ${formatNumber(summary.rejected_count || 0, 0)}건</small>
+        </div>
+      </div>
+      ${rows ? `<div class="order-quality-list">${rows}</div>` : ""}
+      ${rejectedRows ? `
+        <div class="order-quality-rejected-list">
+          <h3>거절된 주문 후보</h3>
+          ${rejectedRows}
+        </div>
+      ` : ""}
+    </section>
+  `;
 }
 
 function renderTossMarket() {
@@ -2492,6 +2562,7 @@ function renderApiMonitoring() {
   const cacheStats = data.cache_stats || {};
   const config = data.config || {};
   const runCtx = data.run_context || {};
+  const tossDrift = data.toss_api_drift || {};
 
   const monitoringStatusLabel = {
     success: "모든 데이터 출처 정상",
@@ -2536,7 +2607,9 @@ function renderApiMonitoring() {
       ${metricCard("실패", summary.failed_count, summary.failed_count ? "failed" : "success", "최근 run 기준")}
       ${metricCard("불일치", summary.disagreement_count, summary.disagreement_count ? "data_error" : "success", "provider간 데이터 차이")}
       ${metricCard("알림 실패", summary.notification_failure_count, summary.notification_failure_count ? "warning" : "success", "카카오 알림 기록")}
+      ${metricCard("Toss API Drift", tossDrift.status_label || "미확인", tossApiDriftTone(tossDrift.status), `${tossDrift.missing_count || 0} 누락 · ${tossDrift.extra_count || 0} 로컬 전용`, null, tossDrift.source || "state/toss_api_drift.json")}
     </section>
+    ${renderTossApiDriftPanel(tossDrift)}
     ${renderProviderCards(providers, categories)}
     <div class="section-grid">
       <section class="panel">
@@ -2571,6 +2644,76 @@ function renderApiMonitoring() {
     ${renderApiLogsPanel(data.api_logs || [])}
     ${disagreements.length ? renderDisagreementsPanel(disagreements) : ""}
     ${notifFailures.length ? renderNotificationFailuresPanel(notifFailures) : ""}
+  `;
+}
+
+function tossApiDriftTone(status) {
+  return {
+    synchronized: "success",
+    drifted: "warning",
+    failed_to_fetch: "failed",
+    not_checked: "not_evaluated",
+    stale: "warning",
+    unknown: "warning",
+  }[status] || "not_evaluated";
+}
+
+function renderTossApiDriftPanel(drift) {
+  const data = drift || {};
+  const missing = data.missing_endpoints || [];
+  const extra = data.extra_endpoints || [];
+  const tone = tossApiDriftTone(data.status);
+  const endpointRows = [
+    ...missing.map((path) => ({ kind: "OpenAPI에만 있음", status: "warning", path })),
+    ...extra.map((path) => ({ kind: "로컬에만 있음", status: "not_evaluated", path })),
+  ];
+  return `
+    <section class="panel toss-drift-panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>Toss OpenAPI Drift Check</h2>
+          <p>토스증권 OpenAPI 최신 GET 스펙과 Jayu 로컬 읽기 전용 엔드포인트 카탈로그 차이를 확인합니다.</p>
+          ${renderSourceCaption(data.source || "state/toss_api_drift.json · TOSS_GET_ENDPOINTS")}
+        </div>
+        ${statusBadge(tone, data.status_label || data.status || "미확인")}
+      </div>
+      <div class="toss-drift-summary status-${statusClass(tone)}">
+        <div>
+          <strong>${escapeHtml(data.summary || "Toss OpenAPI drift check 상태가 없습니다.")}</strong>
+          <span>마지막 확인: ${escapeHtml(data.last_checked_at || "미기록")} · 경과 ${data.age_hours == null ? "미계산" : `${formatNumber(data.age_hours, 1)}시간`}</span>
+          ${renderSourceCaption(data.source || "state/toss_api_drift.json")}
+        </div>
+        <div class="toss-drift-stats">
+          <span><b>${formatNumber(data.local_endpoint_count || 0, 0)}</b>로컬 GET</span>
+          <span><b>${formatNumber(data.missing_count || 0, 0)}</b>누락</span>
+          <span><b>${formatNumber(data.extra_count || 0, 0)}</b>로컬 전용</span>
+          <span><b>${data.fallback_snapshot_used ? "사용" : "미사용"}</b>snapshot</span>
+        </div>
+      </div>
+      ${endpointRows.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr><th>구분</th><th>상태</th><th>Endpoint</th></tr></thead>
+          <tbody>${endpointRows.map((row) => `
+            <tr>
+              <td>${escapeHtml(row.kind)}</td>
+              <td>${statusBadge(row.status)}</td>
+              <td class="code">${escapeHtml(row.path)}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table></div>
+      ` : `
+        <div class="empty-state">
+          <strong>엔드포인트 차이 없음</strong>
+          <span>최근 drift check 기준으로 누락 또는 로컬 전용 GET 경로가 없습니다.</span>
+          ${renderSourceCaption(data.source || "state/toss_api_drift.json")}
+        </div>
+      `}
+      <div class="toss-drift-footer">
+        <code>${escapeHtml(data.next_action || "uv run jayu toss endpoints --sync")}</code>
+        <span>${data.snapshot_available ? "fallback snapshot 파일 있음" : "fallback snapshot 파일 없음"} · ${escapeHtml(data.snapshot_source || "state/toss_openapi_snapshot.json")}</span>
+      </div>
+      ${renderSourceCaption("Toss OpenAPI latest spec · state/toss_openapi_snapshot.json")}
+    </section>
   `;
 }
 
@@ -5138,6 +5281,68 @@ function renderHubTickerCard(tab, item) {
     </div>`;
 }
 
+function renderHubDividendCashflow(cashflow) {
+  const data = cashflow || {};
+  const summary = data.summary || {};
+  const rows = data.rows || [];
+  const status = data.status || "not_evaluated";
+  const source = data.source || "Yahoo Finance info.dividendYield · info.exDividendDate · latest close";
+  const money = (value) => value != null && !Number.isNaN(Number(value))
+    ? `$${Number(value).toLocaleString("ko-KR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : "미계산";
+  const pct = (value) => value != null && !Number.isNaN(Number(value)) ? `${formatNumber(value, 2)}%` : "미확인";
+  const dayLabel = (value) => {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return "일정 미확인";
+    const n = Number(value);
+    if (n === 0) return "오늘 배당락";
+    if (n > 0) return `${n}일 남음`;
+    return `${Math.abs(n)}일 지남`;
+  };
+  const metricCards = [
+    { label: "배당 종목", value: formatNumber(summary.ticker_count || 0, 0), detail: `${formatNumber(summary.calculable_count || 0, 0)}개 계산 가능` },
+    { label: "평균 배당수익률", value: pct(summary.average_yield_pct), detail: "Yahoo dividendYield 기준" },
+    { label: "1주 기준 연 추정 현금흐름", value: money(summary.estimated_annual_income_per_share_total), detail: "보유수량 미반영 합계" },
+    { label: "배당락 임박", value: formatNumber(summary.upcoming_ex_dividend_count || 0, 0), detail: "45일 이내" },
+  ].map((item) => `
+    <div class="hub-dividend-metric">
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value)}</strong>
+      <small>${escapeHtml(item.detail)}</small>
+    </div>
+  `).join("");
+  const rowHtml = rows.length ? rows.map((row) => `
+    <article class="hub-dividend-row status-${statusClass(row.status || "not_evaluated")}">
+      <div class="hub-dividend-row-main">
+        <strong>${renderTicker(row.ticker)}</strong>
+        ${statusBadge(row.status || "not_evaluated")}
+      </div>
+      <div class="hub-dividend-row-metrics">
+        <span><b>${pct(row.dividend_yield_pct)}</b><small>배당수익률</small></span>
+        <span><b>${money(row.annual_income_per_share)}</b><small>1주 연 추정</small></span>
+        <span><b>${escapeHtml(row.ex_dividend_date || "미확인")}</b><small>${escapeHtml(dayLabel(row.days_to_ex))}</small></span>
+      </div>
+      ${(row.notes || []).length ? `<div class="hub-dividend-notes">${row.notes.map((note) => `<span>${escapeHtml(note)}</span>`).join("")}</div>` : ""}
+      ${renderSourceCaption(row.source || source)}
+    </article>
+  `).join("") : `<div class="hub-empty">배당 타입 종목이 없어 현금흐름을 계산하지 않았습니다.</div>`;
+
+  return `
+    <section class="hub-dividend-cashflow">
+      <div class="hub-dividend-head">
+        <div>
+          <h2>배당 현금흐름 추정</h2>
+          <p>${escapeHtml(summary.message || "배당 타입 종목의 1주 기준 현금흐름을 점검합니다.")}</p>
+        </div>
+        ${statusBadge(status)}
+      </div>
+      <div class="hub-dividend-metrics">${metricCards}</div>
+      <p class="hub-dividend-note">${escapeHtml(summary.unit_note || "실제 계좌 현금흐름은 보유수량 연동 후 계산해야 합니다.")}</p>
+      ${renderSourceCaption(source)}
+      <div class="hub-dividend-list">${rowHtml}</div>
+    </section>
+  `;
+}
+
 function renderHubTabContent(data, tab) {
   const meta = data.portfolio_type_meta?.[tab] || {};
   const summary = data.type_summaries?.[tab] || {};
@@ -5173,14 +5378,15 @@ function renderHubTabContent(data, tab) {
       <div class="hub-stat-card" style="border-top:3px solid #ef4444"><div class="hub-stat-num" style="color:#ef4444">${summary.sell_candidate_count || 0}</div><div class="hub-stat-label">매도 후보</div></div>
       <div class="hub-stat-card" style="border-top:3px solid #f59e0b"><div class="hub-stat-num" style="color:#f59e0b">${summary.caution_count || 0}</div><div class="hub-stat-label">점검 필요</div></div>
     </div>`;
+  const dividendCashflow = tab === "dividend" ? renderHubDividendCashflow(data.dividend_cashflow) : "";
 
   if (!items.length) {
-    return typeDesc + summaryCards + `<div class="hub-empty">이 탭에 배정된 종목이 없습니다.<br><small>portfolio_mapping.json에서 portfolio_types에 <code>${tab}</code>을 추가하거나 위 입력창에 종목을 입력하세요.</small></div>`;
+    return typeDesc + summaryCards + dividendCashflow + `<div class="hub-empty">이 탭에 배정된 종목이 없습니다.<br><small>portfolio_mapping.json에서 portfolio_types에 <code>${tab}</code>을 추가하거나 위 입력창에 종목을 입력하세요.</small></div>`;
   }
 
   const ticker_rows = items.map(item => renderHubTickerCard(tab, item)).join("");
 
-  return typeDesc + summaryCards + `<div class="hub-ticker-grid">${ticker_rows}</div>`;
+  return typeDesc + summaryCards + dividendCashflow + `<div class="hub-ticker-grid">${ticker_rows}</div>`;
 }
 
 function renderHubKeyMetrics(info, tab) {
@@ -5238,6 +5444,141 @@ function renderHubKeyMetrics(info, tab) {
 // ═══════════════════════════════════════════════════════════════════════════
 // 자동매매 준비 (13번 메뉴)
 // ═══════════════════════════════════════════════════════════════════════════
+
+function autotradingStageStatus(stage) {
+  return {
+    auto_candidate: "success",
+    semi_auto_review: "warning",
+    paper_required: "warning",
+    analysis_only: "not_evaluated",
+    blocked: "blocked",
+  }[stage] || "not_evaluated";
+}
+
+function renderAutotradingReadiness(readiness) {
+  const data = readiness || {};
+  const components = data.components || [];
+  const actions = data.next_actions || [];
+  const score = Number(data.score || 0);
+  const maxScore = Number(data.max_score || 100) || 100;
+  const ratio = Math.max(0, Math.min(100, (score / maxScore) * 100));
+  const stageStatus = autotradingStageStatus(data.stage);
+  const componentRows = components.length
+    ? components.map((item) => `
+        <div class="at-score-component status-${statusClass(item.status)}">
+          <div>
+            <strong>${escapeHtml(item.label || item.id)}</strong>
+            <span>${escapeHtml(item.message || "")}</span>
+            ${renderSourceCaption(item.source || "autotrading readiness score")}
+          </div>
+          <div class="at-score-component-meta">
+            ${statusBadge(item.status)}
+            <b>${formatNumber(item.score, 1)} / ${formatNumber(item.max_score, 1)}</b>
+            <small>${escapeHtml(item.value || "")}</small>
+          </div>
+        </div>
+      `).join("")
+    : `<div class="empty-state">자동매매 준비 점수를 계산할 자료가 없습니다.</div>`;
+  const actionRows = actions.length
+    ? actions.map((item) => `
+        <li>
+          <strong>${escapeHtml(item.label || item.component)}</strong>
+          <span>${escapeHtml(item.action || "")}</span>
+          ${renderSourceCaption(item.source || "autotrading readiness score")}
+        </li>
+      `).join("")
+    : `<li><strong>추가 조치 없음</strong><span>현재 점수 기준에서 우선 보강 항목이 없습니다.</span></li>`;
+
+  return `
+    <section class="at-section at-score-section">
+      <div class="at-score-layout">
+        <div class="at-score-gauge">
+          <span>자동매매 준비 점수</span>
+          <strong>${formatNumber(score, 1)}</strong>
+          <small>/ ${formatNumber(maxScore, 0)} · ${escapeHtml(data.grade || "F")}</small>
+          <div class="at-score-track"><div style="width:${ratio}%"></div></div>
+          ${renderSourceCaption((data.sources || []).join(" · ") || "latest run manifest · operational_status.json · paper trading report")}
+        </div>
+        <div class="at-score-summary">
+          ${statusBadge(stageStatus, data.stage_label || "분석 모드 유지")}
+          <h2>${escapeHtml(data.summary || "자동매매 준비 상태를 점검 중입니다.")}</h2>
+          <p>80점 이상이면 반자동 검토 후보, 90점 이상이고 Paper 성과가 충분할 때만 자동매매 후보로 봅니다. 실제 주문 전송은 계속 비활성입니다.</p>
+          <div class="at-threshold-row">
+            <span>반자동 ${formatNumber(data.thresholds?.semi_auto_review ?? 80, 0)}점</span>
+            <span>자동 후보 ${formatNumber(data.thresholds?.auto_candidate ?? 90, 0)}점</span>
+          </div>
+        </div>
+      </div>
+      <div class="at-score-components">${componentRows}</div>
+      <div class="at-next-actions">
+        <h3>다음 보강 항목</h3>
+        <ol>${actionRows}</ol>
+      </div>
+    </section>
+  `;
+}
+
+function renderPaperPromotionReport(report) {
+  const data = report || {};
+  const criteria = data.criteria || [];
+  const actions = data.next_actions || [];
+  const status = data.status || "not_evaluated";
+  const statusLabel = data.status_label || STATUS_LABELS[status] || status;
+  const criteriaRows = criteria.length
+    ? criteria.map((item) => `
+        <div class="at-paper-criterion status-${statusClass(item.status)}">
+          <div>
+            <strong>${escapeHtml(item.label || item.id)}</strong>
+            <span>${escapeHtml(item.message || "")}</span>
+            ${renderSourceCaption(item.source || data.source || "paper trading report")}
+          </div>
+          <div class="at-paper-criterion-meta">
+            ${statusBadge(item.status)}
+            <b>${escapeHtml(item.observed || "미검증")}</b>
+            <small>기준 ${escapeHtml(item.required || "-")}</small>
+          </div>
+        </div>
+      `).join("")
+    : `<div class="empty-state">Paper Trading 승격 기준을 계산할 데이터가 없습니다.</div>`;
+  const actionRows = actions.length
+    ? actions.map((item) => `
+        <li>
+          <strong>${escapeHtml(item.label || item.criterion)}</strong>
+          <span>${escapeHtml(item.action || "")}</span>
+          ${renderSourceCaption(item.source || data.source || "paper trading report")}
+        </li>
+      `).join("")
+    : `<li><strong>추가 조치 없음</strong><span>현재 Paper 승격 기준에서 즉시 보강할 항목이 없습니다.</span></li>`;
+
+  return `
+    <section class="at-section at-paper-report">
+      <div class="at-paper-header">
+        <div>
+          <div class="at-section-eyebrow">Paper Trading</div>
+          <h2>Paper Trading 승격 리포트</h2>
+          ${renderSourceCaption(data.source || "paper_trading.json · autotrading readiness score")}
+        </div>
+        <span class="status-label status-${statusClass(status)}">${escapeHtml(statusLabel)}</span>
+      </div>
+      <div class="at-paper-summary">
+        <p>${escapeHtml(data.summary || "Paper Trading 승격 상태를 계산하지 못했습니다.")}</p>
+        <div class="at-paper-eligibility">
+          <span class="${data.eligible_for_semi_auto ? "is-pass" : "is-wait"}">
+            반자동 검토 ${data.eligible_for_semi_auto ? "가능" : "보류"}
+          </span>
+          <span class="${data.eligible_for_auto_candidate ? "is-pass" : "is-wait"}">
+            자동 후보 ${data.eligible_for_auto_candidate ? "가능" : "보류"}
+          </span>
+        </div>
+      </div>
+      <div class="at-paper-criteria">${criteriaRows}</div>
+      <div class="at-next-actions at-paper-actions">
+        <h3>승격 전 보강 항목</h3>
+        <ol>${actionRows}</ol>
+      </div>
+    </section>
+  `;
+}
 
 function renderAutotrading() {
   const data = state.autotradingStatus;
@@ -5298,6 +5639,9 @@ function renderAutotrading() {
       <strong>투자 책임 고지</strong>
       <p>${escapeHtml(status.disclaimer || data.disclaimer || "")}</p>
     </div>
+
+    ${renderAutotradingReadiness(data.readiness_score)}
+    ${renderPaperPromotionReport(data.paper_promotion_report)}
 
     <section class="at-section">
       <h2>단계별 활성화 로드맵</h2>

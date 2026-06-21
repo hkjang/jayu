@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import subprocess
+import sys
+import threading
 import time
 import webbrowser
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,9 +20,18 @@ from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
-import sys
-import subprocess
-import threading
+from .failure_codes import FailureCode
+from .io import read_json, stable_hash
+from .metric_dictionary import metric_dictionary_payload
+from .paper_trading import OrderApproval, OrderIntent, OrderPlan
+from .paths import RuntimePaths
+from .portfolio import load_portfolio, load_portfolio_mapping
+from .provider_factory import build_provider_registry, provider_configuration_audit, provider_policy
+from .safety import evaluate_shadow_promotion
+from .settings import Settings, load_settings
+from .strategy_space import load_strategy_spaces, validate_strategy_spaces
+from .survivorship import audit_survivorship
+from .toss import TOSS_GET_ENDPOINTS, TossCredentialsError, TossInvestClient
 
 # 시뮬레이션 로그 스트리밍을 위한 글로벌 버퍼 및 프로세스 관리
 SIMULATION_BUFFER: list[str] = [
@@ -109,20 +121,6 @@ def _run_simulation_thread(project_root: Path, tickers: list[str] | None = None)
     finally:
         with SIMULATION_LOCK:
             SIMULATION_PROCESS = None
-
-
-from .failure_codes import FailureCode
-from .io import read_json, stable_hash
-from .metric_dictionary import metric_dictionary_payload
-from .paper_trading import OrderApproval, OrderIntent, OrderPlan
-from .paths import RuntimePaths
-from .portfolio import load_portfolio, load_portfolio_mapping
-from .provider_factory import build_provider_registry, provider_configuration_audit, provider_policy
-from .safety import evaluate_shadow_promotion
-from .settings import Settings, load_settings
-from .strategy_space import load_strategy_spaces, validate_strategy_spaces
-from .survivorship import audit_survivorship
-from .toss import TOSS_GET_ENDPOINTS, TossCredentialsError, TossInvestClient
 
 SCHEMA_VERSION = "1.0"
 TOSS_SYMBOL_CHUNK_SIZE = 180
@@ -1417,7 +1415,12 @@ def build_dashboard_toss_order_plan(paths: RuntimePaths) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "order_plan": order_plan,
-        "paper_order_contract": _paper_order_contract(order_plan, today_signals),
+        "paper_order_contract": _paper_order_contract(
+            order_plan,
+            today_signals,
+            warnings_gate,
+            market_session,
+        ),
         "warnings_gate": warnings_gate,
         "market_session": market_session,
         "today_signals": today_signals,
@@ -1427,17 +1430,46 @@ def build_dashboard_toss_order_plan(paths: RuntimePaths) -> dict[str, Any]:
 def _paper_order_contract(
     order_plan: Mapping[str, Any],
     today_signals: Mapping[str, Any],
+    warnings_gate: Mapping[str, Any] | None = None,
+    market_session: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     intents: list[OrderIntent] = []
-    for order in _sequence(order_plan.get("orders")):
+    rejected: list[dict[str, Any]] = []
+    warnings_gate = _mapping(warnings_gate)
+    market_session = _mapping(market_session)
+    for index, order in enumerate(_sequence(order_plan.get("orders")), start=1):
         if not isinstance(order, Mapping):
+            rejected.append(
+                _rejected_order_intent(
+                    index,
+                    {},
+                    ["주문 항목이 객체 형식이 아닙니다."],
+                    "order_plan.json",
+                )
+            )
             continue
         ticker = str(order.get("ticker") or order.get("symbol") or "").upper()
         if not ticker:
+            rejected.append(
+                _rejected_order_intent(
+                    index,
+                    order,
+                    ["ticker 또는 symbol 값이 없습니다."],
+                    "order_plan.json",
+                )
+            )
             continue
         side_raw = str(order.get("side") or order.get("action") or "").lower()
         side = "sell" if side_raw == "sell" else "buy" if side_raw == "buy" else None
         if side is None:
+            rejected.append(
+                _rejected_order_intent(
+                    index,
+                    order,
+                    ["side/action은 buy 또는 sell이어야 합니다."],
+                    "order_plan.json",
+                )
+            )
             continue
         signal = _mapping(today_signals.get(ticker))
         quantity = _float_or_none(
@@ -1453,7 +1485,13 @@ def _paper_order_contract(
         )
         arrival_mid = _float_or_none(order.get("arrival_mid")) or decision_price
         final_price = _float_or_none(order.get("final_price")) or arrival_mid
-        if quantity is None or quantity <= 0 or decision_price is None or decision_price <= 0:
+        missing: list[str] = []
+        if quantity is None or quantity <= 0:
+            missing.append("수량이 없거나 0 이하입니다.")
+        if decision_price is None or decision_price <= 0:
+            missing.append("기준 가격이 없거나 0 이하입니다.")
+        if missing:
+            rejected.append(_rejected_order_intent(index, order, missing, "order_plan.json"))
             continue
         intents.append(
             OrderIntent(
@@ -1480,19 +1518,350 @@ def _paper_order_contract(
         ),
     )
     payload = plan.to_dict()
+    quality_rows = [
+        _order_intent_quality(
+            intent,
+            today_signals=today_signals,
+            warnings_gate=warnings_gate,
+            market_session=market_session,
+        )
+        for intent in intents
+    ]
+    payload["intents"] = [
+        {**intent, "quality": quality_rows[index]}
+        for index, intent in enumerate(payload.get("intents", []))
+    ]
     payload.update(
         {
             "read_only": True,
             "live_order_enabled": False,
+            "quality_summary": _order_intent_quality_summary(quality_rows, rejected),
+            "rejected_intents": rejected,
             "contract": {
                 "intent": "OrderIntent",
                 "plan": "OrderPlan",
                 "approval": "OrderApproval",
             },
-            "source": "order_plan.json · today_signals.json · jayu.paper_trading",
+            "source": (
+                "order_plan.json · today_signals.json · stock_warning_gate.json · "
+                "market_session_status.json · jayu.paper_trading"
+            ),
         }
     )
     return payload
+
+
+ORDER_INTENT_QUALITY_WEIGHTS = {
+    "structure": 25,
+    "signal_alignment": 20,
+    "warning_gate": 20,
+    "market_session": 15,
+    "execution_inputs": 15,
+    "approval_lock": 5,
+}
+
+
+def _rejected_order_intent(
+    index: int,
+    order: Mapping[str, Any],
+    reasons: Sequence[str],
+    source: str,
+) -> dict[str, Any]:
+    return {
+        "index": index,
+        "ticker": str(order.get("ticker") or order.get("symbol") or "-").upper(),
+        "status": "blocked",
+        "score": 0,
+        "grade": "F",
+        "reasons": [str(reason) for reason in reasons],
+        "source": source,
+    }
+
+
+def _order_intent_quality(
+    intent: OrderIntent,
+    *,
+    today_signals: Mapping[str, Any],
+    warnings_gate: Mapping[str, Any],
+    market_session: Mapping[str, Any],
+) -> dict[str, Any]:
+    checks = [
+        _intent_structure_check(intent),
+        _intent_signal_check(intent, today_signals),
+        _intent_warning_check(intent, warnings_gate),
+        _intent_market_session_check(intent, market_session),
+        _intent_execution_input_check(intent),
+        _intent_approval_lock_check(),
+    ]
+    score = round(sum(_float_or_none(check.get("score")) or 0.0 for check in checks), 1)
+    blocked = any(check.get("status") == "blocked" for check in checks)
+    status = "blocked" if blocked else "success" if score >= 80 else "warning" if score >= 50 else "not_evaluated"
+    return {
+        "score": score,
+        "max_score": 100,
+        "grade": _quality_grade(score),
+        "status": status,
+        "summary": _quality_summary(status, score),
+        "checks": checks,
+        "source": "order_plan.json · today_signals.json · stock_warning_gate.json · market_session_status.json",
+    }
+
+
+def _quality_check(
+    key: str,
+    label: str,
+    weight: float,
+    ratio: float,
+    status: str,
+    value: str,
+    message: str,
+    source: str,
+    details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    score = max(0.0, min(float(weight), float(weight) * max(0.0, min(float(ratio), 1.0))))
+    return {
+        "id": key,
+        "label": label,
+        "score": round(score, 1),
+        "max_score": weight,
+        "status": status,
+        "value": value,
+        "message": message,
+        "source": source,
+        "details": dict(details or {}),
+    }
+
+
+def _intent_structure_check(intent: OrderIntent) -> dict[str, Any]:
+    ok = (
+        bool(intent.ticker)
+        and intent.side in {"buy", "sell"}
+        and intent.quantity > 0
+        and intent.decision_price > 0
+        and intent.arrival_mid > 0
+        and intent.final_price > 0
+    )
+    return _quality_check(
+        "structure",
+        "필수 주문 필드",
+        ORDER_INTENT_QUALITY_WEIGHTS["structure"],
+        1.0 if ok else 0.0,
+        "success" if ok else "blocked",
+        f"{intent.side} {intent.quantity:g}주 @ {intent.decision_price:g}",
+        "종목, 방향, 수량, 기준가, 도착가, 최종가가 모두 있어야 합니다.",
+        "order_plan.json",
+        {
+            "ticker": intent.ticker,
+            "side": intent.side,
+            "quantity": intent.quantity,
+            "decision_price": intent.decision_price,
+            "arrival_mid": intent.arrival_mid,
+            "final_price": intent.final_price,
+        },
+    )
+
+
+def _intent_signal_check(intent: OrderIntent, today_signals: Mapping[str, Any]) -> dict[str, Any]:
+    signal = _mapping(today_signals.get(intent.ticker))
+    if not signal:
+        return _quality_check(
+            "signal_alignment",
+            "신호 정합성",
+            ORDER_INTENT_QUALITY_WEIGHTS["signal_alignment"],
+            0.4,
+            "warning",
+            "신호 없음",
+            "today_signals에 같은 종목 신호가 없어 주문 의도만 단독 검토합니다.",
+            "today_signals.json",
+        )
+    eligible = signal.get("eligible")
+    signal_name = str(signal.get("signal") or signal.get("decision") or signal.get("action") or "unknown")
+    buy_like = signal_name in {"buy", "buy_candidate", "weak_buy", "approved", "eligible"}
+    sell_like = signal_name in {"sell", "sell_candidate", "weak_sell", "exit", "reduce"}
+    aligned = (intent.side == "buy" and buy_like) or (intent.side == "sell" and sell_like)
+    if eligible is False:
+        ratio = 0.0
+        status = "blocked"
+        message = "신호가 eligible=false라 주문 후보로 넘기면 안 됩니다."
+    elif aligned:
+        ratio = 1.0
+        status = "success"
+        message = "주문 방향과 today_signals의 결론이 일치합니다."
+    else:
+        ratio = 0.5
+        status = "warning"
+        message = "주문 방향과 today_signals의 결론이 명확히 일치하지 않습니다."
+    return _quality_check(
+        "signal_alignment",
+        "신호 정합성",
+        ORDER_INTENT_QUALITY_WEIGHTS["signal_alignment"],
+        ratio,
+        status,
+        f"{signal_name} · eligible={eligible}",
+        message,
+        "today_signals.json",
+        {"signal": signal_name, "eligible": eligible, "side": intent.side},
+    )
+
+
+def _intent_warning_check(intent: OrderIntent, warnings_gate: Mapping[str, Any]) -> dict[str, Any]:
+    warning = _mapping(warnings_gate.get(intent.ticker))
+    if not warning:
+        return _quality_check(
+            "warning_gate",
+            "매수 유의사항",
+            ORDER_INTENT_QUALITY_WEIGHTS["warning_gate"],
+            0.6,
+            "not_evaluated",
+            "미조회",
+            "stock_warning_gate에 해당 종목의 주의사항 결과가 없습니다.",
+            "stock_warning_gate.json",
+        )
+    has_warning = warning.get("has_warning") is True
+    status = "blocked" if has_warning else "success"
+    return _quality_check(
+        "warning_gate",
+        "매수 유의사항",
+        ORDER_INTENT_QUALITY_WEIGHTS["warning_gate"],
+        0.0 if has_warning else 1.0,
+        status,
+        "경고 있음" if has_warning else "정상",
+        "투자경고·거래정지·VI 등 매수 유의사항을 주문 전 확인합니다.",
+        "stock_warning_gate.json · Toss /api/v1/stocks/{symbol}/warnings",
+        dict(warning),
+    )
+
+
+def _intent_market_session_check(
+    intent: OrderIntent,
+    market_session: Mapping[str, Any],
+) -> dict[str, Any]:
+    market = _ticker_market(intent.ticker)
+    session = _mapping(market_session.get(market))
+    if not session:
+        return _quality_check(
+            "market_session",
+            "시장 개장 상태",
+            ORDER_INTENT_QUALITY_WEIGHTS["market_session"],
+            0.5,
+            "not_evaluated",
+            f"{market} 미조회",
+            "market_session_status에 해당 시장 개장 정보가 없습니다.",
+            "market_session_status.json",
+            {"market": market},
+        )
+    is_open = session.get("open") is True or session.get("is_open") is True
+    return _quality_check(
+        "market_session",
+        "시장 개장 상태",
+        ORDER_INTENT_QUALITY_WEIGHTS["market_session"],
+        1.0 if is_open else 0.0,
+        "success" if is_open else "blocked",
+        f"{market} {'개장' if is_open else '폐장'}",
+        "Paper 검증은 가능하지만, 실주문 검토 전에는 시장 개장 여부를 확인해야 합니다.",
+        "market_session_status.json",
+        {"market": market, **dict(session)},
+    )
+
+
+def _intent_execution_input_check(intent: OrderIntent) -> dict[str, Any]:
+    supplied = 2
+    total = 4
+    if intent.atr > 0:
+        supplied += 1
+    if intent.relative_spread is not None:
+        supplied += 1
+    ratio = supplied / total
+    status = "success" if ratio >= 1.0 else "warning" if ratio >= 0.5 else "not_evaluated"
+    return _quality_check(
+        "execution_inputs",
+        "체결 품질 입력",
+        ORDER_INTENT_QUALITY_WEIGHTS["execution_inputs"],
+        ratio,
+        status,
+        f"{supplied}/{total}",
+        "arrival_mid, final_price, ATR, spread가 많을수록 Paper 체결 품질 평가가 정교해집니다.",
+        "order_plan.json · jayu.paper_trading",
+        {
+            "arrival_mid": intent.arrival_mid,
+            "final_price": intent.final_price,
+            "atr": intent.atr,
+            "relative_spread": intent.relative_spread,
+            "latency_ms": intent.latency_ms,
+        },
+    )
+
+
+def _intent_approval_lock_check() -> dict[str, Any]:
+    return _quality_check(
+        "approval_lock",
+        "Live 주문 잠금",
+        ORDER_INTENT_QUALITY_WEIGHTS["approval_lock"],
+        1.0,
+        "success",
+        "비활성",
+        "대시보드 주문 의도 검증은 live 주문 전송 없이 읽기 전용으로만 동작합니다.",
+        "OrderApproval.live_order_enabled=false",
+    )
+
+
+def _order_intent_quality_summary(
+    quality_rows: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    if not quality_rows:
+        return {
+            "status": "not_evaluated" if not rejected else "blocked",
+            "average_score": 0,
+            "grade": "F",
+            "intent_count": 0,
+            "rejected_count": len(rejected),
+            "summary": "품질 점수를 계산할 유효한 OrderIntent가 없습니다.",
+            "source": "order_plan.json · OrderIntent validation",
+        }
+    scores = [_float_or_none(item.get("score")) or 0.0 for item in quality_rows]
+    average = round(sum(scores) / len(scores), 1)
+    blocked_count = sum(1 for item in quality_rows if item.get("status") == "blocked")
+    status = "blocked" if blocked_count or rejected else "success" if average >= 80 else "warning"
+    return {
+        "status": status,
+        "average_score": average,
+        "grade": _quality_grade(average),
+        "intent_count": len(quality_rows),
+        "rejected_count": len(rejected),
+        "blocked_count": blocked_count,
+        "summary": _quality_summary(status, average),
+        "source": "order_plan.json · today_signals.json · stock_warning_gate.json · market_session_status.json",
+    }
+
+
+def _quality_grade(score: float) -> str:
+    if score >= 90:
+        return "A"
+    if score >= 80:
+        return "B"
+    if score >= 65:
+        return "C"
+    if score >= 50:
+        return "D"
+    return "F"
+
+
+def _quality_summary(status: str, score: float) -> str:
+    if status == "success":
+        return f"주문 의도 품질 {score:.1f}점입니다. Paper 검증 후보로 볼 수 있습니다."
+    if status == "blocked":
+        return f"주문 의도 품질 {score:.1f}점입니다. 차단 조건을 먼저 해소해야 합니다."
+    if status == "warning":
+        return f"주문 의도 품질 {score:.1f}점입니다. 부족한 입력과 신호 정합성을 보강하세요."
+    return "주문 의도 품질을 판단할 유효 데이터가 부족합니다."
+
+
+def _ticker_market(ticker: str) -> str:
+    clean = ticker.upper()
+    if clean.endswith(".KS") or clean.endswith(".KQ") or clean.isdigit() or clean.startswith("KRX:"):
+        return "KR"
+    return "US"
 
 
 
@@ -1658,6 +2027,8 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
                 except OSError:
                     cache_stats[subdir.name] = {"file_count": 0, "total_bytes": 0}
 
+    toss_api_drift = _toss_api_drift_status(paths, now=now)
+
     # --- Build provider detail list ---
     provider_categories: dict[str, str] = {
         "yahoo": "price",
@@ -1773,9 +2144,20 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
     providers_with_partial = sum(
         1 for p in providers_detail if p["recent"]["status"] == "partial"
     )
+    toss_drift_attention = toss_api_drift.get("status") in {
+        "drifted",
+        "failed_to_fetch",
+        "not_checked",
+        "stale",
+        "unknown",
+    }
     overall_status = (
         "failed" if providers_with_failures > 0
-        else "warning" if providers_with_partial > 0 or configured_count < total_providers
+        else "warning" if (
+            providers_with_partial > 0
+            or configured_count < total_providers
+            or toss_drift_attention
+        )
         else "success"
     )
 
@@ -1815,6 +2197,7 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
             "has_client_secret": bool(_secret_value(settings.kakao_client_secret)),
         },
         "cache_stats": cache_stats,
+        "toss_api_drift": toss_api_drift,
         "config": {
             "primary_price_provider": settings.data_provider,
             "fallback_price_provider": settings.data_fallback_provider,
@@ -1826,6 +2209,123 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
         },
         "api_logs": _load_recent_api_logs(paths),
     }
+
+
+def _toss_api_drift_status(paths: RuntimePaths, *, now: datetime | None = None) -> dict[str, Any]:
+    """Return the latest Toss OpenAPI drift check status for the dashboard."""
+    now = now or datetime.now(UTC)
+    report_path = paths.state_dir / "toss_api_drift.json"
+    snapshot_path = paths.state_dir / "toss_openapi_snapshot.json"
+    local_paths = sorted(endpoint.path for endpoint in TOSS_GET_ENDPOINTS)
+    base = {
+        "source": "state/toss_api_drift.json · TOSS_GET_ENDPOINTS · Toss OpenAPI latest spec",
+        "snapshot_source": "state/toss_openapi_snapshot.json",
+        "local_endpoint_count": len(local_paths),
+        "local_endpoints": [
+            {
+                "operation_id": endpoint.operation_id,
+                "path": endpoint.path,
+                "requires_account": endpoint.requires_account,
+            }
+            for endpoint in TOSS_GET_ENDPOINTS
+        ],
+        "snapshot_available": snapshot_path.exists(),
+        "max_age_hours": 168,
+    }
+    if not report_path.exists():
+        return {
+            **base,
+            "status": "not_checked",
+            "status_label": "아직 확인 안 함",
+            "last_checked_at": None,
+            "age_hours": None,
+            "missing_endpoints": [],
+            "extra_endpoints": [],
+            "missing_count": 0,
+            "extra_count": 0,
+            "fallback_snapshot_used": False,
+            "summary": "Toss OpenAPI drift check 결과가 아직 없습니다. `uv run jayu toss endpoints --sync`로 스펙 차이를 확인하세요.",
+            "next_action": "uv run jayu toss endpoints --sync",
+        }
+
+    report = _mapping(read_json(report_path, default={}))
+    missing = [str(item) for item in _sequence(report.get("missing_endpoints"))]
+    extra = [str(item) for item in _sequence(report.get("extra_endpoints"))]
+    checked_at = str(report.get("last_checked_at") or "") or None
+    checked_dt = _parse_datetime_utc(checked_at)
+    age_hours = (
+        round((now - checked_dt).total_seconds() / 3600, 2)
+        if checked_dt is not None
+        else None
+    )
+    stale = checked_dt is None or now - checked_dt > timedelta(hours=base["max_age_hours"])
+    raw_status = str(report.get("status") or "unknown")
+    status = "stale" if stale and raw_status == "synchronized" else raw_status
+    if raw_status == "drifted" or missing or extra:
+        status = "drifted"
+    elif raw_status == "failed_to_fetch":
+        status = "failed_to_fetch"
+    elif raw_status not in {"synchronized", "drifted", "failed_to_fetch"}:
+        status = "unknown"
+
+    return {
+        **base,
+        "status": status,
+        "status_label": _toss_api_drift_label(status),
+        "last_checked_at": checked_at,
+        "age_hours": age_hours,
+        "missing_endpoints": missing,
+        "extra_endpoints": extra,
+        "missing_count": len(missing),
+        "extra_count": len(extra),
+        "fetch_error": report.get("fetch_error") or report.get("message"),
+        "fallback_snapshot_used": report.get("fallback_snapshot_used") is True,
+        "summary": _toss_api_drift_summary(status, len(missing), len(extra), age_hours),
+        "next_action": "uv run jayu toss endpoints --sync",
+    }
+
+
+def _parse_datetime_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _toss_api_drift_label(status: str) -> str:
+    return {
+        "synchronized": "동기화됨",
+        "drifted": "스펙 변경 감지",
+        "failed_to_fetch": "스펙 조회 실패",
+        "not_checked": "미확인",
+        "stale": "확인 오래됨",
+        "unknown": "상태 불명",
+    }.get(status, "상태 불명")
+
+
+def _toss_api_drift_summary(
+    status: str,
+    missing_count: int,
+    extra_count: int,
+    age_hours: float | None,
+) -> str:
+    if status == "synchronized":
+        return "로컬 Toss GET 카탈로그가 최근 OpenAPI 스펙과 일치합니다."
+    if status == "drifted":
+        return f"OpenAPI 스펙과 로컬 카탈로그 차이가 있습니다. 누락 {missing_count}개, 로컬 전용 {extra_count}개를 확인하세요."
+    if status == "failed_to_fetch":
+        return "Toss OpenAPI 스펙을 조회하지 못했습니다. 네트워크 또는 Toss 문서 엔드포인트 상태를 확인하세요."
+    if status == "stale":
+        age_text = f"{age_hours:.1f}시간 전" if age_hours is not None else "시각 불명"
+        return f"마지막 Toss OpenAPI drift check가 오래되었습니다 ({age_text}). 최신 스펙으로 다시 확인하세요."
+    if status == "not_checked":
+        return "아직 Toss OpenAPI drift check 결과가 없습니다."
+    return "Toss OpenAPI drift check 상태를 해석하지 못했습니다."
 
 
 
@@ -2175,7 +2675,7 @@ def _dashboard_handler(
                     return
                 # ── 자동매매 준비 상태 ────────────────────────────────────────
                 if parsed.path == "/api/v1/autotrading-status":
-                    self._json(build_autotrading_status_data())
+                    self._json(build_autotrading_status_data(paths))
                     return
                 if parsed.path == "/api/v1/simulation/log":
                     with SIMULATION_LOCK:
@@ -7146,7 +7646,7 @@ def build_portfolio_hub_ticker_signals(ticker: str) -> dict[str, Any]:
 
 # ─── 자동매매 준비 상태 빌더 ──────────────────────────────────────────────────
 
-def build_autotrading_status_data() -> dict[str, Any]:
+def build_autotrading_status_data(paths: RuntimePaths | None = None) -> dict[str, Any]:
     """자동매매 준비 상태 데이터. 항상 비활성 상태를 반환."""
     from .autotrading_prep import build_autotrading_status_payload
-    return build_autotrading_status_payload()
+    return build_autotrading_status_payload(paths)

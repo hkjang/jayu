@@ -607,10 +607,12 @@ def sync_endpoints(client: TossInvestClient, paths: RuntimePaths) -> dict[str, A
 
     if fetch_error:
         snapshot_file = paths.state_dir / "toss_openapi_snapshot.json" if paths.state_dir else None
+        fallback_snapshot_used = False
         if snapshot_file and snapshot_file.exists():
             try:
                 with open(snapshot_file, "r", encoding="utf-8") as f:
                     spec_json = json.load(f)
+                    fallback_snapshot_used = True
             except OSError:
                 pass
 
@@ -619,9 +621,13 @@ def sync_endpoints(client: TossInvestClient, paths: RuntimePaths) -> dict[str, A
                 "last_checked_at": last_checked,
                 "status": "failed_to_fetch",
                 "message": f"Could not retrieve Toss OpenAPI spec: {fetch_error}",
+                "fetch_error": fetch_error,
+                "fallback_snapshot_used": False,
                 "missing_endpoints": [],
                 "extra_endpoints": [],
             }
+    else:
+        fallback_snapshot_used = False
 
     spec_get_paths = set()
     paths_dict = spec_json.get("paths", {})
@@ -639,6 +645,8 @@ def sync_endpoints(client: TossInvestClient, paths: RuntimePaths) -> dict[str, A
     report = {
         "last_checked_at": last_checked,
         "status": status,
+        "fetch_error": fetch_error,
+        "fallback_snapshot_used": fallback_snapshot_used,
         "missing_endpoints": missing_endpoints,
         "extra_endpoints": extra_endpoints,
     }

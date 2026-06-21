@@ -11,10 +11,13 @@ Notes:
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timezone
 from typing import Any
 
 UTC = timezone.utc
+
+DIVIDEND_CASHFLOW_SOURCE = "Yahoo Finance info.dividendYield · info.exDividendDate · latest close"
 
 
 PORTFOLIO_TYPE_ORDER = ["short_term", "swing", "long_term", "dividend"]
@@ -652,6 +655,134 @@ def _normalized_portfolio_types(values: list[str] | None) -> list[str]:
     return normalized or ["long_term"]
 
 
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _days_to_iso_date(value: Any) -> int | None:
+    if not value:
+        return None
+    try:
+        return (date.fromisoformat(str(value)[:10]) - date.today()).days
+    except ValueError:
+        return None
+
+
+def _build_dividend_cashflow(
+    ticker_data: dict[str, dict],
+    type_map: dict[str, list[str]],
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    yield_values: list[float] = []
+    estimated_total = 0.0
+    upcoming_count = 0
+    unknown_ex_date_count = 0
+    high_yield_count = 0
+    missing_yield_count = 0
+    calculable_count = 0
+
+    for ticker in sorted(ticker_data):
+        types = _normalized_portfolio_types(type_map.get(ticker))
+        if "dividend" not in types:
+            continue
+
+        data = ticker_data[ticker]
+        price = _finite_float(data.get("latest_price"))
+        dividend_yield = _finite_float(data.get("dividend_yield"))
+        ex_dividend_date = data.get("ex_dividend_date")
+        days_to_ex = _days_to_iso_date(ex_dividend_date)
+        annual_income_per_share = None
+        status = "not_evaluated"
+        notes: list[str] = []
+
+        if dividend_yield is None or dividend_yield <= 0:
+            missing_yield_count += 1
+            notes.append("배당수익률 미확인")
+        elif price is None:
+            yield_values.append(dividend_yield)
+            notes.append("현재가 미확인으로 현금흐름 미계산")
+            status = "warning"
+        else:
+            annual_income_per_share = round(price * dividend_yield / 100, 2)
+            estimated_total += annual_income_per_share
+            calculable_count += 1
+            yield_values.append(dividend_yield)
+            status = "success"
+            notes.append("1주 기준 연 추정 배당")
+
+        if dividend_yield is not None and dividend_yield > 10:
+            high_yield_count += 1
+            status = "warning"
+            notes.append("고배당 지속 가능성 점검")
+
+        if ex_dividend_date and days_to_ex is not None:
+            if 0 <= days_to_ex <= 45:
+                upcoming_count += 1
+                notes.append(f"배당락 {days_to_ex}일 전")
+                if days_to_ex <= 14:
+                    status = "warning"
+            elif days_to_ex < 0:
+                notes.append(f"배당락 {abs(days_to_ex)}일 경과")
+            else:
+                notes.append(f"배당락 {days_to_ex}일 남음")
+        else:
+            unknown_ex_date_count += 1
+            if status == "success":
+                status = "warning"
+            notes.append("배당락일 미확인")
+
+        rows.append(
+            {
+                "ticker": ticker,
+                "latest_price": price,
+                "dividend_yield_pct": round(dividend_yield, 2) if dividend_yield is not None else None,
+                "annual_income_per_share": annual_income_per_share,
+                "ex_dividend_date": ex_dividend_date,
+                "days_to_ex": days_to_ex,
+                "status": status,
+                "notes": notes[:4],
+                "source": DIVIDEND_CASHFLOW_SOURCE,
+            }
+        )
+
+    average_yield = round(sum(yield_values) / len(yield_values), 2) if yield_values else None
+    if not rows:
+        status = "not_evaluated"
+        message = "배당 타입 종목이 없어 현금흐름을 계산하지 않았습니다."
+    elif calculable_count == 0:
+        status = "not_evaluated"
+        message = "배당수익률 또는 현재가가 부족해 1주 기준 현금흐름을 계산하지 못했습니다."
+    elif high_yield_count or unknown_ex_date_count or missing_yield_count:
+        status = "warning"
+        message = "배당 현금흐름은 계산됐지만 고배당 또는 배당락일 미확인 종목은 별도 점검이 필요합니다."
+    else:
+        status = "success"
+        message = "배당 타입 종목의 1주 기준 연간 추정 현금흐름을 계산했습니다."
+
+    return {
+        "status": status,
+        "as_of": date.today().isoformat(),
+        "source": DIVIDEND_CASHFLOW_SOURCE,
+        "summary": {
+            "ticker_count": len(rows),
+            "calculable_count": calculable_count,
+            "average_yield_pct": average_yield,
+            "estimated_annual_income_per_share_total": round(estimated_total, 2) if calculable_count else None,
+            "upcoming_ex_dividend_count": upcoming_count,
+            "unknown_ex_date_count": unknown_ex_date_count,
+            "high_yield_count": high_yield_count,
+            "missing_yield_count": missing_yield_count,
+            "message": message,
+            "unit_note": "보유수량이 없는 허브 데이터이므로 실제 계좌 현금흐름이 아니라 1주 기준 추정치입니다.",
+        },
+        "rows": rows,
+    }
+
+
 def build_portfolio_hub(
     tickers: list[str],
     *,
@@ -699,6 +830,7 @@ def build_portfolio_hub(
 
     signal_conflicts = interpret_signal_conflicts(all_signals, type_map)
     today_checklist = _build_checklist(ticker_data, all_signals, type_map, signal_conflicts)
+    dividend_cashflow = _build_dividend_cashflow(ticker_data, type_map)
 
     return {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -709,6 +841,7 @@ def build_portfolio_hub(
         "signals": all_signals,
         "signal_conflicts": signal_conflicts,
         "today_checklist": today_checklist,
+        "dividend_cashflow": dividend_cashflow,
         "indicator_explanations": INDICATOR_EXPLANATIONS,
         "portfolio_type_meta": PORTFOLIO_TYPE_META,
         "signal_labels": SIGNAL_LABELS,
