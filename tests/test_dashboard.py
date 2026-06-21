@@ -375,11 +375,21 @@ def test_dashboard_overview_prioritizes_data_error_and_actions(tmp_path: Path):
     assert timeline[3]["failure_code"] == "SECTOR_EXPOSURE_EXCEEDED"
     assert timeline[3]["next_action"]["page"] == "risk"
     assert timeline[5]["status"] == "not_evaluated"
+    replay = report["session_replay"]
+    assert replay["summary"]["run_id"] == "run-001"
+    assert replay["summary"]["step_count"] >= 7
+    assert any(item["id"] == "risk_review" for item in replay["events"])
     overview_metrics = report["metric_dictionary"]["overview"]
     assert any(item["key"] == "data_validation" for item in overview_metrics)
     assert overview_metrics[0]["plain_name"] == "가격 데이터 신뢰도"
     assert report["decision"]["top_reasons"][0]["code"] == "DATA_DISAGREEMENT"
     assert report["recommended_actions"][0]["page"] == "data-quality"
+    assert report["recovery_guide"]["status"] == "blocked"
+    assert report["recovery_guide"]["summary"]["blocked_count"] >= 1
+    assert {item["code"] for item in report["recovery_guide"]["items"]} >= {
+        "DATA_DISAGREEMENT",
+        "SECTOR_EXPOSURE_EXCEEDED",
+    }
 
 
 def test_dashboard_overview_promotes_toss_stock_warning_to_today_board(tmp_path: Path):
@@ -611,6 +621,19 @@ def test_dashboard_signals_exposes_publication_prices_and_reasons(tmp_path: Path
             "source": "signals JSON · price history JSON · signal_outcome.py",
         },
     )
+    atomic_write_json(
+        paths.state_dir / "stock_lifecycle.json",
+        {
+            "states": {
+                "SOXL": {
+                    "ticker": "SOXL",
+                    "status": "candidate",
+                    "transitioned_at": "2026-06-10T00:05:00+00:00",
+                }
+            },
+            "history": [],
+        },
+    )
 
     report = build_dashboard_signals(paths, run_id="run-001")
 
@@ -639,6 +662,18 @@ def test_dashboard_signals_exposes_publication_prices_and_reasons(tmp_path: Path
     assert outcome["summary"]["evaluated_count"] == 1
     assert outcome["blocked_avoidance"]["1d"]["avg_avoided_loss"] == 0.03
     assert "state/signal_outcome.json" in outcome["source"]
+    lifecycle = report["stock_lifecycle"]
+    assert lifecycle["summary"]["status_counts"]["caution"] == 1
+    lifecycle_item = lifecycle["items"][0]
+    assert lifecycle_item["ticker"] == "SOXL"
+    assert lifecycle_item["status"] == "caution"
+    assert lifecycle_item["previous_status"] == "candidate"
+    assert lifecycle["history"][0]["to_status"] == "caution"
+    stability = report["signal_stability"]
+    assert stability["summary"]["ticker_count"] == 1
+    assert stability["items"][0]["ticker"] == "SOXL"
+    assert stability["items"][0]["auto_candidate_excluded"] is True
+    assert stability["items"][0]["windows"]["10d"]["transition_count"] >= 1
 
 
 def test_dashboard_trader_lens_builds_reward_risk_and_provider_trust(tmp_path: Path):
@@ -798,6 +833,21 @@ def test_dashboard_toss_accounts_normalizes_and_masks_account_rows(tmp_path: Pat
 
 def test_dashboard_toss_portfolio_auto_selects_first_account_and_holdings(tmp_path: Path):
     paths = _paths(tmp_path)
+    atomic_write_json(
+        paths.state_dir / "account_attribution.json",
+        {
+            "status": "success",
+            "summary": {
+                "account_value_delta_krw": 40_000,
+                "price_effect_krw": 20_000,
+                "fx_effect_krw": 10_000,
+                "holding_flow_krw": 60_000,
+                "cash_delta_krw": -50_000,
+            },
+            "rows": [{"symbol": "AAPL", "value_delta_krw": 60_000}],
+            "source": "account_attribution.json",
+        },
+    )
     fake = FakeTossDashboardClient()
 
     report = build_dashboard_toss_portfolio(paths, client=fake)
@@ -845,6 +895,8 @@ def test_dashboard_toss_portfolio_auto_selects_first_account_and_holdings(tmp_pa
     assert aapl_impact["asset_effect_krw"] == pytest.approx(12669.6833)
     assert aapl_impact["fx_effect_krw"] == pytest.approx(6334.8416)
     assert aapl_impact["day_return_krw"] == pytest.approx(0.0608)
+    assert report["account_attribution"]["status"] == "success"
+    assert report["account_attribution"]["summary"]["account_value_delta_krw"] == 40_000
     assert {item["region"]: item["count"] for item in report["region_totals"]} == {"KR": 1, "US": 1}
     assert {item["currency"]: item["count"] for item in report["currency_totals"]} == {
         "KRW": 1,
@@ -1078,11 +1130,21 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "renderMetricDictionaryStrip" in content
     assert "renderTodayBoard" in content
     assert "renderDecisionTimeline" in content
+    assert "renderSessionReplay" in content
+    assert "투자 세션 리플레이" in content
+    assert "renderRecoveryGuide" in content
+    assert "실패 복구 가이드" in content
     assert "renderSignalHistoryCards" in content
     assert "renderSignalOutcomePanel" in content
+    assert "renderStockLifecycle" in content
+    assert "종목 상태 머신" in content
+    assert "renderSignalStabilityPanel" in content
+    assert "신호 안정성 점수" in content
     assert "renderFxImpactPanel" in content
     assert "FX impact split" in content
     assert "FX day" in content
+    assert "renderAccountAttributionPanel" in content
+    assert "계좌 변화 원인" in content
     assert "state/signal_outcome.json" in content
     assert "종목별 판단 이력" in content
     assert "투자 판단 타임라인" in content
@@ -1095,6 +1157,8 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "ACTION_TYPE_LABELS" in content
     assert "order_prepares" in content
     assert "renderPaperOrderContract" in content
+    assert "renderAllocationPreview" in content
+    assert "자금 배분 시뮬레이터" in content
     assert "renderOrderIntentQuality" in content
     assert "주문 의도 품질 점수" in content
     assert "renderTossApiDriftPanel" in content
@@ -1117,18 +1181,30 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "today-item-tags" in css
     assert "decision-timeline" in css
     assert "timeline-item" in css
+    assert "session-replay-section" in css
+    assert "session-replay-event" in css
+    assert "recovery-guide-section" in css
+    assert "recovery-guide-card" in css
     assert "signal-history-section" in css
     assert "signal-history-card" in css
+    assert "stock-lifecycle-section" in css
+    assert "stock-lifecycle-card" in css
+    assert "signal-stability-section" in css
+    assert "signal-stability-card" in css
     assert "signal-outcome-section" in css
     assert "signal-outcome-card" in css
     assert "fx-impact" in css
     assert "fx-impact-row" in css
+    assert "account-attribution" in css
+    assert "account-attribution-row" in css
     assert "hub-conflict-section" in css
     assert "hub-dividend-cashflow" in css
     assert "hub-price-source" in css
     assert "hub-source-inline" in css
     assert "reconciliation-issue-table" in css
     assert "order-quality-panel" in css
+    assert "allocation-preview-section" in css
+    assert "allocation-preview-card" in css
     assert "toss-drift-panel" in css
     assert "at-score-section" in css
     assert "at-paper-report" in css
@@ -1271,6 +1347,15 @@ def test_dashboard_toss_order_plan(tmp_path: Path):
     )
     atomic_write_json(paths.state_dir / "stock_warning_gate.json", {"AAPL": {"has_warning": False}})
     atomic_write_json(paths.state_dir / "market_session_status.json", {"US": {"open": True}})
+    atomic_write_json(
+        paths.state_dir / "allocation_preview.json",
+        {
+            "status": "success",
+            "summary": {"after_cash_krw": 100000, "cash_pct_after": 0.2},
+            "holdings": [{"ticker": "AAPL", "after_weight": 0.1}],
+            "source": "allocation_preview.json",
+        },
+    )
     atomic_write_json(paths.signal_file, {"AAPL": {"eligible": True, "signal": "buy_candidate"}})
 
     report = build_dashboard_toss_order_plan(paths)
@@ -1278,6 +1363,8 @@ def test_dashboard_toss_order_plan(tmp_path: Path):
     assert report["warnings_gate"]["AAPL"]["has_warning"] is False
     assert report["market_session"]["US"]["open"] is True
     assert report["today_signals"]["AAPL"]["eligible"] is True
+    assert report["allocation_preview"]["status"] == "success"
+    assert report["allocation_preview"]["summary"]["cash_pct_after"] == 0.2
     assert report["paper_order_contract"]["contract"]["intent"] == "OrderIntent"
     assert report["paper_order_contract"]["intents"][0]["ticker"] == "AAPL"
     assert report["paper_order_contract"]["approval"]["model"] == "OrderApproval"

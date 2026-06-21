@@ -11,7 +11,9 @@ from typing import Annotated, Any, cast
 import typer
 import numpy as np
 
+from .account_attribution import write_account_attribution_report
 from . import engine
+from .allocation_simulator import write_allocation_preview_report
 from .artifacts import RunContext
 from .contracts import (
     ensure_contract,
@@ -29,6 +31,7 @@ from .monitoring import classify_failure, compute_health_score, prune_runs, upda
 from .notifications import KakaoNotifier, build_signal_message
 from .operational_status import (
     build_operational_status,
+    latest_run_dir,
     write_operational_status,
     write_operational_status_bundle,
 )
@@ -50,6 +53,7 @@ from .provider_factory import (
 from .provider_core import ProviderCategory, ProviderRegistry
 from .paths import RuntimePaths
 from .registry import ExperimentRegistry
+from .recovery_guide import write_recovery_guide
 from .reports import (
     parameter_importance,
     write_cost_sensitivity_report,
@@ -71,8 +75,11 @@ from .safety import (
 )
 from .settings import ExecutionMode, Settings, load_settings
 from .safety_verdict import write_safety_verdict
+from .session_replay import write_session_replay_report
 from .signal_outcome import write_signal_outcome_report
 from .signal_replay import write_signal_replay_artifact
+from .signal_stability import write_signal_stability_report
+from .stock_lifecycle import write_stock_lifecycle_report
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
 from .survivorship import audit_survivorship
 from .toss import TOSS_GET_ENDPOINTS, TossCredentialsError, TossInvestClient
@@ -1408,6 +1415,150 @@ def report_signal_outcome(
         cast("dict[str, dict[str, Any]]", signal_data),
         cast("dict[str, list[dict[str, Any]]]", price_data),
         output_path,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("stock-lifecycle")
+def report_stock_lifecycle(
+    signals: Annotated[Path | None, typer.Option("--signals")] = None,
+    holdings_json: Annotated[Path | None, typer.Option("--holdings-json", exists=True)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    signal_path = signals or paths.signal_file
+    output_path = output or (paths.state_dir / "stock_lifecycle.json")
+    signal_data = read_json(signal_path, default={})
+    holdings_data = read_json(holdings_json, default=[]) if holdings_json else []
+    if not isinstance(signal_data, dict):
+        raise typer.BadParameter("signals must be a JSON object")
+    report = write_stock_lifecycle_report(
+        cast("dict[str, dict[str, Any]]", signal_data),
+        cast("list[dict[str, Any]] | dict[str, Any]", holdings_data),
+        output_path,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("signal-stability")
+def report_signal_stability(
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1)] = 240,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    report = write_signal_stability_report(
+        paths.runs_dir,
+        output or (paths.state_dir / "signal_stability.json"),
+        limit=limit,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("allocation-preview")
+def report_allocation_preview(
+    order_plan: Annotated[Path | None, typer.Option("--order-plan", exists=True)] = None,
+    holdings_json: Annotated[Path | None, typer.Option("--holdings-json", exists=True)] = None,
+    signals: Annotated[Path | None, typer.Option("--signals")] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    cash_krw: Annotated[float | None, typer.Option("--cash-krw")] = None,
+    usd_krw: Annotated[float | None, typer.Option("--usd-krw")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    settings, paths = _load(config)
+    order_plan_path = order_plan or (paths.state_dir / "order_plan.json")
+    signal_path = signals or paths.signal_file
+    default_holdings_path = paths.state_dir / "toss_account_snapshot.json"
+    selected_holdings_path = holdings_json or (
+        default_holdings_path if default_holdings_path.exists() else None
+    )
+    order_plan_data = read_json(order_plan_path, default={})
+    signal_data = read_json(signal_path, default={})
+    holdings_data = read_json(selected_holdings_path, default=[]) if selected_holdings_path else []
+    fx_rates = {"KRW": 1.0}
+    if usd_krw is not None:
+        fx_rates["USD"] = usd_krw
+    if not isinstance(order_plan_data, (dict, list)):
+        raise typer.BadParameter("order-plan must be a JSON object or array")
+    if not isinstance(signal_data, dict):
+        raise typer.BadParameter("signals must be a JSON object")
+    if not isinstance(holdings_data, (dict, list)):
+        raise typer.BadParameter("holdings-json must be a JSON object or array")
+    report = write_allocation_preview_report(
+        cast("dict[str, Any] | list[dict[str, Any]]", order_plan_data),
+        cast("dict[str, Any] | list[dict[str, Any]]", holdings_data),
+        output or (paths.state_dir / "allocation_preview.json"),
+        signals=cast("dict[str, Any]", signal_data),
+        cash_krw=cash_krw,
+        settings=settings,
+        fx_rates=fx_rates,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("account-attribution")
+def report_account_attribution(
+    previous_json: Annotated[Path, typer.Option("--previous-json", exists=True)],
+    current_json: Annotated[Path, typer.Option("--current-json", exists=True)],
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    previous_data = read_json(previous_json, default={})
+    current_data = read_json(current_json, default={})
+    if not isinstance(previous_data, (dict, list)):
+        raise typer.BadParameter("previous-json must be a JSON object or array")
+    if not isinstance(current_data, (dict, list)):
+        raise typer.BadParameter("current-json must be a JSON object or array")
+    report = write_account_attribution_report(
+        cast("dict[str, Any] | list[dict[str, Any]]", previous_data),
+        cast("dict[str, Any] | list[dict[str, Any]]", current_data),
+        output or (paths.state_dir / "account_attribution.json"),
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("recovery-guide")
+def report_recovery_guide(
+    run: Annotated[Path | None, typer.Option("--run", exists=True, file_okay=False)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    selected_run = run or latest_run_dir(paths.runs_dir)
+    manifest = read_json(selected_run / "manifest.json", default={}) if selected_run else {}
+    verdict = read_json(selected_run / "safety_verdict.json", default={}) if selected_run else {}
+    operational_status = read_json(paths.state_dir / "operational_status.json", default={})
+    if not isinstance(manifest, dict):
+        raise typer.BadParameter("manifest.json must be a JSON object")
+    if not isinstance(verdict, dict):
+        raise typer.BadParameter("safety_verdict.json must be a JSON object")
+    if not isinstance(operational_status, dict):
+        raise typer.BadParameter("operational_status.json must be a JSON object")
+    report = write_recovery_guide(
+        output or (paths.state_dir / "recovery_guide.json"),
+        manifest=cast("dict[str, Any]", manifest),
+        verdict=cast("dict[str, Any]", verdict),
+        operational_status=cast("dict[str, Any]", operational_status),
+        run_dir=selected_run,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("session-replay")
+def report_session_replay(
+    run: Annotated[Path | None, typer.Option("--run", exists=True, file_okay=False)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    selected_run = run or latest_run_dir(paths.runs_dir)
+    report = write_session_replay_report(
+        selected_run,
+        output or (paths.state_dir / "session_replay.json"),
+        project_root=paths.project_root,
+        state_dir=paths.state_dir,
     )
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 

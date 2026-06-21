@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
+from .account_attribution import empty_account_attribution
+from .allocation_simulator import empty_allocation_preview
 from .failure_codes import FailureCode
 from .io import read_json, stable_hash
 from .metric_dictionary import metric_dictionary_payload
@@ -27,8 +29,12 @@ from .paper_trading import OrderApproval, OrderIntent, OrderPlan
 from .paths import RuntimePaths
 from .portfolio import load_portfolio, load_portfolio_mapping
 from .provider_factory import build_provider_registry, provider_configuration_audit, provider_policy
+from .recovery_guide import build_recovery_guide, empty_recovery_guide
 from .safety import evaluate_shadow_promotion
 from .settings import Settings, load_settings
+from .session_replay import build_session_replay_report, empty_session_replay
+from .signal_stability import build_signal_stability_from_runs
+from .stock_lifecycle import build_stock_lifecycle_report
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
 from .survivorship import audit_survivorship
 from .toss import TOSS_GET_ENDPOINTS, TossCredentialsError, TossInvestClient
@@ -339,6 +345,15 @@ def build_dashboard_overview(
     health_threshold = _promotion_threshold(run_dir, paths)
     survivorship = _survivorship_gate(manifest)
     recommended_actions = _recommended_actions(reasons, display_status)
+    operational_status = _mapping(read_json(paths.state_dir / "operational_status.json", default={}))
+    recovery_guide = build_recovery_guide(
+        reasons,
+        manifest=manifest,
+        verdict=verdict,
+        operational_status=operational_status,
+        run_dir=run_dir,
+        now=reference,
+    )
     today_board = _today_board(
         signal_rows,
         reasons,
@@ -358,6 +373,12 @@ def build_dashboard_overview(
         recommended_actions=recommended_actions,
         execution_status=execution_status,
         display_status=display_status,
+    )
+    session_replay = build_session_replay_report(
+        run_dir,
+        project_root=paths.project_root,
+        state_dir=paths.state_dir,
+        now=reference,
     )
 
     return {
@@ -402,6 +423,8 @@ def build_dashboard_overview(
         },
         "today_board": today_board,
         "decision_timeline": decision_timeline,
+        "session_replay": session_replay,
+        "recovery_guide": recovery_guide,
         "metric_dictionary": metric_dictionary_payload("overview"),
         "health": {
             "score": health_score,
@@ -629,6 +652,8 @@ def build_dashboard_signals(
             "rows": [],
             "signal_history": _empty_signal_history(),
             "signal_outcome": _empty_signal_outcome(),
+            "stock_lifecycle": _empty_stock_lifecycle(),
+            "signal_stability": _empty_signal_stability(),
             "metric_dictionary": metric_dictionary_payload("signals"),
         }
     signals = _signal_map(run_dir)
@@ -663,6 +688,8 @@ def build_dashboard_signals(
         "rows": rows,
         "signal_history": _signal_history_cards(paths, run_dir, rows),
         "signal_outcome": _dashboard_signal_outcome(paths, run_dir),
+        "stock_lifecycle": _dashboard_stock_lifecycle(paths, run_dir, rows),
+        "signal_stability": _dashboard_signal_stability(paths, run_dir, rows),
         "metric_dictionary": metric_dictionary_payload("signals"),
     }
 
@@ -969,6 +996,7 @@ def build_dashboard_toss_portfolio(
             "holdings": [],
             "allocation": [],
             "fx_impact": _empty_toss_fx_impact("missing_credentials"),
+            "account_attribution": empty_account_attribution(),
             "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
             "portfolio_type_profiles": _portfolio_type_profile_rows(),
             "sections": {},
@@ -987,6 +1015,7 @@ def build_dashboard_toss_portfolio(
             "holdings": [],
             "allocation": [],
             "fx_impact": _empty_toss_fx_impact("failed"),
+            "account_attribution": empty_account_attribution(),
             "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
             "portfolio_type_profiles": _portfolio_type_profile_rows(),
             "sections": {"accounts": accounts_result},
@@ -1005,6 +1034,7 @@ def build_dashboard_toss_portfolio(
             "holdings": [],
             "allocation": [],
             "fx_impact": _empty_toss_fx_impact("no_accounts"),
+            "account_attribution": empty_account_attribution(),
             "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
             "portfolio_type_profiles": _portfolio_type_profile_rows(),
             "sections": {"accounts": accounts_result},
@@ -1060,6 +1090,7 @@ def build_dashboard_toss_portfolio(
         "valuation_currency": "KRW",
         "fx_rates": fx_rates,
         "fx_impact": fx_impact,
+        "account_attribution": _dashboard_account_attribution(paths),
         "currency_totals": _toss_currency_totals(holdings),
         "region_totals": _toss_region_totals(holdings),
         "category_totals": _toss_category_totals(holdings),
@@ -1440,6 +1471,7 @@ def build_dashboard_toss_order_plan(paths: RuntimePaths) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "order_plan": order_plan,
+        "allocation_preview": _dashboard_allocation_preview(paths),
         "paper_order_contract": _paper_order_contract(
             order_plan,
             today_signals,
@@ -1450,6 +1482,14 @@ def build_dashboard_toss_order_plan(paths: RuntimePaths) -> dict[str, Any]:
         "market_session": market_session,
         "today_signals": today_signals,
     }
+
+
+def _dashboard_allocation_preview(paths: RuntimePaths) -> dict[str, Any]:
+    preview_path = paths.state_dir / "allocation_preview.json"
+    payload = read_json(preview_path, default=None)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    return empty_allocation_preview()
 
 
 def _paper_order_contract(
@@ -2912,6 +2952,8 @@ def _empty_overview(reference: datetime) -> dict[str, Any]:
                 step=1,
             )
         ],
+        "session_replay": empty_session_replay(generated_at=reference.isoformat()),
+        "recovery_guide": empty_recovery_guide(),
         "metric_dictionary": metric_dictionary_payload("overview"),
         "health": {"score": None, "threshold": None, "status": "not_evaluated"},
         "recommended_actions": [
@@ -4438,6 +4480,14 @@ def _toss_fx_impact_summary(holdings: Sequence[Mapping[str, Any]]) -> dict[str, 
     }
 
 
+def _dashboard_account_attribution(paths: RuntimePaths) -> dict[str, Any]:
+    attribution_path = paths.state_dir / "account_attribution.json"
+    payload = read_json(attribution_path, default=None)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    return empty_account_attribution()
+
+
 def _sum_numeric(rows: Sequence[Mapping[str, Any]], key: str) -> float:
     return sum(
         value
@@ -5896,6 +5946,107 @@ def _dashboard_signal_outcome(paths: RuntimePaths, run_dir: Path) -> dict[str, A
     report["blocked_avoidance"] = dict(_mapping(report.get("blocked_avoidance")))
     report["rows"] = [dict(item) for item in _sequence(report.get("rows")) if isinstance(item, Mapping)]
     report["source"] = f"{source} · {calculation_source}"
+    return report
+
+
+def _empty_stock_lifecycle(source: str = "state/stock_lifecycle.json") -> dict[str, Any]:
+    return {
+        "status": "not_evaluated",
+        "updated_at": None,
+        "summary": {
+            "ticker_count": 0,
+            "transition_count": 0,
+            "status_counts": {
+                "watch": 0,
+                "candidate": 0,
+                "holding": 0,
+                "caution": 0,
+                "reduce": 0,
+                "excluded": 0,
+            },
+            "action_required_count": 0,
+        },
+        "items": [],
+        "history": [],
+        "states": {},
+        "source": source,
+    }
+
+
+def _dashboard_stock_lifecycle(
+    paths: RuntimePaths,
+    run_dir: Path,
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    lifecycle_path = _first_existing_path(
+        run_dir / "stock_lifecycle.json",
+        paths.state_dir / "stock_lifecycle.json",
+    )
+    previous = read_json(lifecycle_path, default={}) if lifecycle_path else {}
+    signal_map = {
+        str(row.get("ticker") or "").upper(): dict(row)
+        for row in rows
+        if str(row.get("ticker") or "").strip()
+    }
+    report = build_stock_lifecycle_report(
+        signal_map,
+        [],
+        previous=previous if isinstance(previous, Mapping) else {},
+        now=_run_timestamp(run_dir) or datetime.now(UTC),
+    )
+    source = _artifact_label(paths, lifecycle_path or (paths.state_dir / "stock_lifecycle.json"))
+    report["source"] = f"{source} · signals_risk.json"
+    return report
+
+
+def _empty_signal_stability(source: str = "state/signal_stability.json") -> dict[str, Any]:
+    return {
+        "status": "not_evaluated",
+        "updated_at": None,
+        "windows": [5, 10, 20],
+        "summary": {
+            "ticker_count": 0,
+            "unstable_count": 0,
+            "auto_candidate_excluded_count": 0,
+            "average_stability_score": None,
+        },
+        "items": [],
+        "source": source,
+    }
+
+
+def _dashboard_signal_stability(
+    paths: RuntimePaths,
+    run_dir: Path,
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    stability_path = _first_existing_path(
+        run_dir / "signal_stability.json",
+        paths.state_dir / "signal_stability.json",
+    )
+    if stability_path is not None:
+        payload = read_json(stability_path, default={})
+        if isinstance(payload, Mapping):
+            report = dict(payload)
+            report["summary"] = dict(_mapping(report.get("summary")))
+            report["items"] = [
+                dict(item)
+                for item in _sequence(report.get("items"))
+                if isinstance(item, Mapping)
+            ]
+            report["source"] = _artifact_label(paths, stability_path)
+            return report
+    signal_map = {
+        str(row.get("ticker") or "").upper(): dict(row)
+        for row in rows
+        if str(row.get("ticker") or "").strip()
+    }
+    report = build_signal_stability_from_runs(
+        paths.runs_dir,
+        current_signals=signal_map,
+        now=_run_timestamp(run_dir) or datetime.now(UTC),
+    )
+    report["source"] = "runs/*/manifest.json · signals_risk.json"
     return report
 
 

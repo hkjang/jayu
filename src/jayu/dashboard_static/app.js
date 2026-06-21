@@ -475,6 +475,8 @@ const METRIC_DATA_SOURCE_BY_PAGE = {
     "Shadow 승격": "promotion state · shadow run history",
     "오늘의 신호": "today_signals.json · signal sidecar",
     Health: "health report",
+    "세션 리플레이": "session_replay.json · latest run artifacts",
+    "복구 가이드": "safety_verdict.json · latest run manifest · operational_status.json",
     __default: "latest run manifest",
   },
   "data-quality": {
@@ -537,10 +539,12 @@ const METRIC_DATA_SOURCE_BY_PAGE = {
     "평가손익(KRW)": "Toss holdings GET · exchange-rate GET",
     "USD/KRW": "Toss exchange-rate GET",
     "FX 당일효과": "Toss holdings GET · Toss prices GET · Toss exchange-rate GET",
+    "계좌 변화": "account_attribution.json · Toss portfolio snapshots",
     "조회 실패": "Toss account section status",
     OrderIntent: "order_plan.json · jayu.paper_trading",
     OrderPlan: "order_plan.json · today_signals.json · jayu.paper_trading",
     OrderApproval: "order_plan.json · manual approval policy",
+    "자금 배분": "allocation_preview.json · order_plan.json · holdings JSON",
     __default: "Toss holdings GET",
   },
   toss: {
@@ -802,6 +806,8 @@ function renderOverview() {
     ${renderOverviewPortfolioHub(state.portfolioHub)}
     ${renderTodayBoard(data.today_board)}
     ${renderDecisionTimeline(data.decision_timeline)}
+    ${renderSessionReplay(data.session_replay)}
+    ${renderRecoveryGuide(data.recovery_guide)}
     <section class="metric-grid" aria-label="핵심 운영 지표">
       ${metricCard("데이터 검증", ratioValue(gates.data.verified, gates.data.total), gates.data.status,
         gates.data.total ? `${formatPercent(gates.data.validation_rate)} · provider ${gates.data.provider_count}` : "가격 데이터 미검증",
@@ -854,6 +860,132 @@ function renderOverview() {
       </div>
       ${renderSignalTable(signals.rows)}
       ${renderSourceCaption("today_signals.json · risk gate status")}
+    </section>
+  `;
+}
+
+function renderSessionReplay(replay) {
+  const data = replay || {};
+  const summary = data.summary || {};
+  const events = data.events || [];
+  const artifacts = data.artifacts || [];
+  const source = data.source || summary.source || "state/session_replay.json";
+  const status = data.status || "not_evaluated";
+  const eventHtml = events.length ? events.map((event) => `
+    <article class="session-replay-event status-${statusClass(event.status || "not_evaluated")}">
+      <div class="session-replay-marker">${escapeHtml(event.step || "")}</div>
+      <div class="session-replay-main">
+        <div class="session-replay-title">
+          <strong>${escapeHtml(event.title || "세션 단계")}</strong>
+          ${statusBadge(event.status || "not_evaluated")}
+        </div>
+        <p>${escapeHtml(event.summary || "")}</p>
+        ${(event.details || []).length ? `<div class="session-replay-details">${event.details.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+        ${(event.artifacts || []).length ? `<div class="session-replay-artifacts">${event.artifacts.map((artifact) => `
+          <span class="${artifact.exists ? "exists" : "missing"}">${escapeHtml(artifact.path || artifact.source || "-")}</span>
+        `).join("")}</div>` : ""}
+        ${renderSourceLabel(event.source || source)}
+      </div>
+    </article>
+  `).join("") : `
+    <div class="timeline-empty">
+      <strong>투자 세션 리플레이 없음</strong>
+      <span>완료된 run의 manifest와 산출물이 생기면 실행 흐름을 재생합니다.</span>
+    </div>
+  `;
+  return `
+    <section class="session-replay-section" aria-label="투자 세션 리플레이">
+      <div class="session-replay-head">
+        <div>
+          <h2>투자 세션 리플레이</h2>
+          <p>한 번의 실행이 어떤 단계와 산출물을 거쳐 오늘 결론으로 이어졌는지 복기합니다.</p>
+        </div>
+        ${statusBadge(status, `${formatNumber(summary.step_count || events.length || 0, 0)}단계`)}
+      </div>
+      <div class="session-replay-summary">
+        ${metricCard("성공 단계", formatNumber(summary.success_count || 0, 0), summary.success_count ? "success" : "not_evaluated", `전체 ${formatNumber(summary.step_count || events.length || 0, 0)}`, null, source)}
+        ${metricCard("경고 단계", formatNumber(summary.warning_count || 0, 0), summary.warning_count ? "warning" : "success", "review needed", null, source)}
+        ${metricCard("차단 단계", formatNumber(summary.blocked_count || 0, 0), summary.blocked_count ? "blocked" : "success", "blocked/data error", null, source)}
+        ${metricCard("증거 파일", formatNumber(summary.artifact_count || artifacts.length || 0, 0), artifacts.length ? "success" : "not_evaluated", "artifact index", null, source)}
+      </div>
+      <div class="session-replay-list">${eventHtml}</div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderRecoveryGuide(guide) {
+  const data = guide || {};
+  const summary = data.summary || {};
+  const items = data.items || [];
+  const source = data.source || summary.source || "state/recovery_guide.json";
+  const status = data.status || "success";
+  if (!items.length) {
+    return `
+      <section class="recovery-guide-section status-${statusClass(status)}">
+        <div class="recovery-guide-head">
+          <div>
+            <h2>실패 복구 가이드</h2>
+            <p>현재 차단된 실패 코드가 없어 추가 복구 단계가 없습니다.</p>
+          </div>
+          ${statusBadge("success", "정상")}
+        </div>
+        ${renderSourceCaption(source)}
+      </section>
+    `;
+  }
+  return `
+    <section class="recovery-guide-section status-${statusClass(status)}" aria-label="실패 복구 가이드">
+      <div class="recovery-guide-head">
+        <div>
+          <h2>실패 복구 가이드</h2>
+          <p>실패 코드별 원인, 확인 파일, 다시 검증할 명령을 순서대로 정리합니다.</p>
+        </div>
+        ${statusBadge(status, `${formatNumber(summary.issue_count || items.length, 0)}건`)}
+      </div>
+      <div class="recovery-guide-summary">
+        ${metricCard("차단 복구", formatNumber(summary.blocked_count || 0, 0), summary.blocked_count ? "blocked" : "success", "blocked severity", null, source)}
+        ${metricCard("주의 복구", formatNumber(summary.warning_count || 0, 0), summary.warning_count ? "warning" : "success", "warning severity", null, source)}
+        ${metricCard("최우선 코드", summary.top_code || "-", status, "가장 먼저 볼 항목", null, source)}
+      </div>
+      <div class="recovery-guide-list">
+        ${items.slice(0, 6).map((item, index) => `
+          <article class="recovery-guide-card severity-${escapeHtml(item.severity || "warning")}">
+            <div class="recovery-guide-card-head">
+              <div>
+                <span class="code">${escapeHtml(item.code || "UNKNOWN")}</span>
+                <strong>${formatNumber(index + 1, 0)}. ${escapeHtml(item.title || "복구 확인")}</strong>
+              </div>
+              ${statusBadge(item.severity === "blocked" ? "blocked" : "warning", item.severity || "warning")}
+            </div>
+            <p>${escapeHtml(item.diagnosis || item.message || "")}</p>
+            <div class="recovery-guide-columns">
+              <div>
+                <b>복구 단계</b>
+                <ol>${(item.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>
+                ${renderSourceCaption(item.source || source)}
+              </div>
+              <div>
+                <b>확인 산출물</b>
+                <div class="recovery-guide-artifacts">
+                  ${(item.artifacts || []).map((artifact) => `<span>${escapeHtml(artifact)}</span>`).join("") || "<span>manifest.json</span>"}
+                </div>
+                ${(item.commands || []).length ? `
+                  <b>검증 명령</b>
+                  <div class="recovery-guide-commands">
+                    ${item.commands.map((command) => `<button class="button button-secondary" type="button" data-command="${escapeHtml(command)}">${escapeHtml(command)}</button>`).join("")}
+                  </div>
+                ` : ""}
+                ${(item.verification || []).length ? `
+                  <b>완료 확인</b>
+                  <ul>${item.verification.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
+                ` : ""}
+              </div>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+      ${renderSourceCaption(source)}
     </section>
   `;
 }
@@ -978,6 +1110,8 @@ function renderSignals() {
       ${metricCard("신호 hash", shortHash(publication.signal_hash), publication.signal_hash ? "success" : "not_evaluated", "출판 근거")}
     </section>
     ${renderSignalHistoryCards(data.signal_history)}
+    ${renderStockLifecycle(data.stock_lifecycle)}
+    ${renderSignalStabilityPanel(data.signal_stability)}
     ${renderSignalOutcomePanel(data.signal_outcome)}
     ${renderMetricDictionaryStrip(data.metric_dictionary?.signals, "신호 지표 쉬운 설명")}
     ${renderSignalTypeTabs(state.portfolioHub)}
@@ -1194,6 +1328,10 @@ function renderTossAccountDashboard() {
         <section class="panel">
           <div class="panel-header"><div><h2>FX impact split</h2><p>당일 KRW 변화를 가격 효과와 환율 효과로 나눕니다.</p></div></div>
           <div class="panel-body">${renderFxImpactPanel(data.fx_impact)}${renderSourceCaption(data.fx_impact?.source || "Toss holdings GET · Toss prices GET · Toss exchange-rate GET")}</div>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><div><h2>계좌 변화 원인</h2><p>이전 스냅샷 대비 평가금액 변화를 가격, 환율, 현금, 보유 변화로 나눕니다.</p></div></div>
+          <div class="panel-body">${renderAccountAttributionPanel(data.account_attribution)}${renderSourceCaption(data.account_attribution?.source || "state/account_attribution.json")}</div>
         </section>
       </div>
       <div class="visual-grid">
@@ -1486,6 +1624,7 @@ function renderOrderPlan(orderPlanData) {
   const marketSession = planData.market_session || {};
   const todaySignals = planData.today_signals || {};
   const paperContract = planData.paper_order_contract || {};
+  const allocationPreview = planData.allocation_preview || {};
 
   const krOpen = marketSession.KR?.open || false;
   const usOpen = marketSession.US?.open || false;
@@ -1631,6 +1770,7 @@ function renderOrderPlan(orderPlanData) {
 
   return `
     ${sessionHtml}
+    ${renderAllocationPreview(allocationPreview)}
     ${renderPaperOrderContract(paperContract)}
     
     <div class="section-grid" style="margin-bottom:14px">
@@ -1662,6 +1802,113 @@ function renderOrderPlan(orderPlanData) {
       </div>
       ${readinessHtml}
       ${renderSourceCaption("today_signals.json · stock_warning_gate.json · Toss /api/v1/stocks/{symbol}/warnings")}
+    </section>
+  `;
+}
+
+function renderAllocationPreview(data) {
+  const preview = data || {};
+  const summary = preview.summary || {};
+  const source = preview.source || summary.source || "state/allocation_preview.json";
+  const checks = preview.limit_checks || [];
+  const holdings = (preview.holdings || []).slice(0, 7);
+  const sectors = (preview.sector_totals || []).slice(0, 6);
+  const status = preview.status || "not_evaluated";
+  const cashStatus = summary.cash_known === false ? "not_evaluated" : (Number(summary.cash_pct_after || 0) < Number(preview.limits?.min_cash_pct || 0.15) ? "blocked" : "success");
+
+  const checkHtml = checks.length ? `
+    <div class="allocation-preview-checks">
+      ${checks.map(check => `
+        <div class="allocation-preview-check">
+          <span>${escapeHtml(check.label || check.id || "점검")}</span>
+          ${statusBadge(check.status || "not_evaluated", check.observed == null ? "미평가" : `${formatPercent(check.observed, 1)} / ${formatPercent(check.limit, 1)}`)}
+          ${renderSourceLabel(check.source || source)}
+        </div>
+      `).join("")}
+    </div>
+  ` : `
+    <div class="empty-state compact">
+      <strong>배분 점검 산출물이 아직 없습니다.</strong>
+      <span><code>jayu report allocation-preview</code> 실행 후 주문 전후 비중이 표시됩니다.</span>
+    </div>
+  `;
+
+  const sectorHtml = sectors.length ? `
+    <div class="table-wrap allocation-preview-table"><table>
+      <thead>
+        <tr>
+          <th>섹터</th>
+          <th class="numeric">전</th>
+          <th class="numeric">후</th>
+          <th class="numeric">변화</th>
+          <th>상태</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${sectors.map(row => `
+          <tr>
+            <td>${escapeHtml(row.sector || "UNKNOWN")}</td>
+            <td class="numeric">${formatPercent(row.before_weight, 1)}</td>
+            <td class="numeric">${formatPercent(row.after_weight, 1)}</td>
+            <td class="numeric allocation-preview-delta ${Number(row.delta_weight || 0) < 0 ? "negative" : "positive"}">${formatPercent(row.delta_weight, 1)}</td>
+            <td>${statusBadge(row.status || "not_evaluated")}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table></div>
+  ` : `<div class="empty-state compact"><strong>섹터 변화 없음</strong><span>보유/주문 데이터가 연결되면 섹터 비중 변화가 표시됩니다.</span></div>`;
+
+  const holdingHtml = holdings.length ? `
+    <div class="table-wrap allocation-preview-table"><table>
+      <thead>
+        <tr>
+          <th>종목</th>
+          <th>섹터</th>
+          <th class="numeric">전</th>
+          <th class="numeric">후</th>
+          <th class="numeric">변화</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${holdings.map(row => `
+          <tr>
+            <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+            <td>${escapeHtml(row.sector || "UNKNOWN")}</td>
+            <td class="numeric">${formatPercent(row.before_weight, 1)}</td>
+            <td class="numeric">${formatPercent(row.after_weight, 1)}</td>
+            <td class="numeric allocation-preview-delta ${Number(row.delta_weight || 0) < 0 ? "negative" : "positive"}">${formatPercent(row.delta_weight, 1)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table></div>
+  ` : `<div class="empty-state compact"><strong>종목 변화 없음</strong><span>보유/주문 데이터가 연결되면 단일 종목 비중 변화가 표시됩니다.</span></div>`;
+
+  return `
+    <section class="panel allocation-preview-section" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div><h2>자금 배분 시뮬레이터</h2><p>수동 주문 전표를 반영했을 때 현금, 섹터, 단일종목 비중이 어떻게 바뀌는지 미리 봅니다.</p></div>
+        ${statusBadge(status, status === "success" ? "통과" : status === "blocked" ? "차단" : "점검")}
+      </div>
+      <div class="metric-grid" style="margin:12px">
+        ${metricCard("예상 현금", summary.after_cash_krw == null ? "미확인" : formatCurrency(summary.after_cash_krw, "KRW"), cashStatus, summary.cash_pct_after == null ? "cash_krw 미입력" : formatPercent(summary.cash_pct_after, 1), null, source)}
+        ${metricCard("적용 주문", `${formatNumber(summary.applied_order_count || 0, 0)}/${formatNumber(summary.order_count || 0, 0)}건`, summary.skipped_order_count ? "blocked" : status, `매수 ${formatCurrency(summary.buy_cash_krw || 0, "KRW")}`, null, source)}
+        ${metricCard("단일종목 초과", formatNumber(summary.max_position_breach_count || 0, 0), summary.max_position_breach_count ? "blocked" : "success", "risk.max_single_position_pct", null, source)}
+        ${metricCard("섹터 초과", formatNumber(summary.sector_breach_count || 0, 0), summary.sector_breach_count ? "blocked" : "success", "risk.max_sector_exposure", null, source)}
+      </div>
+      ${checkHtml}
+      <div class="allocation-preview-grid">
+        <section class="allocation-preview-card">
+          <div class="mini-heading">섹터 비중 변화</div>
+          ${sectorHtml}
+          ${renderSourceCaption("allocation_preview.json sector_totals · holdings JSON · order_plan.json")}
+        </section>
+        <section class="allocation-preview-card">
+          <div class="mini-heading">종목 비중 변화</div>
+          ${holdingHtml}
+          ${renderSourceCaption("allocation_preview.json holdings · holdings JSON · order_plan.json")}
+        </section>
+      </div>
+      ${renderSourceCaption(source)}
     </section>
   `;
 }
@@ -2012,6 +2259,61 @@ function renderFxImpactPanel(impact) {
       </div>
     </div>
   `;
+}
+
+function renderAccountAttributionPanel(attribution) {
+  const data = attribution || {};
+  const summary = data.summary || {};
+  const rows = data.rows || [];
+  if (!rows.length) {
+    return '<div class="empty-state"><strong>계좌 변화 분해 데이터가 없습니다.</strong><span>jayu report account-attribution 실행 후 이전/현재 스냅샷 차이가 표시됩니다.</span></div>';
+  }
+  return `
+    <div class="account-attribution">
+      <div class="account-attribution-summary">
+        <div>
+          <span>계좌 변화</span>
+          <strong class="${numericClass(summary.account_value_delta_krw)}">${formatCurrency(summary.account_value_delta_krw, "KRW")}</strong>
+        </div>
+        <div>
+          <span>가격 효과</span>
+          <strong class="${numericClass(summary.price_effect_krw)}">${formatCurrency(summary.price_effect_krw, "KRW")}</strong>
+        </div>
+        <div>
+          <span>환율 효과</span>
+          <strong class="${numericClass(summary.fx_effect_krw)}">${formatCurrency(summary.fx_effect_krw, "KRW")}</strong>
+        </div>
+        <div>
+          <span>현금/보유 변화</span>
+          <strong class="${numericClass(Number(summary.cash_delta_krw || 0) + Number(summary.holding_flow_krw || 0))}">${formatCurrency(Number(summary.cash_delta_krw || 0) + Number(summary.holding_flow_krw || 0), "KRW")}</strong>
+        </div>
+      </div>
+      <div class="account-attribution-list">
+        ${rows.slice(0, 6).map((row) => `
+          <div class="account-attribution-row status-${statusClass(row.status || "not_evaluated")}">
+            <div>
+              <strong>${renderTicker(row.symbol)}</strong>
+              <span>${escapeHtml(accountAttributionEffectLabel(row.dominant_effect))} · ${escapeHtml(row.position_status || "-")}</span>
+              ${renderSourceLabel(row.source || data.source || "account_attribution.json")}
+            </div>
+            <div>
+              <strong class="${numericClass(row.value_delta_krw)}">${formatCurrency(row.value_delta_krw, "KRW")}</strong>
+              <span>가격 ${formatCurrency(row.price_effect_krw, "KRW")} · FX ${formatCurrency(row.fx_effect_krw, "KRW")}</span>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function accountAttributionEffectLabel(effect) {
+  return {
+    price: "가격",
+    fx: "환율",
+    flow: "현금/보유",
+    none: "변화 없음",
+  }[effect] || "기타";
 }
 
 function numericClass(value) {
@@ -2543,6 +2845,159 @@ function renderSignalHistoryWindow(label, windowData) {
       <small>매수 ${formatNumber(windowData.buy_count || 0, 0)} · 운영가능 ${formatNumber(windowData.eligible_count || 0, 0)} · 차단 ${formatNumber(windowData.blocked_count || 0, 0)}</small>
     </div>
   `;
+}
+
+function renderStockLifecycle(lifecycle) {
+  const data = lifecycle || {};
+  const summary = data.summary || {};
+  const items = data.items || [];
+  const counts = summary.status_counts || {};
+  const source = data.source || "state/stock_lifecycle.json · signals_risk.json";
+  const stateOrder = ["caution", "reduce", "candidate", "holding", "watch", "excluded"];
+  const stateLabels = {
+    watch: "관심",
+    candidate: "후보",
+    holding: "보유",
+    caution: "경고",
+    reduce: "축소",
+    excluded: "제외",
+  };
+  const itemHtml = items.length ? items.slice(0, 12).map((item) => `
+    <article class="stock-lifecycle-card state-${escapeHtml(item.status || "watch")}">
+      <div class="stock-lifecycle-card-head">
+        <div>
+          <strong>${renderTicker(item.ticker)}</strong>
+          <span>${escapeHtml(item.status_label || item.status || "-")}</span>
+        </div>
+        ${statusBadge(stockLifecycleStatus(item.status), item.status_label || item.status || "-")}
+      </div>
+      <p>${escapeHtml(item.transition_reason || "")}</p>
+      <div class="stock-lifecycle-meta">
+        <span>이전 ${escapeHtml(item.previous_status_label || "-")}</span>
+        <span>유지 ${item.days_in_status == null ? "-" : `${formatNumber(item.days_in_status, 0)}일`}</span>
+        <span>신호 ${escapeHtml(item.related_signal || "-")}</span>
+      </div>
+      ${(item.related_risk_codes || []).length ? `<div class="signal-history-tags">${item.related_risk_codes.map((code) => `<span class="is-failed">${escapeHtml(code)}</span>`).join("")}</div>` : ""}
+      <div class="stock-lifecycle-action">${escapeHtml(item.recommended_action || "")}</div>
+      ${renderSourceLabel(item.source || source)}
+    </article>
+  `).join("") : `
+    <div class="stock-lifecycle-empty">
+      <strong>종목 상태 없음</strong>
+      <span>jayu report stock-lifecycle 실행 후 관심, 후보, 보유, 경고, 축소, 제외 상태가 표시됩니다.</span>
+    </div>
+  `;
+  return `
+    <section class="stock-lifecycle-section" aria-label="종목 상태 머신">
+      <div class="stock-lifecycle-head">
+        <div>
+          <h2>종목 상태 머신</h2>
+          <p>신호와 리스크 상태를 종목 생애주기 상태로 바꾸고 전환 사유를 추적합니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <div class="stock-lifecycle-counts">
+        ${stateOrder.map((state) => `
+          <div>
+            <span>${escapeHtml(stateLabels[state] || state)}</span>
+            <strong>${formatNumber(counts[state] || 0, 0)}</strong>
+          </div>
+        `).join("")}
+      </div>
+      <div class="stock-lifecycle-grid">${itemHtml}</div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function stockLifecycleStatus(status) {
+  return {
+    candidate: "success",
+    holding: "success",
+    caution: "warning",
+    reduce: "warning",
+    excluded: "blocked",
+    watch: "not_evaluated",
+  }[status] || "not_evaluated";
+}
+
+function renderSignalStabilityPanel(stability) {
+  const data = stability || {};
+  const summary = data.summary || {};
+  const items = data.items || [];
+  const source = data.source || "runs/*/manifest.json · signals_risk.json";
+  const cards = items.length ? items.slice(0, 12).map((item) => `
+    <article class="signal-stability-card status-${statusClass(signalStabilityStatus(item.status))}">
+      <div class="signal-stability-card-head">
+        <div>
+          <strong>${renderTicker(item.ticker)}</strong>
+          <span>${escapeHtml(item.latest_signal_label || item.latest_signal_state || "-")}</span>
+        </div>
+        ${statusBadge(signalStabilityStatus(item.status), signalStabilityLabel(item.status))}
+      </div>
+      <div class="signal-stability-score">
+        <strong>${item.signal_stability_score == null ? "-" : formatNumber(item.signal_stability_score, 0)}</strong>
+        <span>10일 안정성 점수</span>
+      </div>
+      <div class="signal-stability-windows">
+        ${["5d", "10d", "20d"].map((key) => {
+          const stat = item.windows?.[key] || {};
+          return `
+            <div>
+              <span>${escapeHtml(key.toUpperCase())}</span>
+              <strong>${stat.score == null ? "-" : formatNumber(stat.score, 0)}</strong>
+              <small>전환 ${formatNumber(stat.transition_count || 0, 0)} · n=${formatNumber(stat.run_count || 0, 0)}</small>
+            </div>
+          `;
+        }).join("")}
+      </div>
+      <p>${escapeHtml(item.summary || "")}</p>
+      ${item.auto_candidate_excluded ? `<div class="signal-stability-exclusion">자동매매 후보 제외</div>` : ""}
+      ${renderSourceLabel(item.source || source)}
+    </article>
+  `).join("") : `
+    <div class="signal-stability-empty">
+      <strong>신호 안정성 이력 없음</strong>
+      <span>최근 runs의 signals_risk.json이 쌓이면 5/10/20일 안정성 점수가 표시됩니다.</span>
+    </div>
+  `;
+  return `
+    <section class="signal-stability-section" aria-label="신호 안정성 점수">
+      <div class="signal-stability-head">
+        <div>
+          <h2>신호 안정성 점수</h2>
+          <p>최근 5/10/20일 동안 신호가 얼마나 자주 뒤집혔는지 계산하고 불안정 종목을 자동 후보에서 제외합니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <section class="metric-grid signal-stability-metrics">
+        ${metricCard("평균 안정성", summary.average_stability_score == null ? "-" : formatNumber(summary.average_stability_score, 0), summary.unstable_count ? "warning" : data.status || "not_evaluated", "10일 기준 평균", null, source)}
+        ${metricCard("불안정 종목", summary.unstable_count || 0, summary.unstable_count ? "warning" : "success", "점수 60 미만 또는 5일 2회 이상 전환", null, source)}
+        ${metricCard("자동 후보 제외", summary.auto_candidate_excluded_count || 0, summary.auto_candidate_excluded_count ? "blocked" : "success", "불안정 또는 이력 부족", null, source)}
+        ${metricCard("평가 종목", summary.ticker_count || 0, summary.ticker_count ? "success" : "not_evaluated", "최근 run 기준", null, source)}
+      </section>
+      <div class="signal-stability-grid">${cards}</div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function signalStabilityStatus(status) {
+  return {
+    stable: "success",
+    warning: "warning",
+    unstable: "blocked",
+    insufficient: "not_evaluated",
+  }[status] || "not_evaluated";
+}
+
+function signalStabilityLabel(status) {
+  return {
+    stable: "안정",
+    warning: "주의",
+    unstable: "불안정",
+    insufficient: "이력 부족",
+  }[status] || "미검증";
 }
 
 function renderSignalOutcomePanel(outcome) {
