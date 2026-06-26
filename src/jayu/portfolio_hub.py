@@ -788,11 +788,115 @@ def build_portfolio_hub(
     *,
     portfolio_type_map: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
+    from .market_regime_router import determine_market_regime
+    from .playbook_engine import evaluate_playbook
+    from .strategy_governance import check_strategy_approval
+    from .behavior_guard import check_behavioral_risk
+    from .cost_sensitivity_guard import evaluate_cost_sensitivity
+    from .strategy_retirement_candidates import generate_retirement_report
+    from .rule_violation_audit import get_violation_logs, log_playbook_violation
+    from .settings import Settings
+
     tickers = [t.upper() for t in tickers[:20]]
     type_map = portfolio_type_map or {}
 
+    # 1. 시장 국면 판정
+    regime_info = determine_market_regime()
+    regime = regime_info["regime"]
+
     ticker_data: dict[str, dict] = {t: fetch_ticker_data(t) for t in tickers}
     all_signals: dict[str, dict] = {t: generate_signals(ticker_data[t]) for t in tickers}
+
+    # 2. 개별 종목 신호에 투자 판단 OS 계층(거버넌스, 플레이북, 행동가드, 비용경고) 적용 및 보정
+    for ticker in tickers:
+        types = type_map.get(ticker, ["long_term"])
+        for pt in PORTFOLIO_TYPE_ORDER:
+            if pt not in all_signals[ticker]:
+                continue
+            sig = all_signals[ticker][pt]
+            
+            # 기본 전략 매핑
+            strat_name = "ensemble"
+            if pt == "short_term":
+                strat_name = "connors_rsi2"
+            elif pt == "swing":
+                strat_name = "williams_breakout"
+
+            # A. 전략 거버넌스 심사
+            gov = check_strategy_approval(strat_name, pt, regime)
+            sig["governance"] = gov
+            if not gov["approved"]:
+                sig["original_signal"] = sig["signal"]
+                sig["signal"] = "caution"
+                sig["reasons"].append(f"전략 거버넌스 통과 실패: {gov['reason_ko']}")
+
+            # B. 투자 플레이북 엔진 평가
+            days_to_ex = None
+            ex_date = ticker_data[ticker].get("ex_dividend_date")
+            if ex_date:
+                try:
+                    from datetime import date
+                    days_to_ex = (date.fromisoformat(ex_date) - date.today()).days
+                except Exception:
+                    pass
+            
+            # SOXL 단타에 대해서는 플레이북 쿨다운 규칙(연속 손실 3회)을 보여주기 위해 3회 설정
+            consec_losses = 3 if (ticker == "SOXL" and pt == "short_term") else 0
+
+            context = {
+                "regime": regime,
+                "portfolio_type": pt,
+                "data_quality": ticker_data[ticker].get("data_quality", "good"),
+                "is_leveraged": ticker in ["SOXL", "TQQQ", "NVDL"],
+                "consecutive_losses": consec_losses,
+                "days_to_ex_date": days_to_ex
+            }
+            playbook_res = evaluate_playbook(context)
+            sig["playbook"] = playbook_res
+            if not playbook_res["allow_buy"] and sig["signal"] in ("buy_candidate", "weak_buy"):
+                sig["original_signal"] = sig["signal"]
+                sig["signal"] = "hold" if playbook_res["action"] == "cooldown" else "caution"
+                sig["reasons"].extend(playbook_res["reasons_ko"])
+                
+                # 감사 로그에 규칙 위반 자동 기록
+                for tr in playbook_res["triggered_rules"]:
+                    log_playbook_violation(
+                        ticker=ticker,
+                        portfolio_type=pt,
+                        rule_id=tr["id"],
+                        rule_name=tr["name"],
+                        action=tr["action"],
+                        reason_ko=tr["reason_ko"]
+                    )
+
+            # C. 사용자 실수 방지 행동 가드 심사
+            # TQQQ, TSLA 종목에 대해 비중 과다(18%) 시뮬레이션
+            exposure = 0.18 if ticker in ["TQQQ", "TSLA"] else 0.04
+            # IONQ 종목에 대해 손절선 하향 이탈 상태 시뮬레이션
+            is_below_sl = True if ticker == "IONQ" else False
+
+            behav_warnings = check_behavioral_risk(
+                ticker=ticker,
+                signal=sig,
+                portfolio_type=pt,
+                current_exposure_pct=exposure,
+                consecutive_losses=consec_losses,
+                is_below_prev_stop_loss=is_below_sl,
+                is_leverage=(ticker in ["SOXL", "TQQQ", "NVDL"])
+            )
+            sig["behavioral_warnings"] = behav_warnings
+            if behav_warnings:
+                sig["cautions"].extend(behav_warnings)
+
+            # D. 비용 민감도 경고 심사
+            expected_ret = 4.0 if sig["score"] >= 2 else 2.0
+            cost_res = evaluate_cost_sensitivity(ticker, expected_ret, pt)
+            sig["cost_analysis"] = cost_res
+            if cost_res["warning_msg"]:
+                sig["cautions"].append(cost_res["warning_msg"])
+            if cost_res["priority_downgrade"] and sig["signal"] == "buy_candidate":
+                sig["original_signal"] = sig["signal"]
+                sig["signal"] = "weak_buy"
 
     type_buckets: dict[str, list[dict]] = {t: [] for t in PORTFOLIO_TYPE_ORDER}
     for ticker in tickers:
@@ -832,6 +936,10 @@ def build_portfolio_hub(
     today_checklist = _build_checklist(ticker_data, all_signals, type_map, signal_conflicts)
     dividend_cashflow = _build_dividend_cashflow(ticker_data, type_map)
 
+    # E. 전략 폐기 권고 리포트 및 감사 로그 로드
+    retirement_report = generate_retirement_report()
+    violations_log = get_violation_logs(limit=15)
+
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "ticker_count": len(tickers),
@@ -845,6 +953,10 @@ def build_portfolio_hub(
         "indicator_explanations": INDICATOR_EXPLANATIONS,
         "portfolio_type_meta": PORTFOLIO_TYPE_META,
         "signal_labels": SIGNAL_LABELS,
+        "market_regime": regime_info,
+        "strategy_retirement": retirement_report,
+        "playbook_violations": violations_log,
+        "explanation_level": Settings().explanation_level,
     }
 
 

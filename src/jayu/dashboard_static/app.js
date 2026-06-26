@@ -2,6 +2,7 @@ const state = {
   page: localStorage.getItem("jayu.dashboard.activePage") || "overview",
   runId: "latest",
   runs: [],
+  failurePatterns: null,
   decision: null,
   overview: null,
   dataQuality: null,
@@ -265,6 +266,7 @@ function isCompletedRun(run) {
 async function loadRuns() {
   const payload = await api("/api/v1/runs");
   state.runs = payload.runs || [];
+  state.failurePatterns = payload.failure_patterns || null;
   
   const sliceCount = 7;
   const recentRuns = state.runs.slice(0, sliceCount);
@@ -450,8 +452,8 @@ function pageTitle(page) {
 }
 
 const PAGE_DATA_SOURCES = {
-  overview: ["run manifest", "safety_verdict.json", "health report", "today_signals sidecar"],
-  "data-quality": ["data_sources.json", "provider_disagreement_report.json", "OHLCV provider cache"],
+  overview: ["run_evidence.json", "run manifest", "safety_verdict.json", "health report", "today_signals sidecar", "failure_patterns.json"],
+  "data-quality": ["data_lineage.json", "data_sources.json", "provider_disagreement_report.json", "OHLCV provider cache"],
   risk: ["risk report", "portfolio_mapping.json", "portfolio.csv", "Toss holdings snapshot"],
   signals: ["today_signals.json", "signal sidecar", "data quality gate", "risk gate"],
   "trader-lens": ["signals artifact", "risk gate", "provider trust map", "safety verdict"],
@@ -464,7 +466,7 @@ const PAGE_DATA_SOURCES = {
   "portfolio-hub": ["portfolio_mapping.json", "yfinance price history", "derived indicators"],
   autotrading: ["autotrading safety gates", "operational run lock", "Toss API config"],
   "simulation-log": ["cli execute simulate", "events.jsonl", "VIX & Index benchmark"],
-  "run-history": ["api list runs", "manifest.json", "events.jsonl per run_id"],
+  "run-history": ["run_evidence.json", "api list runs", "manifest.json", "safety_verdict.json", "risk_explanation.json", "events.jsonl per run_id"],
 };
 
 const METRIC_DATA_SOURCE_BY_PAGE = {
@@ -477,9 +479,19 @@ const METRIC_DATA_SOURCE_BY_PAGE = {
     Health: "health report",
     "세션 리플레이": "session_replay.json · latest run artifacts",
     "복구 가이드": "safety_verdict.json · latest run manifest · operational_status.json",
+    "반복 실패": "failure_patterns.json · runs/*/manifest.json",
+    "연속 차단": "failure_patterns.json · safety_verdict.json",
+    "증거 완성도": "run_evidence.json · run artifact existence checks",
+    "필수 증거": "run_evidence.json · required artifacts",
+    "누락 증거": "run_evidence.json · filesystem existence checks",
+    "경고 증거": "run_evidence.json · optional/warning artifacts",
     __default: "latest run manifest",
   },
   "data-quality": {
+    "계보 노드": "data_lineage.json · latest run artifacts",
+    "계보 연결": "data_lineage.json · provider/artifact/process edges",
+    "누락 산출물": "data_lineage.json · filesystem existence checks",
+    "차단 게이트": "data_lineage.json · risk/safety/process nodes",
     "검증 성공률": "data_sources.json",
     "Provider 수": "provider audit config · data_sources.json",
     불일치: "provider_disagreement_report.json",
@@ -570,6 +582,17 @@ const METRIC_DATA_SOURCE_BY_PAGE = {
     불일치: "provider disagreement report",
     "알림 실패": "notification logs",
     __default: "API monitoring artifacts",
+  },
+  "run-history": {
+    "반복 실패": "failure_patterns.json · runs/*/manifest.json",
+    "연속 차단": "failure_patterns.json · latest completed runs",
+    "실패 실행": "runs/*/manifest.json",
+    "최다 코드": "failure_patterns.json · safety_verdict.json · risk_explanation.json",
+    "증거 완성도": "run_evidence.json · active run artifacts",
+    "필수 증거": "run_evidence.json · required artifacts",
+    "누락 증거": "run_evidence.json · filesystem existence checks",
+    "경고 증거": "run_evidence.json · warning artifacts",
+    __default: "runs/*/manifest.json",
   },
 };
 
@@ -806,6 +829,9 @@ function renderOverview() {
     ${renderOverviewPortfolioHub(state.portfolioHub)}
     ${renderTodayBoard(data.today_board)}
     ${renderDecisionTimeline(data.decision_timeline)}
+    ${renderDataLineageOverview(data.data_lineage)}
+    ${renderRunEvidenceOverview(data.run_evidence)}
+    ${renderFailurePatternOverview(data.failure_patterns || state.failurePatterns)}
     ${renderSessionReplay(data.session_replay)}
     ${renderRecoveryGuide(data.recovery_guide)}
     <section class="metric-grid" aria-label="핵심 운영 지표">
@@ -861,6 +887,142 @@ function renderOverview() {
       ${renderSignalTable(signals.rows)}
       ${renderSourceCaption("today_signals.json · risk gate status")}
     </section>
+  `;
+}
+
+function renderDataLineageOverview(lineage) {
+  const data = lineage || {};
+  const summary = data.summary || {};
+  const source = data.source || summary.source || "data_lineage.json";
+  if (!summary.node_count) return "";
+  return `
+    <section class="data-lineage-overview" aria-label="데이터 계보 요약">
+      <div class="data-lineage-overview-head">
+        <div>
+          <h2>데이터 계보 요약</h2>
+          <p>수집 데이터가 신호와 운영 게이트로 이어지는 경로의 현재 상태입니다.</p>
+        </div>
+        <button class="button button-secondary" type="button" data-go="data-quality">계보 상세</button>
+      </div>
+      <div class="data-lineage-summary">
+        ${metricCard("계보 노드", formatNumber(summary.node_count || 0, 0), data.status || "not_evaluated", `연결 ${formatNumber(summary.edge_count || 0, 0)}개`, null, source)}
+        ${metricCard("Provider", formatNumber(summary.provider_count || 0, 0), summary.failed_provider_count ? "warning" : "success", `실패 ${formatNumber(summary.failed_provider_count || 0, 0)}개`, null, source)}
+        ${metricCard("누락 산출물", formatNumber(summary.missing_artifact_count || 0, 0), summary.missing_artifact_count ? "warning" : "success", "파일 존재 확인", null, source)}
+        ${metricCard("차단 게이트", formatNumber(summary.blocked_gate_count || 0, 0), summary.blocked_gate_count ? "blocked" : "success", "process/gate 상태", null, source)}
+      </div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderFailurePatternOverview(patterns) {
+  const data = patterns || {};
+  const summary = data.summary || {};
+  const source = data.source || summary.source || "failure_patterns.json";
+  if (!summary.run_count) return "";
+  const activeCode = summary.active_streak_code || summary.latest_failure_code || "-";
+  const patternRows = (data.patterns || []).slice(0, 3);
+  return `
+    <section class="failure-pattern-section status-${statusClass(data.status || "not_evaluated")}" aria-label="반복 실패 패턴">
+      <div class="failure-pattern-head">
+        <div>
+          <h2>반복 실패 패턴</h2>
+          <p>최근 실행에서 같은 차단 코드가 반복되는지 확인합니다.</p>
+        </div>
+        <button class="button button-secondary" type="button" data-go="run-history">이력 상세</button>
+      </div>
+      <div class="failure-pattern-summary">
+        ${metricCard("반복 실패", formatNumber(summary.repeated_code_count || 0, 0), summary.repeated_code_count ? "warning" : "success", `최근 ${formatNumber(summary.run_count || 0, 0)}회`, null, source)}
+        ${metricCard("연속 차단", formatNumber(summary.active_streak_count || 0, 0), summary.active_streak_count >= 2 ? "blocked" : summary.active_streak_count ? "warning" : "success", activeCode, null, source)}
+        ${metricCard("실패 실행", formatNumber(summary.failed_run_count || 0, 0), summary.failed_run_count ? "warning" : "success", "failed/error 상태", null, source)}
+        ${metricCard("최다 코드", summary.top_code || "-", summary.top_code ? "warning" : "success", `${formatNumber(summary.top_code_count || 0, 0)}회`, null, source)}
+      </div>
+      ${patternRows.length ? `
+        <div class="failure-pattern-list">
+          ${patternRows.map((item) => renderFailurePatternItem(item, source)).join("")}
+        </div>
+      ` : `
+        <div class="timeline-empty">
+          <strong>반복 차단 없음</strong>
+          <span>최근 완료 run에서 반복 실패 코드가 감지되지 않았습니다.</span>
+        </div>
+      `}
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderRunEvidenceOverview(evidence) {
+  const data = evidence || {};
+  const summary = data.summary || {};
+  const source = data.source || summary.source || "run_evidence.json";
+  if (!summary.required_count) return "";
+  const missing = (data.items || []).filter((item) => item.exists !== true && item.severity !== "optional");
+  return `
+    <section class="run-evidence-section status-${statusClass(data.status || "not_evaluated")}" aria-label="실행 증거 완성도">
+      <div class="run-evidence-head">
+        <div>
+          <h2>실행 증거 완성도</h2>
+          <p>운영 판단에 필요한 run 산출물이 빠짐없이 남아 있는지 확인합니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <div class="run-evidence-summary">
+        ${metricCard("증거 완성도", summary.completeness_rate == null ? "미검증" : formatPercent(summary.completeness_rate), data.status || "not_evaluated", `${formatNumber(summary.present_required_count || 0, 0)}/${formatNumber(summary.required_count || 0, 0)} 필수`, summary.completeness_rate, source)}
+        ${metricCard("필수 증거", formatNumber(summary.required_count || 0, 0), summary.missing_required_count ? "blocked" : "success", `확인 ${formatNumber(summary.present_required_count || 0, 0)}개`, null, source)}
+        ${metricCard("누락 증거", formatNumber(summary.missing_required_count || 0, 0), summary.missing_required_count ? "blocked" : "success", "필수 산출물", null, source)}
+        ${metricCard("경고 증거", formatNumber(summary.missing_warning_count || 0, 0), summary.missing_warning_count ? "warning" : "success", "권장 산출물", null, source)}
+      </div>
+      ${missing.length ? `
+        <div class="run-evidence-list">
+          ${missing.slice(0, 6).map((item) => renderRunEvidenceItem(item, source)).join("")}
+        </div>
+      ` : `
+        <div class="timeline-empty">
+          <strong>필수 증거 누락 없음</strong>
+          <span>현재 run은 운영 판단에 필요한 핵심 산출물을 갖추고 있습니다.</span>
+        </div>
+      `}
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderRunEvidenceItem(item, fallbackSource) {
+  return `
+    <article class="run-evidence-item severity-${escapeHtml(item.severity || "warning")}">
+      <div class="run-evidence-item-head">
+        <div>
+          <strong>${escapeHtml(item.label || item.id)}</strong>
+          <span>${escapeHtml(item.path || "-")}</span>
+        </div>
+        ${statusBadge(item.status || "not_evaluated")}
+      </div>
+      <p>${escapeHtml(item.detail || "")}</p>
+      ${(item.alternatives || []).length > 1 ? `<div class="run-evidence-paths">${item.alternatives.map((path) => `<span>${escapeHtml(path)}</span>`).join("")}</div>` : ""}
+      ${renderSourceLabel(item.source || fallbackSource)}
+    </article>
+  `;
+}
+
+function renderFailurePatternItem(item, fallbackSource) {
+  const action = item.action || {};
+  return `
+    <article class="failure-pattern-item severity-${escapeHtml(item.severity || "warning")}">
+      <div class="failure-pattern-item-head">
+        <div>
+          <strong>${escapeHtml(item.code || "UNKNOWN")}</strong>
+          <span>${formatNumber(item.count || 0, 0)}회 · 최근 ${escapeHtml(formatDate(item.last_seen_at))}</span>
+        </div>
+        ${statusBadge(item.severity === "blocked" ? "blocked" : "warning")}
+      </div>
+      <p>${escapeHtml(action.detail || "manifest와 safety_verdict의 failure_code를 확인하세요.")}</p>
+      <div class="failure-pattern-meta">
+        ${(item.run_ids || []).slice(0, 5).map((runId) => `<span>${escapeHtml(runId)}</span>`).join("")}
+      </div>
+      ${action.page ? `<button class="button button-secondary" type="button" data-go="${escapeHtml(action.page)}">${escapeHtml(action.label || "상세 확인")}</button>` : ""}
+      ${renderSourceLabel(item.source || fallbackSource)}
+    </article>
   `;
 }
 
@@ -1024,6 +1186,19 @@ function renderDataQuality() {
       ${metricCard("상태", STATUS_LABELS[summary.status] || summary.status, summary.status,
         summary.status === "not_evaluated" ? "성공으로 간주하지 않음" : "현재 run 기준")}
     </section>
+    <section class="panel data-lineage-panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>데이터 계보 그래프</h2>
+          <p>Provider 수집값이 신호, 리스크, 안전 판정, 주문 검토로 이어진 경로를 표시합니다.</p>
+        </div>
+        ${statusBadge(data.data_lineage?.status || "not_evaluated")}
+      </div>
+      <div class="panel-body">
+        ${renderDataLineageGraph(data.data_lineage)}
+      </div>
+      ${renderSourceCaption(data.data_lineage?.source || "data_lineage.json")}
+    </section>
     <section class="panel" style="margin-bottom:14px">
       <div class="panel-header"><div><h2>Provider 수집 결과</h2><p>행 수, 기간, hash와 실패 원인</p></div></div>
       ${renderSourcesTable(data.sources)}
@@ -1034,6 +1209,112 @@ function renderDataQuality() {
       ${renderMismatchTable(data.mismatches)}
       ${renderSourceCaption("provider_disagreement_report.json")}
     </section>
+  `;
+}
+
+function renderDataLineageGraph(lineage) {
+  const data = lineage || {};
+  const summary = data.summary || {};
+  const nodes = data.nodes || [];
+  const edges = data.edges || [];
+  const source = data.source || summary.source || "data_lineage.json";
+  if (!nodes.length) {
+    return `
+      <div class="timeline-empty">
+        <strong>데이터 계보 없음</strong>
+        <span>완료된 run의 산출물이 생기면 provider부터 운영 검토까지의 흐름을 구성합니다.</span>
+        ${renderSourceCaption(source)}
+      </div>
+    `;
+  }
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const flowIds = [
+    "process:data_collection",
+    "process:signal_generation",
+    "process:risk_gate",
+    "process:safety_verdict",
+    "process:publication",
+    "process:order_review",
+  ];
+  const flow = flowIds.map((id) => byId.get(id)).filter(Boolean);
+  const providerNodes = nodes.filter((node) => node.kind === "provider");
+  const artifactNodes = nodes.filter((node) => node.kind === "artifact" || node.kind === "state");
+  const importantArtifacts = artifactNodes.filter((node) =>
+    ["missing", "blocked", "failed", "data_error", "warning"].includes(node.status)
+  ).slice(0, 8);
+  const edgeRows = edges.slice(0, 12).map((edge) => {
+    const from = byId.get(edge.from);
+    const to = byId.get(edge.to);
+    return `
+      <div class="data-lineage-edge">
+        <span>${escapeHtml(from?.label || edge.from)}</span>
+        <b>${escapeHtml(edge.label || "연결")}</b>
+        <span>${escapeHtml(to?.label || edge.to)}</span>
+      </div>
+    `;
+  }).join("");
+  return `
+    <div class="data-lineage-summary">
+      ${metricCard("계보 노드", formatNumber(summary.node_count || nodes.length, 0), data.status || "not_evaluated", `provider ${formatNumber(summary.provider_count || providerNodes.length, 0)}개`, null, source)}
+      ${metricCard("계보 연결", formatNumber(summary.edge_count || edges.length, 0), edges.length ? "success" : "not_evaluated", "provider → artifact → gate", null, source)}
+      ${metricCard("누락 산출물", formatNumber(summary.missing_artifact_count || 0, 0), summary.missing_artifact_count ? "warning" : "success", "파일 존재 확인", null, source)}
+      ${metricCard("차단 게이트", formatNumber(summary.blocked_gate_count || 0, 0), summary.blocked_gate_count ? "blocked" : "success", "process/gate 상태", null, source)}
+    </div>
+    <div class="data-lineage-flow" aria-label="데이터 계보 주요 단계">
+      ${flow.map((node, index) => `
+        <article class="data-lineage-node status-${statusClass(node.status)}">
+          <div class="data-lineage-node-step">${formatNumber(index + 1, 0)}</div>
+          <div>
+            <div class="data-lineage-node-head">
+              <strong>${escapeHtml(node.label)}</strong>
+              ${statusBadge(node.status)}
+            </div>
+            <p>${escapeHtml(node.detail || "")}</p>
+            ${renderSourceLabel(node.source || source)}
+          </div>
+        </article>
+      `).join("")}
+    </div>
+    <div class="data-lineage-grid">
+      <section>
+        <div class="data-lineage-subhead">
+          <strong>Provider 노드</strong>
+          <span>${formatNumber(providerNodes.length, 0)}개</span>
+        </div>
+        <div class="data-lineage-chip-list">
+          ${providerNodes.length ? providerNodes.map((node) => renderDataLineageChip(node, source)).join("") : '<span class="muted">provider 기록 없음</span>'}
+        </div>
+      </section>
+      <section>
+        <div class="data-lineage-subhead">
+          <strong>주의 산출물</strong>
+          <span>${formatNumber(importantArtifacts.length, 0)}개</span>
+        </div>
+        <div class="data-lineage-chip-list">
+          ${importantArtifacts.length ? importantArtifacts.map((node) => renderDataLineageChip(node, source)).join("") : '<span class="muted">누락 또는 경고 산출물 없음</span>'}
+        </div>
+      </section>
+    </div>
+    <div class="data-lineage-edges">
+      <div class="data-lineage-subhead">
+        <strong>주요 연결</strong>
+        <span>${formatNumber(edges.length, 0)}개 중 상위 ${formatNumber(Math.min(edges.length, 12), 0)}개</span>
+      </div>
+      ${edgeRows || '<span class="muted">연결 기록 없음</span>'}
+    </div>
+  `;
+}
+
+function renderDataLineageChip(node, fallbackSource) {
+  return `
+    <article class="data-lineage-chip status-${statusClass(node.status)}">
+      <div class="data-lineage-chip-head">
+        <strong>${escapeHtml(node.label || node.id)}</strong>
+        ${statusBadge(node.status)}
+      </div>
+      <p>${escapeHtml(node.detail || node.path || "")}</p>
+      ${renderSourceLabel(node.source || fallbackSource)}
+    </article>
   `;
 }
 
@@ -4389,6 +4670,20 @@ document.querySelector("#refresh-button").addEventListener("click", async () => 
 
 document.querySelector("#retry-button").addEventListener("click", loadPage);
 
+const expSelector = document.querySelector("#explanation-level-selector");
+if (expSelector) {
+  expSelector.addEventListener("change", async () => {
+    const lvl = expSelector.value;
+    try {
+      await api(`/api/v1/set-explanation-level?level=${lvl}`);
+      state.portfolioHub = null;
+      await loadPage();
+    } catch (err) {
+      alert("설명 수준 변경 실패: " + err.message);
+    }
+  });
+}
+
 // Initialize active sidebar menu item from state on load
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.classList.toggle("is-active", item.dataset.page === state.page);
@@ -5845,9 +6140,121 @@ function hubSignalBadge(signalKey) {
   return `<span class="hub-signal-badge" style="background:${d.bg};color:${d.color};border:1px solid ${d.color}33">${d.emoji} ${d.label}</span>`;
 }
 
+function renderMarketRegimeBanner(regimeInfo) {
+  if (!regimeInfo) return "";
+  const r = regimeInfo.regime;
+  const desc = regimeInfo.description;
+  const metrics = regimeInfo.metrics || {};
+  const weights = regimeInfo.weights || {};
+  
+  const emojis = { bull: "🐂", bear: "🐻", sideways: "↔️", volatile: "⚡", risk_off: "🚨" };
+  const labels = { bull: "강세장 (Bull)", bear: "약세장 (Bear)", sideways: "횡보장 (Sideways)", volatile: "변동성 장세 (Volatile)", risk_off: "위험 회피 (Risk-off)" };
+  const colors = { bull: "#22c55e", bear: "#ef4444", sideways: "#f59e0b", volatile: "#a855f7", risk_off: "#ef4444" };
+  const bgColors = { bull: "rgba(34,197,94,0.04)", bear: "rgba(239,68,68,0.04)", sideways: "rgba(245,158,11,0.04)", volatile: "rgba(168,85,247,0.04)", risk_off: "rgba(239,68,68,0.06)" };
+
+  const emoji = emojis[r] || "❓";
+  const label = labels[r] || "알 수 없음";
+  const color = colors[r] || "#64748b";
+  const bg = bgColors[r] || "rgba(100,116,139,0.04)";
+
+  const weightBadges = Object.entries(weights).map(([k, v]) => {
+    const typeLabels = { short_term: "단타 ⚡", swing: "중타 📈", long_term: "장타 🏛️", dividend: "배당 💰" };
+    const wColor = v >= 1.2 ? "#22c55e" : v <= 0.5 ? "#ef4444" : "#64748b";
+    return `<span style="border: 1px solid ${wColor}33; background: ${wColor}11; color: ${wColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; display: inline-block; margin: 2px">
+      ${typeLabels[k] || k}: x${v}
+    </span>`;
+  }).join("");
+
+  return `
+    <div style="background: ${bg}; border-left: 4px solid ${color}; padding: 14px; border-radius: 8px; margin-bottom: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.02)">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px">
+        <div style="flex: 1; min-width: 250px">
+          <h2 style="margin: 0 0 4px 0; font-size: 16px; color: ${color}; display: flex; align-items: center; gap: 8px; font-weight: bold; border-bottom: none">
+            <span>${emoji}</span> 현재 시장 국면: <strong>${label}</strong>
+          </h2>
+          <p style="margin: 0; font-size: 12.5px; color: #475569; line-height: 1.4">${escapeHtml(desc)}</p>
+        </div>
+        <div style="text-align: right; min-width: 200px">
+          <div style="margin-bottom: 4px; font-size: 11px; color: #64748b; font-weight: 600">포트폴리오 타입별 추천 승수</div>
+          <div>${weightBadges}</div>
+        </div>
+      </div>
+      <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e2e8f0; display: flex; flex-wrap: wrap; gap: 14px; font-size: 11.5px; color: #64748b">
+        <span>📉 VIX 공포지수: <strong style="color:#334155">${metrics.vix || "—"}</strong></span>
+        <span>💵 원달러 환율: <strong style="color:#334155">${metrics.usdkrw || "—"}원</strong></span>
+        <span>🇺🇸 S&P 500 추세: <strong style="color: ${metrics.spy_trend === "bull" ? "#22c55e" : metrics.spy_trend === "bear" ? "#ef4444" : "#f59e0b"}">${metrics.spy_trend || "—"}</strong></span>
+        <span>🇰🇷 KOSPI 추세: <strong style="color: ${metrics.kospi_trend === "bull" ? "#22c55e" : metrics.kospi_trend === "bear" ? "#ef4444" : "#f59e0b"}">${metrics.kospi_trend || "—"}</strong></span>
+      </div>
+    </div>
+  `;
+}
+
+function renderDecisionOsMonitoring(data) {
+  if (!data) return "";
+  const retirement = data.strategy_retirement || {};
+  const violations = data.playbook_violations || [];
+  
+  const retiredCards = (retirement.candidates || []).map(c => {
+    const severityColor = c.severity === "critical" ? "#ef4444" : "#f59e0b";
+    const reasons = (c.reasons_ko || []).map(r => `<li>${escapeHtml(r)}</li>`).join("");
+    return `
+      <div style="border: 1px solid ${severityColor}22; background: ${severityColor}05; padding: 10px; border-radius: 6px; margin-bottom: 8px">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px">
+          <strong style="color: ${severityColor}; font-size: 13px">⚠️ 폐기 권고: ${escapeHtml(c.name)}</strong>
+          <span style="font-size: 10px; background: ${severityColor}15; color: ${severityColor}; padding: 1px 5px; border-radius: 3px; font-weight: bold">${c.status === "retired" ? "영구폐기" : "폐기검토"}</span>
+        </div>
+        <ul style="margin: 0; padding-left: 14px; font-size: 11.5px; color: #475569; line-height:1.4">${reasons}</ul>
+      </div>
+    `;
+  }).join("") || `<div style="text-align: center; color: #64748b; padding: 12px; font-size: 13px">✅ 성과가 양호하며 기준 이하인 폐기 대상 전략이 없습니다.</div>`;
+
+  const violationRows = violations.slice(0, 8).map(v => {
+    const actionLabels = { block_buy: "❌ 매수차단", cooldown: "⏳ 쿨다운", warn: "⚠️ 경고" };
+    const actionColors = { block_buy: "#ef4444", cooldown: "#f59e0b", warn: "#eab308" };
+    const actionLabel = actionLabels[v.action] || v.action;
+    const color = actionColors[v.action] || "#64748b";
+    const timeStr = v.timestamp ? new Date(v.timestamp).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+
+    return `
+      <div style="display: flex; align-items: flex-start; gap: 8px; border-bottom: 1px solid #f1f5f9; padding: 6px 0; font-size: 11.5px; line-height: 1.4">
+        <span style="color: #94a3b8; min-width: 60px">${timeStr}</span>
+        <span style="font-weight: bold; min-width: 50px">${escapeHtml(v.ticker)}</span>
+        <span style="color: #475569; min-width: 45px">${escapeHtml(v.portfolio_type === "short_term" ? "단타" : v.portfolio_type === "swing" ? "중타" : v.portfolio_type === "long_term" ? "장타" : "배당")}</span>
+        <span style="background: ${color}15; color: ${color}; padding: 1px 4px; border-radius: 3px; font-weight: bold; font-size: 10px; min-width: 55px; text-align: center; display: inline-block">${escapeHtml(actionLabel)}</span>
+        <span style="color: #334155; flex: 1">${escapeHtml(v.reason_ko)}</span>
+      </div>
+    `;
+  }).join("") || `<div style="text-align: center; color: #64748b; padding: 20px; font-size: 12.5px">원칙 위반 감사 내역이 없습니다.</div>`;
+
+  return `
+    <section style="margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px">
+      <div class="hub-checklist-section" style="margin: 0; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px">
+        <h2 style="font-size: 14px; margin: 0 0 10px 0; color: #1e293b; display: flex; align-items: center; gap: 6px; font-weight: bold; border-bottom: none">
+          <span>🛡️</span> 전략 사용 승인 & 폐기 심사
+        </h2>
+        <p style="font-size: 11px; color: #64748b; margin: 0 0 12px 0">${escapeHtml(retirement.recommendation_summary || "")}</p>
+        <div style="max-height: 220px; overflow-y: auto">${retiredCards}</div>
+      </div>
+      <div class="hub-checklist-section" style="margin: 0; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px">
+        <h2 style="font-size: 14px; margin: 0 0 10px 0; color: #1e293b; display: flex; align-items: center; gap: 6px; font-weight: bold; border-bottom: none">
+          <span>📜</span> 투자 규칙 위반 감사 로그 (Audit Log)
+        </h2>
+        <p style="font-size: 11px; color: #64748b; margin: 0 0 12px 0">플레이북 투자 원칙을 위반해 실시간 감지 및 조치된 최신 로그입니다.</p>
+        <div style="max-height: 220px; overflow-y: auto; display: flex; flex-direction: column">${violationRows}</div>
+      </div>
+    </section>
+  `;
+}
+
 function renderPortfolioHub() {
   const data = state.portfolioHub;
   const tab = state.portfolioHubTab || "short_term";
+
+  // 설명 수준 동기화
+  if (data && data.explanation_level) {
+    const expSelector = document.querySelector("#explanation-level-selector");
+    if (expSelector) expSelector.value = data.explanation_level;
+  }
 
   const tabButtons = PORTFOLIO_TYPE_ORDER_HUB.map(pt => {
     const c = PORTFOLIO_TYPE_COLORS[pt];
@@ -5879,6 +6286,7 @@ function renderPortfolioHub() {
       <button id="btn-hub-load" class="button button-primary">📊 데이터 조회</button>
     </div>
 
+    ${renderMarketRegimeBanner(data?.market_regime)}
     ${renderHubTodayChecklist(checklist)}
     ${renderHubSignalConflictPanel(data?.signal_conflicts)}
 
@@ -5892,6 +6300,8 @@ function renderPortfolioHub() {
 
     <div class="hub-tab-bar">${tabButtons}</div>
     <div id="hub-tab-content">${tabContent}</div>
+
+    ${renderDecisionOsMonitoring(data)}
 
     <div class="hub-disclaimer">
       ⚠️ 이 화면의 신호와 지표는 <strong>투자 보조 분석 결과</strong>이며 투자 추천이 아닙니다.
@@ -6029,6 +6439,45 @@ function renderHubTickerCard(tab, item) {
 
   const dqColor = { good: "#22c55e", partial: "#f59e0b", poor: "#ef4444", unavailable: "#94a3b8" }[item.data_quality] || "#94a3b8";
 
+  // 거버넌스 및 비용 과다 뱃지 빌드
+  let extraBadges = "";
+  if (sig.governance && !sig.governance.approved) {
+    extraBadges += `<span style="background:#ef444412; color:#ef4444; border:1px solid #ef444433; font-size:10px; font-weight:bold; padding:1px 5px; border-radius:3px; margin-left:6px; display:inline-block">🛡️ 거버넌스 제한</span>`;
+  }
+  if (sig.cost_analysis && sig.cost_analysis.priority_downgrade) {
+    extraBadges += `<span style="background:#f59e0b12; color:#b45309; border:1px solid #f59e0b33; font-size:10px; font-weight:bold; padding:1px 5px; border-radius:3px; margin-left:6px; display:inline-block">💰 비용 과다</span>`;
+  }
+
+  // 투자 규칙 위반 패널 빌드
+  let playbookHtml = "";
+  if (sig.playbook && sig.playbook.triggered_rules && sig.playbook.triggered_rules.length > 0) {
+    playbookHtml = sig.playbook.triggered_rules.map(tr => `
+      <div style="background:#ef444405; border: 1px solid #ef444422; color:#ef4444; font-size:11px; padding:6px 10px; border-radius:4px; margin-top:8px; display:flex; align-items:flex-start; gap:6px; line-height: 1.4">
+        <span>📜</span> <div><strong>투자 규칙 위반 (${escapeHtml(tr.name)}):</strong> ${escapeHtml(tr.reason_ko)}</div>
+      </div>
+    `).join("");
+  }
+
+  // 행동 경고 패널 빌드
+  let behaviorHtml = "";
+  if (sig.behavioral_warnings && sig.behavioral_warnings.length > 0) {
+    behaviorHtml = sig.behavioral_warnings.map(w => `
+      <div style="background:#f59e0b05; border: 1px solid #f59e0b22; color:#b45309; font-size:11px; padding:6px 10px; border-radius:4px; margin-top:6px; display:flex; align-items:flex-start; gap:6px; line-height: 1.4">
+        <span>⚠️</span> <div><strong>행동 가드 감지:</strong> ${escapeHtml(w.replace('⚠️ ', ''))}</div>
+      </div>
+    `).join("");
+  }
+
+  // 비용 경고 패널 빌드
+  let costHtml = "";
+  if (sig.cost_analysis && sig.cost_analysis.warning_msg) {
+    costHtml = `
+      <div style="background:#eab30805; border: 1px solid #eab30822; color:#854d0e; font-size:11px; padding:6px 10px; border-radius:4px; margin-top:6px; display:flex; align-items:flex-start; gap:6px; line-height: 1.4">
+        <span>💵</span> <div><strong>비용 분석 (비중 ${sig.cost_analysis.cost_to_gain_ratio_pct}%):</strong> ${escapeHtml(sig.cost_analysis.warning_msg.replace('⚠️ ', '').replace('ℹ️ ', ''))}</div>
+      </div>
+    `;
+  }
+
   return `
     <div class="hub-ticker-card" style="border-top:3px solid ${d.color}">
       <div class="hub-ticker-header">
@@ -6041,7 +6490,10 @@ function renderHubTickerCard(tab, item) {
           <span class="hub-change ${chgClass}">${chg}</span>
           ${renderSourceLabel(priceSource, "data-source-inline hub-price-source")}
         </div>
-        ${hubSignalBadge(sigKey)}
+        <div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px; justify-content:flex-end">
+          ${hubSignalBadge(sigKey)}
+          ${extraBadges}
+        </div>
       </div>
       ${keyMetrics}
       ${renderSourceCaption(metricSource)}
@@ -6050,6 +6502,9 @@ function renderHubTickerCard(tab, item) {
         <ul class="hub-reason-list">${reasons}${cautions}</ul>
       </div>` : ""}
       ${sig.stop_loss_ref ? `<div class="hub-stop-loss">📍 참고 손절가: <strong>$${Number(sig.stop_loss_ref).toFixed(2)}</strong> <small>(ATR × 1.5 기준)</small></div>` : ""}
+      ${playbookHtml}
+      ${behaviorHtml}
+      ${costHtml}
       ${renderSourceCaption(signalSource)}
     </div>`;
 }
@@ -6579,7 +7034,12 @@ const INDICATOR_EXPLANATIONS = {
 
 function renderTooltip(label, indicatorKey) {
   const key = indicatorKey || label;
-  const explanation = INDICATOR_EXPLANATIONS[key];
+  // backend가 내려주는 설명이 있으면 우선 사용하고, 없으면 하드코딩된 설명 사용
+  const backendExp = state.portfolioHub?.indicator_explanations?.[key];
+  const explanation = backendExp 
+    ? (backendExp.description || backendExp)
+    : INDICATOR_EXPLANATIONS[key];
+    
   if (!explanation) return escapeHtml(label);
   
   return `
@@ -7225,8 +7685,11 @@ function renderRunHistory() {
         <p>백엔드 엔진의 역대 실행(Runs) 목록을 관리하고, 상세 이벤트 로그 조회 및 대시보드 전역 필터 적용이 가능합니다.</p>
       </div>
     </div>
+    ${renderDataSourceNote("run-history")}
 
     ${summaryCardsHtml}
+    ${renderRunEvidenceOverview(state.overview?.run_evidence)}
+    ${renderFailurePatternOverview(state.failurePatterns)}
 
     <div class="sim-layout-row">
       <div class="sim-layout-main" style="flex: 1.5;">

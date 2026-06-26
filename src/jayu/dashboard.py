@@ -22,7 +22,9 @@ from pydantic import ValidationError
 
 from .account_attribution import empty_account_attribution
 from .allocation_simulator import empty_allocation_preview
+from .data_lineage import build_data_lineage_report, empty_data_lineage
 from .failure_codes import FailureCode
+from .failure_patterns import build_failure_patterns_report, empty_failure_patterns
 from .io import read_json, stable_hash
 from .metric_dictionary import metric_dictionary_payload
 from .paper_trading import OrderApproval, OrderIntent, OrderPlan
@@ -30,6 +32,7 @@ from .paths import RuntimePaths
 from .portfolio import load_portfolio, load_portfolio_mapping
 from .provider_factory import build_provider_registry, provider_configuration_audit, provider_policy
 from .recovery_guide import build_recovery_guide, empty_recovery_guide
+from .run_evidence import build_run_evidence_report, empty_run_evidence
 from .safety import evaluate_shadow_promotion
 from .settings import Settings, load_settings
 from .session_replay import build_session_replay_report, empty_session_replay
@@ -38,6 +41,8 @@ from .stock_lifecycle import build_stock_lifecycle_report
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
 from .survivorship import audit_survivorship
 from .toss import TOSS_GET_ENDPOINTS, TossCredentialsError, TossInvestClient
+
+GLOBAL_EXPLANATION_LEVEL: str = "normal"
 
 # 시뮬레이션 로그 스트리밍을 위한 글로벌 버퍼 및 프로세스 관리
 SIMULATION_BUFFER: list[str] = [
@@ -380,6 +385,8 @@ def build_dashboard_overview(
         state_dir=paths.state_dir,
         now=reference,
     )
+    failure_patterns = build_failure_patterns_report(paths.runs_dir)
+    run_evidence = build_run_evidence_report(run_dir, now=reference)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -423,7 +430,10 @@ def build_dashboard_overview(
         },
         "today_board": today_board,
         "decision_timeline": decision_timeline,
+        "data_lineage": data_quality.get("data_lineage"),
         "session_replay": session_replay,
+        "failure_patterns": failure_patterns,
+        "run_evidence": run_evidence,
         "recovery_guide": recovery_guide,
         "metric_dictionary": metric_dictionary_payload("overview"),
         "health": {
@@ -515,6 +525,7 @@ def build_dashboard_data_quality(
             "quality_reports": [],
             "disagreements": [],
             "mismatches": [],
+            "data_lineage": empty_data_lineage(),
         }
     manifest = _mapping(read_json(run_dir / "manifest.json", default={}))
     source_payload = _mapping(read_json(run_dir / "data_sources.json", default={}))
@@ -573,6 +584,11 @@ def build_dashboard_data_quality(
         "quality_reports": reports,
         "disagreements": disagreements,
         "mismatches": _flatten_mismatches(disagreements),
+        "data_lineage": build_data_lineage_report(
+            run_dir,
+            project_root=paths.project_root,
+            state_dir=paths.state_dir,
+        ),
     }
 
 
@@ -2637,11 +2653,16 @@ def _dashboard_handler(
 ) -> type[BaseHTTPRequestHandler]:
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
+            global GLOBAL_EXPLANATION_LEVEL
             parsed = urlparse(self.path)
             try:
                 if parsed.path == "/api/v1/runs":
                     self._json(
-                        {"schema_version": SCHEMA_VERSION, "runs": list_dashboard_runs(paths)}
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "runs": list_dashboard_runs(paths),
+                            "failure_patterns": build_failure_patterns_report(paths.runs_dir),
+                        }
                     )
                     return
                 if parsed.path == "/api/v1/overview":
@@ -2731,12 +2752,47 @@ def _dashboard_handler(
                     self._json(build_portfolio_hub_data(paths, tickers=tickers_list))
                     return
                 if parsed.path == "/api/v1/portfolio-hub/meta":
-                    self._json(build_portfolio_hub_meta())
+                    self._json(build_portfolio_hub_meta(GLOBAL_EXPLANATION_LEVEL))
                     return
                 if parsed.path == "/api/v1/portfolio-hub/signals":
                     query = parse_qs(parsed.query)
                     ticker = query.get("ticker", ["SOXL"])[0].upper()
                     self._json(build_portfolio_hub_ticker_signals(ticker))
+                    return
+                # ── 투자 판단 OS API ──────────────────────────────────────────
+                if parsed.path == "/api/v1/set-explanation-level":
+                    query = parse_qs(parsed.query)
+                    lvl = query.get("level", ["normal"])[0]
+                    if lvl in ("beginner", "normal", "expert"):
+                        GLOBAL_EXPLANATION_LEVEL = lvl
+                        try:
+                            from .settings import Settings
+                            # Pydantic 필드 기본값 갱신으로 환경설정 동기화
+                            Settings.model_fields['explanation_level'].default = lvl
+                        except Exception:
+                            pass
+                        self._json({"status": "success", "level": lvl})
+                    else:
+                        self._json({"status": "error", "message": "Invalid level"}, status_code=400)
+                    return
+                if parsed.path == "/api/v1/investment-decision-os":
+                    from .market_regime_router import determine_market_regime
+                    from .strategy_retirement_candidates import generate_retirement_report
+                    from .rule_violation_audit import get_violation_logs
+                    from .strategy_governance import get_strategy_governance_info
+                    
+                    regime_res = determine_market_regime()
+                    retirement_res = generate_retirement_report()
+                    violations_res = get_violation_logs(limit=20)
+                    gov_res = get_strategy_governance_info()
+                    
+                    self._json({
+                        "market_regime": regime_res,
+                        "strategy_retirement": retirement_res,
+                        "playbook_violations": violations_res,
+                        "strategy_governance": gov_res,
+                        "explanation_level": GLOBAL_EXPLANATION_LEVEL
+                    })
                     return
                 # ── 자동매매 준비 상태 ────────────────────────────────────────
                 if parsed.path == "/api/v1/autotrading-status":
@@ -2952,7 +3008,10 @@ def _empty_overview(reference: datetime) -> dict[str, Any]:
                 step=1,
             )
         ],
+        "data_lineage": empty_data_lineage(generated_at=reference.isoformat()),
         "session_replay": empty_session_replay(generated_at=reference.isoformat()),
+        "failure_patterns": empty_failure_patterns(generated_at=reference.isoformat()),
+        "run_evidence": empty_run_evidence(generated_at=reference.isoformat()),
         "recovery_guide": empty_recovery_guide(),
         "metric_dictionary": metric_dictionary_payload("overview"),
         "health": {"score": None, "threshold": None, "status": "not_evaluated"},
@@ -8635,10 +8694,22 @@ def build_portfolio_hub_data(
     return result
 
 
-def build_portfolio_hub_meta() -> dict[str, Any]:
+def build_portfolio_hub_meta(level: str = "normal") -> dict[str, Any]:
     """포트폴리오 허브 메타데이터 (타입 정의, 신호 레이블, 지표 설명)."""
     from .portfolio_hub import get_portfolio_type_meta
-    return get_portfolio_type_meta()
+    meta = get_portfolio_type_meta()
+    from .metric_dictionary import metric_dictionary_payload
+    payload = metric_dictionary_payload(level=level)
+    for group_name, metrics in payload.items():
+        for item in metrics:
+            key = item["key"]
+            meta["indicator_explanations"][key] = {
+                "name": item["label"],
+                "description": item["short_description"],
+                "good": item["good_value"],
+                "caution": item["watch_out"]
+            }
+    return meta
 
 
 def build_portfolio_hub_ticker_signals(ticker: str) -> dict[str, Any]:

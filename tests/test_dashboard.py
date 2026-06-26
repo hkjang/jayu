@@ -379,6 +379,12 @@ def test_dashboard_overview_prioritizes_data_error_and_actions(tmp_path: Path):
     assert replay["summary"]["run_id"] == "run-001"
     assert replay["summary"]["step_count"] >= 7
     assert any(item["id"] == "risk_review" for item in replay["events"])
+    assert report["data_lineage"]["summary"]["run_id"] == "run-001"
+    assert report["data_lineage"]["summary"]["provider_count"] == 2
+    assert report["failure_patterns"]["summary"]["latest_failure_code"] == "DATA_DISAGREEMENT"
+    assert report["failure_patterns"]["summary"]["top_code_count"] >= 1
+    assert report["run_evidence"]["summary"]["run_id"] == "run-001"
+    assert report["run_evidence"]["summary"]["missing_required_count"] == 0
     overview_metrics = report["metric_dictionary"]["overview"]
     assert any(item["key"] == "data_validation" for item in overview_metrics)
     assert overview_metrics[0]["plain_name"] == "가격 데이터 신뢰도"
@@ -523,6 +529,11 @@ def test_dashboard_data_quality_flattens_provider_values_and_dates(tmp_path: Pat
     assert {row["kind"] for row in report["mismatches"]} == {"value", "date"}
     value = next(row for row in report["mismatches"] if row["kind"] == "value")
     assert value["values"] == {"yahoo": 100.0, "tiingo": 98.0}
+    lineage = report["data_lineage"]
+    assert lineage["summary"]["run_id"] == "run-001"
+    assert lineage["summary"]["provider_count"] == 2
+    assert any(node["id"] == "process:data_collection" for node in lineage["nodes"])
+    assert any(edge["to"] == "artifact:data_sources" for edge in lineage["edges"])
 
 
 def test_dashboard_risk_keeps_current_limit_and_excess(tmp_path: Path):
@@ -1132,6 +1143,13 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "renderDecisionTimeline" in content
     assert "renderSessionReplay" in content
     assert "투자 세션 리플레이" in content
+    assert "renderDataLineageGraph" in content
+    assert "데이터 계보 그래프" in content
+    assert "데이터 계보 요약" in content
+    assert "renderFailurePatternOverview" in content
+    assert "반복 실패 패턴" in content
+    assert "renderRunEvidenceOverview" in content
+    assert "실행 증거 완성도" in content
     assert "renderRecoveryGuide" in content
     assert "실패 복구 가이드" in content
     assert "renderSignalHistoryCards" in content
@@ -1183,6 +1201,14 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "timeline-item" in css
     assert "session-replay-section" in css
     assert "session-replay-event" in css
+    assert "data-lineage-panel" in content
+    assert "data-lineage-overview" in css
+    assert "data-lineage-node" in css
+    assert "data-lineage-edge" in css
+    assert "failure-pattern-section" in css
+    assert "failure-pattern-item" in css
+    assert "run-evidence-section" in css
+    assert "run-evidence-item" in css
     assert "recovery-guide-section" in css
     assert "recovery-guide-card" in css
     assert "signal-history-section" in css
@@ -1278,6 +1304,11 @@ def test_dashboard_http_server_serves_static_page_and_api(tmp_path: Path):
         ) as response:
             decision = json.loads(response.read().decode("utf-8"))
         with urlopen(  # noqa: S310
+            f"http://127.0.0.1:{port}/api/v1/runs",
+            timeout=5,
+        ) as response:
+            runs_payload = json.loads(response.read().decode("utf-8"))
+        with urlopen(  # noqa: S310
             f"http://127.0.0.1:{port}/api/v1/runs/run-001/signals",
             timeout=5,
         ) as response:
@@ -1306,6 +1337,8 @@ def test_dashboard_http_server_serves_static_page_and_api(tmp_path: Path):
     assert payload["run"]["run_id"] == "run-001"
     assert payload["decision"]["overall"] == "data_error"
     assert decision["recommended_next_action"]["page"] == "data-quality"
+    assert runs_payload["failure_patterns"]["summary"]["latest_failure_code"] == "DATA_DISAGREEMENT"
+    assert payload["run_evidence"]["summary"]["missing_required_count"] == 0
     assert signals["summary"]["blocked_count"] == 1
     assert trader_lens["summary"]["average_reward_to_risk"] == 2.25
     assert promotion["summary"]["status"] == "blocked"

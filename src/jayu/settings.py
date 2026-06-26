@@ -290,6 +290,7 @@ class DataSettings(BaseModel):
 class Settings(BaseModel):
     tickers: list[str] = ["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"]
     mode: ExecutionMode = "research"
+    explanation_level: Literal["beginner", "normal", "expert"] = "normal"
     safety_profile: Literal["safe", "unsafe"] = "safe"
     initial_capital: float = Field(default=10_000_000, gt=0)
     sim_runs: int = Field(default=500, ge=1, le=100_000)

@@ -24,8 +24,10 @@ from .data import (
     CachedMarketDataService,
     MarketDataProvider,
 )
+from .data_lineage import write_data_lineage_report
 from .dashboard import serve_dashboard
 from .failure_codes import FailureCode, ProcessExitCode, process_exit_code
+from .failure_patterns import write_failure_patterns_report
 from .io import atomic_write_json, file_sha256, read_json, stable_hash
 from .monitoring import classify_failure, compute_health_score, prune_runs, update_health
 from .notifications import KakaoNotifier, build_signal_message
@@ -64,6 +66,7 @@ from .reports import (
 )
 from .risk import apply_data_trust, apply_portfolio_risk, risk_explanation
 from .risk_ledger import record_portfolio_snapshot
+from .run_evidence import write_run_evidence_report
 from .runtime_lock import OperationalRunConflict, OperationalRunLock
 from .safety import (
     SafetyGateError,
@@ -1559,6 +1562,53 @@ def report_session_replay(
         output or (paths.state_dir / "session_replay.json"),
         project_root=paths.project_root,
         state_dir=paths.state_dir,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("data-lineage")
+def report_data_lineage(
+    run: Annotated[Path | None, typer.Option("--run", exists=True, file_okay=False)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    selected_run = run or latest_run_dir(paths.runs_dir)
+    report = write_data_lineage_report(
+        selected_run,
+        output or (paths.state_dir / "data_lineage.json"),
+        project_root=paths.project_root,
+        state_dir=paths.state_dir,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("failure-patterns")
+def report_failure_patterns(
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=500)] = 100,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    report = write_failure_patterns_report(
+        paths.runs_dir,
+        output or (paths.state_dir / "failure_patterns.json"),
+        limit=limit,
+    )
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("run-evidence")
+def report_run_evidence(
+    run: Annotated[Path | None, typer.Option("--run", exists=True, file_okay=False)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    _, paths = _load(config)
+    selected_run = run or latest_run_dir(paths.runs_dir)
+    report = write_run_evidence_report(
+        selected_run,
+        output or (paths.state_dir / "run_evidence.json"),
     )
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 

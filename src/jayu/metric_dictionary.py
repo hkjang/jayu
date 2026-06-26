@@ -23,10 +23,23 @@ class MetricDefinition:
     short_description: str
     good_value: str
     watch_out: str
+    beginner_description: str | None = None
+    expert_description: str | None = None
     source: str = "src/jayu/metric_dictionary.py"
 
-    def to_dict(self) -> dict[str, str]:
-        return asdict(self)
+    def to_dict(self, level: str | None = None) -> dict[str, str]:
+        if level is None:
+            try:
+                from .settings import Settings
+                level = Settings().explanation_level
+            except Exception:
+                level = "normal"
+        d = asdict(self)
+        if level == "beginner" and self.beginner_description:
+            d["short_description"] = self.beginner_description
+        elif level == "expert" and self.expert_description:
+            d["short_description"] = self.expert_description
+        return d
 
 
 METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
@@ -38,6 +51,8 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
         short_description="여러 데이터 제공자의 가격이 서로 맞는지 확인해, 신호 계산에 써도 되는지 보는 지표입니다.",
         good_value="95% 이상이거나 불일치 종목이 0개면 좋습니다.",
         watch_out="낮으면 매수·매도 신호보다 데이터 오류 확인이 먼저입니다.",
+        beginner_description="주가 정보가 맞는지 검사합니다. 여러 인터넷 사이트의 가격을 대조하여 틀린 곳이 없는지 확인하는 안전장치입니다.",
+        expert_description="Multi-provider price validation. 종가(Close) 및 시가(Open) 데이터에 대해 복수의 Provider 간 허용 오차범위(0.5%) 내 정합성을 strict 모드로 검증합니다."
     ),
     MetricDefinition(
         key="risk_gate",
@@ -47,6 +62,8 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
         short_description="매수 신호가 있더라도 현금, 종목 비중, 섹터 집중, 손실 한도 같은 안전 규칙을 통과했는지 봅니다.",
         good_value="승인 신호가 있고 차단 신호가 0개면 좋습니다.",
         watch_out="차단이 있으면 주문 후보가 아니라 검토 후보입니다.",
+        beginner_description="살 준비가 되었는지 최종 확인합니다. 돈이 부족하진 않은지, 한 종목에 너무 많이 사지는 않는지 등의 규칙을 통과해야 매수가 승인됩니다.",
+        expert_description="Risk enforcement gateway. 포트폴리오의 최대 종목 비중(10%), 섹터 노출도(50%), 일일/주간 손실 한도를 실시간으로 심사하여 차단 여부를 결정합니다."
     ),
     MetricDefinition(
         key="survivorship_policy",
@@ -249,18 +266,18 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
 )
 
 
-def metric_definitions_for(group: MetricGroup, *, limit: int | None = None) -> list[dict[str, str]]:
-    rows = [item.to_dict() for item in METRIC_DEFINITIONS if item.group == group]
+def metric_definitions_for(group: MetricGroup, *, limit: int | None = None, level: str | None = None) -> list[dict[str, str]]:
+    rows = [item.to_dict(level=level) for item in METRIC_DEFINITIONS if item.group == group]
     return rows[:limit] if limit is not None else rows
 
 
-def metric_dictionary_payload(*groups: MetricGroup) -> dict[str, list[dict[str, str]]]:
+def metric_dictionary_payload(*groups: MetricGroup, level: str | None = None) -> dict[str, list[dict[str, str]]]:
     selected = groups or ("overview", "signals", "analysis", "portfolio", "risk")
-    return {group: metric_definitions_for(group) for group in selected}
+    return {group: metric_definitions_for(group, level=level) for group in selected}
 
 
-def metric_definition(key: str) -> dict[str, str] | None:
+def metric_definition(key: str, level: str | None = None) -> dict[str, str] | None:
     for item in METRIC_DEFINITIONS:
         if item.key == key:
-            return item.to_dict()
+            return item.to_dict(level=level)
     return None
