@@ -1,7 +1,18 @@
 function renderDataQuality() {
   const data = state.dataQuality;
-  const summary = data.summary;
+  const summary = data.summary || {};
   const gates = data.gates || {};
+  
+  // Compute derived summary metrics to prevent undefined/NaN display
+  const sourcesList = data.sources || [];
+  summary.total_source_count = sourcesList.length;
+  summary.failed_source_count = summary.failed_source_count || 0;
+  summary.success_source_count = Math.max(0, summary.total_source_count - summary.failed_source_count);
+  summary.success_rate = summary.total_source_count > 0 ? (summary.success_source_count / summary.total_source_count) : 1.0;
+  
+  summary.total_providers = summary.provider_count || 0;
+  const failedProviders = new Set(sourcesList.filter(s => s.status !== "success" && s.provider).map(s => s.provider));
+  summary.success_providers = Math.max(0, summary.total_providers - failedProviders.size);
   
   els.root.innerHTML = `
     <div class="page-heading">
