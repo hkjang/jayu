@@ -1,0 +1,707 @@
+function renderOverview() {
+  const data = state.overview;
+  const run = data.run;
+  const decision = state.decision || data.decision;
+  const gates = data.gates;
+  const signals = data.signals;
+  const health = data.health;
+  const reasons = decision.top_blockers || decision.top_reasons || [];
+  const actions = decision.recommended_actions || data.recommended_actions || [];
+  const primaryAction = decision.recommended_next_action || actions[0] || null;
+  els.root.innerHTML = `
+    <div class="page-heading">
+      <div>
+        <h1>운영 상태 개요</h1>
+        <p>오늘 실행을 계속 볼지, 멈추고 재검증할지 먼저 판단합니다. 차단 사유와 다음 행동을 상단에 고정합니다.</p>
+      </div>
+      ${statusBadge(run.execution_status, "실행")} 
+    </div>
+    ${renderDataSourceNote("overview")}
+    <section class="decision-grid" aria-label="오늘 결론">
+      <article class="decision-card status-${statusClass(decision.overall)}" aria-labelledby="status-title">
+        <div class="decision-eyebrow">${statusBadge(decision.overall)} <span>${escapeHtml(String(run.mode || "unknown").toUpperCase())}</span></div>
+        <h2 id="status-title">${escapeHtml(decisionHeadline(decision.overall))}</h2>
+        <p>${escapeHtml(decision.headline)}</p>
+        ${renderSourceLabel("safety_verdict.json · latest run manifest")}
+        <div class="decision-meta">
+          <span>실행 ${escapeHtml(STATUS_LABELS[run.execution_status] || run.execution_status || "미검증")}</span>
+          <span>운영 ${escapeHtml(STATUS_LABELS[run.safety_decision] || run.safety_decision || "미검증")}</span>
+          <span class="code">${escapeHtml(run.failure_code || reasons[0]?.code || "NO_BLOCKER")}</span>
+        </div>
+      </article>
+      ${renderPrimaryAction(primaryAction)}
+    </section>
+    ${renderDecisionDiffCard(data.decision_diff)}
+    ${renderOverviewPortfolioHub(state.portfolioHub)}
+    ${renderTodayBoard(data.today_board)}
+    ${renderDecisionTimeline(data.decision_timeline)}
+    ${renderDataLineageOverview(data.data_lineage)}
+    ${renderRunEvidenceOverview(data.run_evidence)}
+    ${renderFailurePatternOverview(data.failure_patterns || state.failurePatterns)}
+    ${renderSessionReplay(data.session_replay)}
+    ${renderRecoveryGuide(data.recovery_guide)}
+    <section class="metric-grid" aria-label="핵심 운영 지표">
+      ${metricCard("데이터 검증", ratioValue(gates.data.verified, gates.data.total), gates.data.status,
+        gates.data.total ? `${formatPercent(gates.data.validation_rate)} · provider ${gates.data.provider_count}` : "가격 데이터 미검증",
+        gates.data.validation_rate)}
+      ${metricCard("리스크 게이트", `${gates.risk.approved_count}/${gates.risk.approved_count + gates.risk.blocked_count}`,
+        gates.risk.status, `승인 ${gates.risk.approved_count} · 차단 ${gates.risk.blocked_count}`,
+        gateRatio(gates.risk.approved_count, gates.risk.blocked_count))}
+      ${metricCard("생존편향 정책", gates.survivorship.policy || "미검증", gates.survivorship.status,
+        `Delisted ${formatBoolean(gates.survivorship.includes_delisted)}`)}
+      ${metricCard("Shadow 승격", gates.promotion.eligible ? "가능" : "대기", gates.promotion.status,
+        `${gates.promotion.shadow_day_count ?? 0}일 실행`)}
+      ${metricCard("오늘의 신호", `${signals.eligible}/${signals.buy}`, signals.blocked ? "blocked" : signals.buy ? "success" : "not_evaluated",
+        `매수 ${signals.buy} · 차단 ${signals.blocked}`)}
+      ${metricCard("Health", health.score ?? "미검증", health.status === "healthy" ? "success" : health.status,
+        `기준 ${health.threshold ?? "-"} / 100`, health.score == null ? null : health.score / 100)}
+      ${metricCard("증거 완성도", data.evidence_completeness?.score == null ? "미검증" : `${data.evidence_completeness.score}%`,
+        data.evidence_completeness?.score >= 90 ? "success" : data.evidence_completeness?.score >= 70 ? "warning" : "blocked",
+        `필수 ${7 - (data.evidence_completeness?.missing?.length || 0)}/7 개 존재`)}
+    </section>
+    ${renderMetricDictionaryStrip(data.metric_dictionary?.overview, "운영 지표 쉬운 설명")}
+    <div class="section-grid">
+      <section class="panel">
+        <div class="panel-header">
+          <div><h2>차단 원인 Top 3</h2><p>차단 영향도가 높은 순서입니다. 관련 화면 또는 안전 명령으로 바로 이어집니다.</p></div>
+          <span class="muted">${reasons.length}건</span>
+        </div>
+        <div class="panel-body">
+          ${renderReasons(reasons, actions)}
+          ${renderSourceCaption("safety_verdict.json · decision reasons")}
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-header"><div><h2>다음 행동 목록</h2><p>실행 버튼이 아니라 안전한 화면 이동과 명령 복사만 제공합니다.</p></div></div>
+        <div class="panel-body">
+          <div class="action-list">
+            ${actions.length ? actions.map((action) =>
+              `<button class="button ${action.priority === 1 ? "button-primary" : "button-secondary"}" type="button" ${
+                action.page
+                  ? `data-go="${escapeHtml(action.page)}"`
+                  : `data-command="${escapeHtml(action.command || "")}"`
+              }>${escapeHtml(action.label)}</button>`
+            ).join("") : '<span class="muted">추가 조치가 없습니다.</span>'}
+          </div>
+          ${renderSourceCaption("recommended_actions from safety verdict")}
+          <p id="command-feedback" class="metric-detail" hidden></p>
+        </div>
+      </section>
+    </div>
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>신호 요약</h2><p>데이터와 리스크 검증 이후 상태</p></div>
+        <button class="button button-secondary" type="button" data-go="risk">리스크 상세</button>
+      </div>
+      ${renderSignalTable(signals.rows)}
+      ${renderSourceCaption("today_signals.json · risk gate status")}
+    </section>
+  `;
+}
+
+function renderTodayBoard(board) {
+  if (!board) return "";
+  const sections = [
+    ["tasks", "오늘 할 일", "먼저 처리할 운영 검토", "runs/*/manifest.json · safety_verdict.json"],
+    ["risky_stocks", "위험 종목", "차단·경고·데이터 확인 대상", "today_signals.json · risk gate status"],
+    ["buy_candidates", "매수 후보", "리스크 게이트 통과 후보", "today_signals.json"],
+    ["sell_candidates", "매도 후보", "축소 또는 청산 검토 후보", "today_signals.json"],
+    ["order_prepares", "주문 준비", "매수 후보가 있으면 OrderIntent 전 검증", "today_signals.json · OrderIntent validation queue"],
+    ["dividend_reviews", "배당 점검", "배당 타입 보유·관심 종목", "portfolio_mapping.json"],
+  ];
+  return `
+    <section class="today-board" aria-label="오늘 확인할 항목">
+      <div class="today-board-header">
+        <div>
+          <h2>오늘 확인할 항목</h2>
+          <p>실행 결과를 사용자가 바로 행동으로 옮길 수 있게 나눈 읽기 전용 점검판입니다.</p>
+        </div>
+        ${renderSourceLabel("latest run manifest · safety_verdict.json · today_signals.json · portfolio_mapping.json")}
+      </div>
+      <div class="today-board-grid">
+        ${sections.map(([key, title, emptyText, source]) => renderTodayBoardCard(title, board[key] || [], emptyText, source)).join("")}
+      </div>
+    </section>`;
+}
+
+function renderTodayBoardCard(title, items, emptyText, fallbackSource) {
+  return `
+    <article class="today-card">
+      <div class="today-card-header">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${items.length}건</span>
+      </div>
+      <div class="today-list">
+        ${items.length ? items.map((item) => renderTodayBoardItem(item, fallbackSource)).join("") : `
+          <div class="today-empty">${escapeHtml(emptyText)}</div>
+          ${renderSourceLabel(fallbackSource)}
+        `}
+      </div>
+    </article>`;
+}
+
+function renderTodayBoardItem(item, fallbackSource) {
+  const targetAttr = item.page
+    ? `data-go="${escapeHtml(item.page)}"`
+    : item.command
+    ? `data-command="${escapeHtml(item.command)}"`
+    : "";
+  const priceBits = [
+    item.entry_price != null ? `진입 ${formatNumber(item.entry_price, 2)}` : "",
+    item.stop_price != null ? `손절 ${formatNumber(item.stop_price, 2)}` : "",
+    item.target_price != null ? `목표 ${formatNumber(item.target_price, 2)}` : "",
+  ].filter(Boolean);
+  const queueStatus = item.queue_status || "new";
+  const actionType = item.action_type || "";
+  const tags = [
+    ACTION_QUEUE_STATUS_LABELS[queueStatus] || queueStatus,
+    ACTION_TYPE_LABELS[actionType] || actionType,
+    item.priority ? `P${item.priority}` : "",
+  ].filter(Boolean);
+  return `
+    <div class="today-item status-${statusClass(item.status || "not_evaluated")}">
+      <div class="today-item-main">
+        <strong>${renderTicker(item.label || item.ticker)}</strong>
+        ${tags.length ? `<div class="today-item-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+        <span>${escapeHtml(item.detail || "")}</span>
+        ${priceBits.length ? `<small>${escapeHtml(priceBits.join(" · "))}</small>` : ""}
+      </div>
+      ${targetAttr ? `<button class="icon-button today-jump" type="button" ${targetAttr} title="관련 화면으로 이동">›</button>` : ""}
+      ${renderSourceLabel(item.source || fallbackSource)}
+    </div>`;
+}
+
+function renderDecisionTimeline(timeline) {
+  const events = Array.isArray(timeline) ? timeline : [];
+  const rows = events.length ? events.map((event) => {
+    const action = event.next_action || {};
+    const attrs = action.page
+      ? `data-go="${escapeHtml(action.page)}"`
+      : action.command
+        ? `data-command="${escapeHtml(action.command)}"`
+        : "";
+    const actionButton = attrs
+      ? `<button class="button button-secondary timeline-action" type="button" ${attrs}>${escapeHtml(action.label || "확인")}</button>`
+      : "";
+    const meta = [
+      event.occurred_at ? `시각 ${formatDate(event.occurred_at)}` : "",
+      event.failure_code ? `실패 코드 ${event.failure_code}` : "",
+      event.evidence ? `근거 ${event.evidence}` : "",
+    ].filter(Boolean);
+    return `
+      <article class="timeline-item status-${statusClass(event.status || "not_evaluated")}">
+        <div class="timeline-marker">${escapeHtml(event.step || "")}</div>
+        <div class="timeline-content">
+          <div class="timeline-title">
+            <strong>${escapeHtml(event.label || "판단 단계")}</strong>
+            ${statusBadge(event.status || "not_evaluated")}
+          </div>
+          <p>${escapeHtml(event.summary || "")}</p>
+          <span>${escapeHtml(event.detail || "")}</span>
+          ${meta.length ? `<div class="timeline-meta">${meta.map((item) => `<small>${escapeHtml(item)}</small>`).join("")}</div>` : ""}
+          ${renderSourceLabel(event.source || event.evidence || "latest run artifacts")}
+        </div>
+        ${actionButton}
+      </article>
+    `;
+  }).join("") : `
+    <div class="timeline-empty">
+      <strong>투자 판단 타임라인 없음</strong>
+      <span>완료된 실행 또는 관련 artifact가 생기면 여기에 시간순 판단 흐름이 표시됩니다.</span>
+    </div>
+  `;
+  return `
+    <section class="decision-timeline" aria-label="투자 판단 타임라인">
+      <div class="timeline-header">
+        <div>
+          <h2>투자 판단 타임라인</h2>
+          <p>데이터 수집부터 알림 준비까지 오늘 결론이 만들어진 순서를 보여줍니다.</p>
+        </div>
+        ${renderSourceLabel("manifest.json · data_sources.json · signals_risk.json · risk_explanation.json · state artifacts")}
+      </div>
+      <div class="timeline-list">${rows}</div>
+    </section>
+  `;
+}
+
+function renderDataLineageOverview(lineage) {
+  const data = lineage || {};
+  const summary = data.summary || {};
+  const source = data.source || summary.source || "data_lineage.json";
+  if (!summary.node_count) return "";
+  return `
+    <section class="data-lineage-overview" aria-label="데이터 계보 요약">
+      <div class="data-lineage-overview-head">
+        <div>
+          <h2>데이터 계보 요약</h2>
+          <p>수집 데이터가 신호와 운영 게이트로 이어지는 경로의 현재 상태입니다.</p>
+        </div>
+        <button class="button button-secondary" type="button" data-go="data-quality">계보 상세</button>
+      </div>
+      <div class="data-lineage-summary">
+        ${metricCard("계보 노드", formatNumber(summary.node_count || 0, 0), data.status || "not_evaluated", `연결 ${formatNumber(summary.edge_count || 0, 0)}개`, null, source)}
+        ${metricCard("Provider", formatNumber(summary.provider_count || 0, 0), summary.failed_provider_count ? "warning" : "success", `실패 ${formatNumber(summary.failed_provider_count || 0, 0)}개`, null, source)}
+        ${metricCard("누락 산출물", formatNumber(summary.missing_artifact_count || 0, 0), summary.missing_artifact_count ? "warning" : "success", "파일 존재 확인", null, source)}
+        ${metricCard("차단 게이트", formatNumber(summary.blocked_gate_count || 0, 0), summary.blocked_gate_count ? "blocked" : "success", "process/gate 상태", null, source)}
+      </div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderRunEvidenceOverview(evidence) {
+  const data = evidence || {};
+  const summary = data.summary || {};
+  const source = data.source || summary.source || "run_evidence.json";
+  if (!summary.required_count) return "";
+  const missing = (data.items || []).filter((item) => item.exists !== true && item.severity !== "optional");
+  
+  const comp = state.overview?.evidence_completeness;
+  let checklistHtml = "";
+  if (comp) {
+    const labels = {
+      manifest: "실행 정보 (manifest.json)",
+      data_sources: "데이터 출처 (data_sources.json)",
+      provider_disagreement_report: "제공자 불일치 리포트 (provider_disagreement_report.json)",
+      signals: "리스크 및 신호 (signals_risk.json)",
+      risk_explanation: "리스크 사유 사전 (risk_explanation.json)",
+      safety_verdict: "안전 진단 판결 (safety_verdict.json)",
+      report: "분석 종합 리포트 (report.md/html)"
+    };
+    checklistHtml = `
+      <div class="evidence-checklist" style="margin-top: 15px; padding: 12px; background: rgba(0,0,0,0.05); border: 1px solid var(--border); border-radius: 6px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; font-weight: bold;">
+          <span>⚖️ 핵심 7대 운영 증거 점검 (체크리스트)</span>
+          <span style="color: ${comp.score >= 90 ? '#10b981' : comp.score >= 70 ? '#f59e0b' : '#ef4444'}">${comp.score}점</span>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px;">
+          ${Object.entries(labels).map(([key, lbl]) => {
+            const has = comp.present && comp.present.includes(key);
+            return `
+              <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 4px 8px; border-radius: 4px; background: ${has ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'}; border: 1px solid ${has ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'};">
+                <span style="color: ${has ? '#10b981' : '#ef4444'}; font-weight: bold;">${has ? '✓' : '✗'}</span>
+                <span style="color: var(--text);">${escapeHtml(lbl)}</span>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <section class="run-evidence-section status-${statusClass(data.status || "not_evaluated")}" aria-label="실행 증거 완성도">
+      <div class="run-evidence-head">
+        <div>
+          <h2>실행 증거 완성도</h2>
+          <p>운영 판단에 필요한 run 산출물이 빠짐없이 남아 있는지 확인합니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <div class="run-evidence-summary">
+        ${metricCard("증거 완성도", summary.completeness_rate == null ? "미검증" : formatPercent(summary.completeness_rate), data.status || "not_evaluated", `${formatNumber(summary.present_required_count || 0, 0)}/${formatNumber(summary.required_count || 0, 0)} 필수`, summary.completeness_rate, source)}
+        ${metricCard("필수 증거", formatNumber(summary.required_count || 0, 0), summary.missing_required_count ? "blocked" : "success", `확인 ${formatNumber(summary.present_required_count || 0, 0)}개`, null, source)}
+        ${metricCard("누락 증거", formatNumber(summary.missing_required_count || 0, 0), summary.missing_required_count ? "blocked" : "success", "필수 산출물", null, source)}
+        ${metricCard("경고 증거", formatNumber(summary.missing_warning_count || 0, 0), summary.missing_warning_count ? "warning" : "success", "권장 산출물", null, source)}
+      </div>
+      ${checklistHtml}
+      ${missing.length ? `
+        <div class="run-evidence-list">
+          ${missing.slice(0, 6).map((item) => renderRunEvidenceItem(item, source)).join("")}
+        </div>
+      ` : `
+        <div class="timeline-empty">
+          <strong>필수 증거 누락 없음</strong>
+          <span>현재 run은 운영 판단에 필요한 핵심 산출물을 갖추고 있습니다.</span>
+        </div>
+      `}
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderRunEvidenceItem(item, fallbackSource) {
+  return `
+    <article class="run-evidence-item severity-${escapeHtml(item.severity || "warning")}">
+      <div class="run-evidence-item-head">
+        <div>
+          <strong>${escapeHtml(item.label || item.id)}</strong>
+          <span>${escapeHtml(item.path || "-")}</span>
+        </div>
+        ${statusBadge(item.status || "not_evaluated")}
+      </div>
+      <p>${escapeHtml(item.detail || "")}</p>
+      ${(item.alternatives || []).length > 1 ? `<div class="run-evidence-paths">${item.alternatives.map((path) => `<span>${escapeHtml(path)}</span>`).join("")}</div>` : ""}
+      ${renderSourceLabel(item.source || fallbackSource)}
+    </article>
+  `;
+}
+
+function renderFailurePatternOverview(patterns) {
+  const data = patterns || {};
+  const summary = data.summary || {};
+  const source = data.source || summary.source || "failure_patterns.json";
+  if (!summary.run_count) return "";
+  const activeCode = summary.active_streak_code || summary.latest_failure_code || "-";
+  const patternRows = (data.patterns || []).slice(0, 3);
+  return `
+    <section class="failure-pattern-section status-${statusClass(data.status || "not_evaluated")}" aria-label="반복 실패 패턴">
+      <div class="failure-pattern-head">
+        <div>
+          <h2>반복 실패 패턴</h2>
+          <p>최근 실행에서 같은 차단 코드가 반복되는지 확인합니다.</p>
+        </div>
+        <button class="button button-secondary" type="button" data-go="run-history">이력 상세</button>
+      </div>
+      <div class="failure-pattern-summary">
+        ${metricCard("반복 실패", formatNumber(summary.repeated_code_count || 0, 0), summary.repeated_code_count ? "warning" : "success", `최근 ${formatNumber(summary.run_count || 0, 0)}회`, null, source)}
+        ${metricCard("연속 차단", formatNumber(summary.active_streak_count || 0, 0), summary.active_streak_count >= 2 ? "blocked" : summary.active_streak_count ? "warning" : "success", activeCode, null, source)}
+        ${metricCard("실패 실행", formatNumber(summary.failed_run_count || 0, 0), summary.failed_run_count ? "warning" : "success", "failed/error 상태", null, source)}
+        ${metricCard("최다 코드", summary.top_code || "-", summary.top_code ? "warning" : "success", `${formatNumber(summary.top_code_count || 0, 0)}회`, null, source)}
+      </div>
+      ${patternRows.length ? `
+        <div class="failure-pattern-list">
+          ${patternRows.map((item) => renderFailurePatternItem(item, source)).join("")}
+        </div>
+      ` : `
+        <div class="timeline-empty">
+          <strong>반복 차단 없음</strong>
+          <span>최근 완료 run에서 반복 실패 코드가 감지되지 않았습니다.</span>
+        </div>
+      `}
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderFailurePatternItem(item, fallbackSource) {
+  const action = item.action || {};
+  return `
+    <article class="failure-pattern-item severity-${escapeHtml(item.severity || "warning")}">
+      <div class="failure-pattern-item-head">
+        <div>
+          <strong>${escapeHtml(item.code || "UNKNOWN")}</strong>
+          <span>${formatNumber(item.count || 0, 0)}회 · 최근 ${escapeHtml(formatDate(item.last_seen_at))}</span>
+        </div>
+        ${statusBadge(item.severity === "blocked" ? "blocked" : "warning")}
+      </div>
+      <p>${escapeHtml(action.detail || "manifest와 safety_verdict의 failure_code를 확인하세요.")}</p>
+      <div class="failure-pattern-meta">
+        ${(item.run_ids || []).slice(0, 5).map((runId) => `<span>${escapeHtml(runId)}</span>`).join("")}
+      </div>
+      ${action.page ? `<button class="button button-secondary" type="button" data-go="${escapeHtml(action.page)}">${escapeHtml(action.label || "상세 확인")}</button>` : ""}
+      ${renderSourceLabel(item.source || fallbackSource)}
+    </article>
+  `;
+}
+
+function renderSessionReplay(replay) {
+  const data = replay || {};
+  const summary = data.summary || {};
+  const events = data.events || [];
+  const artifacts = data.artifacts || [];
+  const source = data.source || summary.source || "state/session_replay.json";
+  const status = data.status || "not_evaluated";
+  const eventHtml = events.length ? events.map((event) => `
+    <article class="session-replay-event status-${statusClass(event.status || "not_evaluated")}">
+      <div class="session-replay-marker">${escapeHtml(event.step || "")}</div>
+      <div class="session-replay-main">
+        <div class="session-replay-title">
+          <strong>${escapeHtml(event.title || "세션 단계")}</strong>
+          ${statusBadge(event.status || "not_evaluated")}
+        </div>
+        <p>${escapeHtml(event.summary || "")}</p>
+        ${(event.details || []).length ? `<div class="session-replay-details">${event.details.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+        ${(event.artifacts || []).length ? `<div class="session-replay-artifacts">${event.artifacts.map((artifact) => `
+          <span class="${artifact.exists ? "exists" : "missing"}">${escapeHtml(artifact.path || artifact.source || "-")}</span>
+        `).join("")}</div>` : ""}
+        ${renderSourceLabel(event.source || source)}
+      </div>
+    </article>
+  `).join("") : `
+    <div class="timeline-empty">
+      <strong>투자 세션 리플레이 없음</strong>
+      <span>완료된 run의 manifest와 산출물이 생기면 실행 흐름을 재생합니다.</span>
+    </div>
+  `;
+  return `
+    <section class="session-replay-section" aria-label="투자 세션 리플레이">
+      <div class="session-replay-head">
+        <div>
+          <h2>투자 세션 리플레이</h2>
+          <p>한 번의 실행이 어떤 단계와 산출물을 거쳐 오늘 결론으로 이어졌는지 복기합니다.</p>
+        </div>
+        ${statusBadge(status, `${formatNumber(summary.step_count || events.length || 0, 0)}단계`)}
+      </div>
+      <div class="session-replay-summary">
+        ${metricCard("성공 단계", formatNumber(summary.success_count || 0, 0), summary.success_count ? "success" : "not_evaluated", `전체 ${formatNumber(summary.step_count || events.length || 0, 0)}`, null, source)}
+        ${metricCard("경고 단계", formatNumber(summary.warning_count || 0, 0), summary.warning_count ? "warning" : "success", "review needed", null, source)}
+        ${metricCard("차단 단계", formatNumber(summary.blocked_count || 0, 0), summary.blocked_count ? "blocked" : "success", "blocked/data error", null, source)}
+        ${metricCard("증거 파일", formatNumber(summary.artifact_count || artifacts.length || 0, 0), artifacts.length ? "success" : "not_evaluated", "artifact index", null, source)}
+      </div>
+      <div class="session-replay-list">${eventHtml}</div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderRecoveryGuide(guide) {
+  const data = guide || {};
+  const summary = data.summary || {};
+  const items = data.items || [];
+  const source = data.source || summary.source || "state/recovery_guide.json";
+  const status = data.status || "success";
+  if (!items.length) {
+    return `
+      <section class="recovery-guide-section status-${statusClass(status)}">
+        <div class="recovery-guide-head">
+          <div>
+            <h2>실패 복구 가이드</h2>
+            <p>현재 차단된 실패 코드가 없어 추가 복구 단계가 없습니다.</p>
+          </div>
+          ${statusBadge("success", "정상")}
+        </div>
+        ${renderSourceCaption(source)}
+      </section>
+    `;
+  }
+  return `
+    <section class="recovery-guide-section status-${statusClass(status)}" aria-label="실패 복구 가이드">
+      <div class="recovery-guide-head">
+        <div>
+          <h2>실패 복구 가이드</h2>
+          <p>실패 코드별 원인, 확인 파일, 다시 검증할 명령을 순서대로 정리합니다.</p>
+        </div>
+        ${statusBadge(status, `${formatNumber(summary.issue_count || items.length, 0)}건`)}
+      </div>
+      <div class="recovery-guide-summary">
+        ${metricCard("차단 복구", formatNumber(summary.blocked_count || 0, 0), summary.blocked_count ? "blocked" : "success", "blocked severity", null, source)}
+        ${metricCard("주의 복구", formatNumber(summary.warning_count || 0, 0), summary.warning_count ? "warning" : "success", "warning severity", null, source)}
+        ${metricCard("최우선 코드", summary.top_code || "-", status, "가장 먼저 볼 항목", null, source)}
+      </div>
+      <div class="recovery-guide-list">
+        ${items.slice(0, 6).map((item, index) => `
+          <article class="recovery-guide-card severity-${escapeHtml(item.severity || "warning")}">
+            <div class="recovery-guide-card-head">
+              <div>
+                <span class="code">${escapeHtml(item.code || "UNKNOWN")}</span>
+                <strong>${formatNumber(index + 1, 0)}. ${escapeHtml(item.title || "복구 확인")}</strong>
+              </div>
+              ${statusBadge(item.severity === "blocked" ? "blocked" : "warning", item.severity || "warning")}
+            </div>
+            <p>${escapeHtml(item.diagnosis || item.message || "")}</p>
+            <div class="recovery-guide-columns">
+              <div>
+                <b>복구 단계</b>
+                <ol>${(item.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>
+                ${renderSourceCaption(item.source || source)}
+              </div>
+              <div>
+                <b>확인 산출물</b>
+                <div class="recovery-guide-artifacts">
+                  ${(item.artifacts || []).map((artifact) => `<span>${escapeHtml(artifact)}</span>`).join("") || "<span>manifest.json</span>"}
+                </div>
+                ${(item.commands || []).length ? `
+                  <b>검증 명령</b>
+                  <div class="recovery-guide-commands">
+                    ${item.commands.map((command) => `<button class="button button-secondary" type="button" data-command="${escapeHtml(command)}">${escapeHtml(command)}</button>`).join("")}
+                  </div>
+                ` : ""}
+                ${(item.verification || []).length ? `
+                  <b>완료 확인</b>
+                  <ul>${item.verification.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
+                ` : ""}
+              </div>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderPrimaryAction(action) {
+  if (!action) {
+    return `
+      <article class="primary-action-card">
+        <span class="metric-label">가장 중요한 다음 행동</span>
+        <strong>추가 조치 없음</strong>
+        <p>현재 run에서 즉시 수행할 안전 조치가 없습니다.</p>
+        ${renderSourceLabel("recommended_actions from safety verdict")}
+      </article>`;
+  }
+  const attrs = action.page
+    ? `data-go="${escapeHtml(action.page)}"`
+    : `data-command="${escapeHtml(action.command || "")}"`;
+  const detail = action.command
+    ? "명령을 클립보드에 복사합니다. 대시보드는 실행하지 않습니다."
+    : "관련 화면으로 이동해 근거를 확인합니다.";
+  return `
+    <article class="primary-action-card">
+      <span class="metric-label">가장 중요한 다음 행동</span>
+      <strong>${escapeHtml(action.label || "검토 계속")}</strong>
+      <p>${escapeHtml(detail)}</p>
+      ${renderSourceLabel("recommended_actions from safety verdict")}
+      <button class="button button-primary" type="button" ${attrs}>${escapeHtml(action.label || "확인")}</button>
+    </article>`;
+}
+
+function renderReasons(reasons, actions = []) {
+  if (!reasons.length) {
+    return '<div class="empty-state"><strong>중요 경고가 없습니다.</strong><span>필수 검증 결과를 계속 확인하세요.</span></div>';
+  }
+  return `<ol class="reason-list">${reasons
+    .map((reason) => {
+      const action = reason.action || actions.find((item) => item.id === `review-${reason.component}`) || {};
+      const attrs = action.page
+        ? `data-go="${escapeHtml(action.page)}"`
+        : action.command
+          ? `data-command="${escapeHtml(action.command)}"`
+          : "";
+      const tickerText = (reason.affected_tickers || []).length
+        ? `영향 종목: ${(reason.affected_tickers || []).join(", ")}`
+        : reason.count
+          ? `영향 건수: ${reason.count}`
+          : "영향 종목 미기록";
+      return `
+      <li class="reason-item">
+        <strong class="code">${escapeHtml(reason.code)}</strong>
+        <p>${escapeHtml(reason.message)}</p>
+        <small>${escapeHtml(tickerText)}</small>
+        <small>${escapeHtml(reason.remediation)}</small>
+        ${attrs ? `<button class="button button-secondary reason-action" type="button" ${attrs}>${escapeHtml(action.label || "관련 화면 확인")}</button>` : ""}
+      </li>`;
+    })
+    .join("")}</ol>`;
+}
+
+function decisionHeadline(status) {
+  return {
+    success: "오늘 결론: 운영 검토 가능",
+    warning: "오늘 결론: 검토 필요",
+    failed: "오늘 결론: 실행 실패",
+    blocked: "오늘 결론: 운영 차단",
+    validating: "오늘 결론: 검증 중",
+    data_error: "오늘 결론: 데이터 오류",
+    not_evaluated: "오늘 결론: 판단 보류",
+  }[status] || "오늘 결론: 확인 필요";
+}
+
+function renderSignalTable(rows) {
+  if (!rows?.length) return emptyTable("생성된 신호가 없습니다.", "선택한 run에는 signal artifact가 없습니다.");
+  return `
+    <div class="table-wrap"><table>
+      <thead><tr><th>종목</th><th>상태</th><th>행동</th><th>전략</th><th class="numeric">점수</th><th class="numeric">진입가</th><th>데이터</th><th>Reason code</th></tr></thead>
+      <tbody>${rows.map((row) => `
+        <tr>
+          <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+          <td>${statusBadge(row.status)}</td>
+          <td>${escapeHtml(row.action || "-")}</td>
+          <td>${escapeHtml(row.strategy || "-")}</td>
+          <td class="numeric">${formatNumber(row.score)}</td>
+          <td class="numeric">${formatNumber(row.entry_price)}</td>
+          <td>${row.data_verified === true ? statusBadge("success") : row.data_verified === false ? statusBadge("data_error") : statusBadge("not_evaluated")}</td>
+          <td class="code">${escapeHtml((row.reason_codes || []).join(", ") || "-")}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>`;
+}
+
+// Shadow 승격 화면 렌더링 (Overview 근처 화면이므로 overview.js에 통합)
+function renderPromotion() {
+  const data = state.promotion;
+  els.root.innerHTML = `
+    <div class="page-heading">
+      <div>
+        <h1>Shadow 승격 심사</h1>
+        <p>Shadow 모드 실행 기록을 기반으로 실거래(Production) 모드 승격 조건을 달성했는지 평가합니다.</p>
+      </div>
+      ${statusBadge(data.overall_status)}
+    </div>
+    ${renderDataSourceNote("promotion")}
+    <section class="decision-grid">
+      <article class="decision-card status-${statusClass(data.overall_status)}">
+        <div class="decision-eyebrow">${statusBadge(data.overall_status)} <span>Shadow Audit</span></div>
+        <h2>${data.eligible ? "승격 요건 충족" : "승격 대기 중"}</h2>
+        <p>${escapeHtml(data.headline || "")}</p>
+        <div class="decision-meta">
+          <span>누적 실행 ${formatNumber(data.metrics?.shadow_day_count, 0)}일</span>
+          <span>신호 안정성 ${formatNumber(data.metrics?.signal_stability_score, 0)}점</span>
+        </div>
+      </article>
+    </section>
+    <section class="metric-grid">
+      ${metricCard("Shadow 일수", `${data.metrics?.shadow_day_count ?? 0}일`, data.gates?.shadow_days?.status, `기준 ${data.gates?.shadow_days?.limit ?? 0}일 이상`)}
+      ${metricCard("완료 신호", `${data.metrics?.completed_run_count ?? 0}회`, data.gates?.completed_runs?.status, `기준 ${data.gates?.completed_runs?.limit ?? 0}회 이상`)}
+      ${metricCard("데이터 성공률", formatPercent(data.metrics?.data_success_rate), data.gates?.data_success?.status, `기준 ${formatPercent(data.gates?.data_success?.limit)} 이상`)}
+      ${metricCard("불일치율", formatPercent(data.metrics?.disagreement_rate), data.gates?.disagreement?.status, `기준 ${formatPercent(data.gates?.disagreement?.limit)} 이하`)}
+      ${metricCard("리스크 통과율", formatPercent(data.metrics?.risk_pass_rate), data.gates?.risk_pass?.status, `기준 ${formatPercent(data.gates?.risk_pass?.limit)} 이상`)}
+      ${metricCard("신호 안정성", `${data.metrics?.signal_stability_score ?? 0}점`, data.gates?.signal_stability?.status, `기준 ${data.gates?.signal_stability?.limit ?? 0}점 이상`)}
+    </section>
+    ${renderMetricDictionaryStrip(data.metric_dictionary?.promotion, "승격 조건 쉬운 설명")}
+  `;
+}
+
+function renderDecisionDiffCard(diff) {
+  if (!diff) return "";
+  const isChanged = diff.overall_changed;
+  const badgeClass = isChanged ? "status-warning" : "status-success";
+  
+  let blockersHtml = "";
+  if (diff.blockers && diff.blockers.changed) {
+    if (diff.blockers.added && diff.blockers.added.length) {
+      blockersHtml += `<span class="badge badge-error" style="background: #f43f5e; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 4px;">추가 차단: ${diff.blockers.added.join(", ")}</span> `;
+    }
+    if (diff.blockers.removed && diff.blockers.removed.length) {
+      blockersHtml += `<span class="badge badge-success" style="background: #10b981; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 4px;">해제 차단: ${diff.blockers.removed.join(", ")}</span> `;
+    }
+  }
+  
+  let tickersHtml = "";
+  if (diff.affected_tickers && diff.affected_tickers.changed) {
+    if (diff.affected_tickers.added && diff.affected_tickers.added.length) {
+      tickersHtml += `<span class="badge badge-info" style="background: #3b82f6; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 4px;">추가 신호: ${diff.affected_tickers.added.join(", ")}</span> `;
+    }
+    if (diff.affected_tickers.removed && diff.affected_tickers.removed.length) {
+      tickersHtml += `<span class="badge badge-muted" style="background: #64748b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 4px;">제외 신호: ${diff.affected_tickers.removed.join(", ")}</span> `;
+    }
+  }
+
+  return `
+    <section class="panel decision-diff-card" style="margin-top: 1rem; border-left: 5px solid ${isChanged ? "#f59e0b" : "#10b981"};">
+      <div class="panel-header">
+        <div>
+          <h2 style="font-size: 1.2rem; margin: 0;">오늘의 판단 변화 (Decision Diff)</h2>
+          <p style="margin: 4px 0 0 0; font-size: 0.9rem; color: #94a3b8;">
+            이전 실행(<strong>${diff.left_run_id || "없음"}</strong>) 대비 오늘 실행(<strong>${diff.right_run_id || "없음"}</strong>)의 의사결정 변화 내역입니다.
+          </p>
+        </div>
+        <span class="badge ${badgeClass}" style="padding: 4px 10px; border-radius: 12px; font-size: 0.8rem;">${isChanged ? "변화 감지됨" : "동일 유지"}</span>
+      </div>
+      <div class="panel-body" style="padding: 1rem 0 0 0;">
+        <div class="diff-summary-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 6px;">
+          <p style="font-size: 1rem; line-height: 1.5; margin: 0 0 0.5rem 0;">
+            <strong>판결 흐름:</strong> 
+            <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; color: #cbd5e1;">${diff.left_status || "N/A"}</code> 
+            ➔ 
+            <code style="background: rgba(244,63,94,0.1); padding: 2px 6px; border-radius: 4px; color: #f43f5e; font-weight: bold;">${diff.right_status || "N/A"}</code>
+          </p>
+          <p style="margin: 0; line-height: 1.6; color: #e2e8f0; font-size: 0.95rem;">${escapeHtml(diff.explanation || "")}</p>
+        </div>
+        
+        ${blockersHtml || tickersHtml ? `
+          <div style="margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem;">
+            ${blockersHtml}
+            ${tickersHtml}
+          </div>
+        ` : ""}
+        
+        <div style="margin-top: 1rem; padding-top: 0.8rem; border-top: 1px dashed rgba(255,255,255,0.08);">
+          <p style="margin: 0; font-size: 0.9rem; color: #94a3b8;">
+            <strong>💡 대응 권장 조치:</strong> <span style="color: #f1f5f9;">${escapeHtml(diff.recommended_action?.text || "")}</span>
+          </p>
+        </div>
+      </div>
+    </section>
+  `;
+}

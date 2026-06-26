@@ -6,6 +6,7 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 |---|---|---|---|
 | `tickers` | `array` | `["SOXL", "TQQQ", "TSLA", "IONQ", "NVDL", "QBTS"]` | `{}` |
 | `mode` | `string` | `"research"` | `{"enum": ["research", "backtest", "signal", "shadow", "paper", "live"]}` |
+| `explanation_level` | `string` | `"normal"` | `{"enum": ["beginner", "normal", "expert"]}` |
 | `safety_profile` | `string` | `"safe"` | `{"enum": ["safe", "unsafe"]}` |
 | `initial_capital` | `number` | `10000000` | `{"exclusiveMinimum": 0}` |
 | `sim_runs` | `integer` | `500` | `{"maximum": 100000, "minimum": 1}` |

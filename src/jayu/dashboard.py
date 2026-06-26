@@ -388,6 +388,11 @@ def build_dashboard_overview(
     failure_patterns = build_failure_patterns_report(paths.runs_dir)
     run_evidence = build_run_evidence_report(run_dir, now=reference)
 
+    from .decision_diff import build_decision_diff
+    from .evidence_completeness_score import calculate_completeness_score
+    dec_diff = build_decision_diff(paths, run_id=run_dir.name)
+    completeness = calculate_completeness_score(run_dir)
+
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": reference.isoformat(),
@@ -435,6 +440,8 @@ def build_dashboard_overview(
         "failure_patterns": failure_patterns,
         "run_evidence": run_evidence,
         "recovery_guide": recovery_guide,
+        "decision_diff": dec_diff,
+        "evidence_completeness": completeness,
         "metric_dictionary": metric_dictionary_payload("overview"),
         "health": {
             "score": health_score,
@@ -2793,6 +2800,74 @@ def _dashboard_handler(
                         "strategy_governance": gov_res,
                         "explanation_level": GLOBAL_EXPLANATION_LEVEL
                     })
+                    return
+                # ── 실행 비교, 산출물 검색, 제공자 신뢰도 추세 API ──────────────────────
+                if parsed.path == "/api/v1/runs/compare":
+                    query = parse_qs(parsed.query)
+                    left = query.get("left", ["previous"])[0]
+                    right = query.get("right", ["latest"])[0]
+                    from .run_compare import compare_runs, generate_compare_markdown
+                    try:
+                        diff_data = compare_runs(paths, left, right)
+                        diff_data["markdown"] = generate_compare_markdown(diff_data)
+                        self._json(diff_data)
+                    except Exception as e:
+                        self._json({"status": "error", "message": str(e)}, status_code=400)
+                    return
+                if parsed.path == "/api/v1/artifacts/search":
+                    query = parse_qs(parsed.query)
+                    q = query.get("query", [None])[0]
+                    run_id = query.get("run_id", [None])[0]
+                    ticker = query.get("ticker", [None])[0]
+                    failure_code = query.get("failure_code", [None])[0]
+                    mode = query.get("mode", [None])[0]
+                    atype = query.get("artifact_type", [None])[0]
+                    
+                    from .artifact_indexer import search_artifacts
+                    results = search_artifacts(
+                        paths,
+                        query=q,
+                        run_id=run_id,
+                        ticker=ticker,
+                        failure_code=failure_code,
+                        mode=mode,
+                        artifact_type=atype
+                    )
+                    self._json({"artifacts": results})
+                    return
+                if parsed.path == "/api/v1/provider-trend":
+                    query = parse_qs(parsed.query)
+                    limit = int(query.get("limit", ["10"])[0])
+                    from .provider_reliability_trend import calculate_provider_trends
+                    trends = calculate_provider_trends(paths, limit=limit)
+                    self._json(trends)
+                    return
+                if parsed.path == "/api/v1/artifacts/view":
+                    query = parse_qs(parsed.query)
+                    file_path = query.get("path", [""])[0]
+                    if not file_path:
+                        self._json({"error": "missing path"}, status=400)
+                        return
+                    path_obj = Path(file_path).resolve()
+                    runs_root = paths.runs_dir.resolve()
+                    state_root = paths.state_dir.resolve()
+                    is_safe = False
+                    for root in (runs_root, state_root):
+                        if root in path_obj.parents or path_obj == root:
+                            is_safe = True
+                            break
+                    if not is_safe or not path_obj.is_file():
+                        self._json({"error": "forbidden or file not found"}, status=403)
+                        return
+                    try:
+                        content = path_obj.read_text(encoding="utf-8")
+                        self._json({
+                            "name": path_obj.name,
+                            "path": str(path_obj),
+                            "content": content
+                        })
+                    except Exception as e:
+                        self._json({"error": str(e)}, status=500)
                     return
                 # ── 자동매매 준비 상태 ────────────────────────────────────────
                 if parsed.path == "/api/v1/autotrading-status":

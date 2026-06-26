@@ -7,6 +7,7 @@
   "random_seed": 42,
   "mode": "shadow",
   "safety_profile": "safe",
+  "explanation_level": "normal",
   "account_value_krw": null,
   "cash_balance_krw": null,
   "notification_message_limit": 900,

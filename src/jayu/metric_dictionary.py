@@ -95,7 +95,7 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
     MetricDefinition(
         key="health_score",
         group="overview",
-        label="Health",
+        label="건강도(Health)",
         plain_name="운영 건강 점수",
         short_description="최근 실행 성공, 데이터 상태, promotion 조건 등을 합쳐 운영 상태를 빠르게 보는 점수입니다.",
         good_value="기준점 이상이면 정상 운영에 가깝습니다.",
@@ -203,7 +203,7 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
     MetricDefinition(
         key="reason_code",
         group="signals",
-        label="Reason code",
+        label="사유 코드(Reason Code)",
         plain_name="차단 또는 경고 이유",
         short_description="왜 신호가 승인·차단·보류됐는지 기계가 남긴 구조화된 사유입니다.",
         good_value="NO_BLOCKER 또는 빈 값이면 추가 차단 사유가 없습니다.",
@@ -212,7 +212,7 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
     MetricDefinition(
         key="rsi",
         group="analysis",
-        label="RSI",
+        label="RSI 지수",
         plain_name="가격이 너무 많이 올랐는지 보는 지표",
         short_description="최근 상승과 하락의 힘을 비교해 과열 또는 과매도 가능성을 봅니다.",
         good_value="30 아래는 과매도, 70 위는 과열로 해석하는 경우가 많습니다.",
@@ -221,7 +221,7 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
     MetricDefinition(
         key="mdd",
         group="portfolio",
-        label="MDD",
+        label="최대 낙폭(MDD)",
         plain_name="가장 크게 잃었던 구간",
         short_description="고점 대비 계좌가 최대 몇 퍼센트까지 내려갔는지 보여줍니다.",
         good_value="낮을수록 계좌 방어가 좋습니다.",
@@ -230,7 +230,7 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
     MetricDefinition(
         key="sharpe",
         group="portfolio",
-        label="Sharpe",
+        label="샤프 지수(Sharpe)",
         plain_name="위험을 감수한 만큼 수익이 좋았는지",
         short_description="수익률을 변동성으로 나누어 같은 위험 대비 효율을 비교합니다.",
         good_value="1 이상은 참고 가능, 2 이상은 우수하게 보는 경우가 많습니다.",
@@ -239,7 +239,7 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
     MetricDefinition(
         key="adx",
         group="analysis",
-        label="ADX",
+        label="ADX 지수",
         plain_name="추세가 강한지 약한지",
         short_description="방향이 아니라 추세의 강도만 봅니다.",
         good_value="25 이상이면 추세가 강해졌다고 보는 경우가 많습니다.",

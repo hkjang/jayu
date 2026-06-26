@@ -94,11 +94,13 @@ report_app = typer.Typer(no_args_is_help=True, help="Run and signal reports")
 experiments_app = typer.Typer(help="Experiment registry and comparisons")
 promotion_app = typer.Typer(no_args_is_help=True, help="Shadow-to-live promotion")
 toss_app = typer.Typer(no_args_is_help=True, help="Read-only Toss Securities Open API")
+run_app = typer.Typer(no_args_is_help=True, help="Run management and comparison")
 app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(report_app, name="report")
 app.add_typer(experiments_app, name="experiments")
 app.add_typer(promotion_app, name="promotion")
 app.add_typer(toss_app, name="toss")
+app.add_typer(run_app, name="run")
 
 
 @app.command()
@@ -1880,6 +1882,34 @@ def toss_commissions(
     config: Annotated[Path | None, typer.Option("--config")] = None,
 ) -> None:
     _run_toss(config, lambda client: client.commissions(account=account))
+
+
+@run_app.command("compare-dashboard")
+def compare_dashboard(
+    left: Annotated[str, typer.Option("--left", help="이전/왼쪽 실행 ID (또는 'latest')")],
+    right: Annotated[str, typer.Option("--right", help="현재/오른쪽 실행 ID (또는 'latest')")],
+    format: Annotated[str, typer.Option("--format", help="출력 형식: markdown, json, both")] = "markdown",
+    config: Annotated[Path | None, typer.Option("--config", help="설정 파일 경로")] = None,
+) -> None:
+    """두 실행(left vs right)의 설정, 데이터 품질, 신호, 리스크, 의사결정, 산출물 차이를 한국어로 비교합니다."""
+    from .run_compare import compare_runs, generate_compare_markdown
+    _, paths = _load(config)
+    try:
+        diff_data = compare_runs(paths, left, right)
+    except Exception as e:
+        typer.echo(f"오류: 비교를 수행할 수 없습니다 - {e}", err=True)
+        raise typer.Exit(code=1)
+        
+    if format == "json":
+        _echo_json(diff_data)
+    elif format == "markdown":
+        typer.echo(generate_compare_markdown(diff_data))
+    else:
+        # both
+        typer.echo("=== JSON OUTPUT ===")
+        _echo_json(diff_data)
+        typer.echo("\n=== MARKDOWN OUTPUT ===")
+        typer.echo(generate_compare_markdown(diff_data))
 
 
 if __name__ == "__main__":

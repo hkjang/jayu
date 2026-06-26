@@ -1106,7 +1106,15 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert (static_dir / "index.html").exists()
     assert (static_dir / "styles.css").exists()
     assert (static_dir / "app.js").exists()
-    content = (static_dir / "app.js").read_text(encoding="utf-8")
+    
+    # Combine all JS files to check overall bundled content in our modular setup
+    js_files = ["app.js", "shared.js", "overview.js", "data_quality.js", "signals.js", "risk.js", "toss.js", "portfolio.js", "autotrading.js", "analysis.js", "system.js"]
+    content = ""
+    for js_file in js_files:
+        js_path = static_dir / js_file
+        if js_path.exists():
+            content += js_path.read_text(encoding="utf-8") + "\n"
+            
     html = (static_dir / "index.html").read_text(encoding="utf-8")
     css = (static_dir / "styles.css").read_text(encoding="utf-8")
     assert "Toss Account" in html
@@ -1144,7 +1152,7 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "renderSessionReplay" in content
     assert "투자 세션 리플레이" in content
     assert "renderDataLineageGraph" in content
-    assert "데이터 계보 그래프" in content
+    assert "데이터 계보 흐름도" in content
     assert "데이터 계보 요약" in content
     assert "renderFailurePatternOverview" in content
     assert "반복 실패 패턴" in content

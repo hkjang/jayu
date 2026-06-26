@@ -26,6 +26,13 @@ def test_portfolio_hub_interprets_active_buy_sell_conflict(monkeypatch):
         }
 
     monkeypatch.setattr(portfolio_hub, "fetch_ticker_data", fake_fetch)
+    from jayu import market_regime_router
+    monkeypatch.setattr(market_regime_router, "determine_market_regime", lambda: {
+        "regime": "bull",
+        "description": "강세장",
+        "weights": {"short_term": 1.2, "swing": 1.5, "long_term": 1.2, "dividend": 0.8},
+        "metrics": {"vix": 15.0, "usdkrw": 1300.0, "spy_trend": "bull", "kospi_trend": "bull"}
+    })
 
     result = portfolio_hub.build_portfolio_hub(
         ["MIX"],
