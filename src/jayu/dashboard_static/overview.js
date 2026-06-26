@@ -31,6 +31,7 @@ function renderOverview() {
       </article>
       ${renderPrimaryAction(primaryAction)}
     </section>
+    ${renderNextCommandRecommendation(state.nextCommand)}
     ${renderDecisionDiffCard(data.decision_diff)}
     ${renderOverviewPortfolioHub(state.portfolioHub)}
     ${renderTodayBoard(data.today_board)}
@@ -752,5 +753,35 @@ function renderRoutineScheduler(routines) {
         `).join("")}
       </div>
     </section>
+  `;
+}
+
+function renderNextCommandRecommendation(recommendation) {
+  if (!recommendation) return "";
+  return `
+    <article class="panel" style="margin-top: 1.5rem; border: 1px solid rgba(255, 255, 255, 0.08); border-left: 4px solid #3b82f6; background: rgba(59, 130, 246, 0.04);">
+      <div class="panel-header" style="padding-bottom: 0.5rem; border-bottom: 1px dashed rgba(255,255,255,0.06);">
+        <div>
+          <h2 style="font-size: 1.1rem; margin: 0; color: #60a5fa; display: flex; align-items: center; gap: 8px;">
+            <span>🤖 AI 후속 CLI 명령 추천</span>
+          </h2>
+          <p style="margin: 4px 0 0 0; font-size: 0.85rem; color: #94a3b8;">현재 시스템 상태 및 운용 성과를 토대로 제안되는 다음 행동입니다.</p>
+        </div>
+        <span class="status-label status-success" style="font-size: 0.75rem; padding: 2px 6px; background: rgba(16, 185, 129, 0.1); color: #34d399; border-radius: 4px;">한국어 가이드</span>
+      </div>
+      <div class="panel-body" style="padding-top: 1rem; display: flex; flex-direction: column; gap: 12px;">
+        <div style="background: rgba(15, 23, 42, 0.6); color: #38bdf8; padding: 12px 16px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center; border: 1px solid rgba(255,255,255,0.04);">
+          <span id="recommended-cli-command" style="word-break: break-all;">${escapeHtml(recommendation.command)}</span>
+          <button class="button button-secondary" style="font-size: 0.75rem; padding: 4px 8px; border-color: rgba(255,255,255,0.1); color: #94a3b8; background: transparent; cursor: pointer; white-space: nowrap; margin-left: 8px;" 
+            type="button" onclick="navigator.clipboard.writeText(document.getElementById('recommended-cli-command').textContent); alert('명령어가 클립보드에 복사되었습니다.');">
+            📋 복사
+          </button>
+        </div>
+        <div style="font-size: 0.85rem; color: #cbd5e1; line-height: 1.5;">
+          <p style="margin: 0 0 4px 0;"><strong>이유:</strong> ${escapeHtml(recommendation.reason)}</p>
+          <p style="margin: 0;"><strong>예상 결과:</strong> ${escapeHtml(recommendation.expected_result)}</p>
+        </div>
+      </div>
+    </article>
   `;
 }

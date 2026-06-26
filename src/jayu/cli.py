@@ -95,12 +95,14 @@ experiments_app = typer.Typer(help="Experiment registry and comparisons")
 promotion_app = typer.Typer(no_args_is_help=True, help="Shadow-to-live promotion")
 toss_app = typer.Typer(no_args_is_help=True, help="Read-only Toss Securities Open API")
 run_app = typer.Typer(no_args_is_help=True, help="Run management and comparison")
+backup_app = typer.Typer(no_args_is_help=True, help="System backup and restore management")
 app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(report_app, name="report")
 app.add_typer(experiments_app, name="experiments")
 app.add_typer(promotion_app, name="promotion")
 app.add_typer(toss_app, name="toss")
 app.add_typer(run_app, name="run")
+app.add_typer(backup_app, name="backup")
 
 
 @app.command()
@@ -1910,6 +1912,52 @@ def compare_dashboard(
         _echo_json(diff_data)
         typer.echo("\n=== MARKDOWN OUTPUT ===")
         typer.echo(generate_compare_markdown(diff_data))
+
+
+@backup_app.command("create")
+def backup_create(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Create a new system backup."""
+    settings, paths = _load(config)
+    from .backup_manager import BackupManager
+    manager = BackupManager(paths.project_root, paths.state_dir)
+    try:
+        zip_path, manifest = manager.create_backup()
+        typer.echo(f"Backup created successfully: {zip_path.name}")
+        typer.echo(f"SHA256: {manifest['zip_sha256']}")
+    except Exception as e:
+        typer.echo(f"Error creating backup: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@backup_app.command("restore")
+def backup_restore(
+    file: Annotated[Path, typer.Argument(help="Path to the backup zip file")],
+    dry_run: Annotated[bool, typer.Option("--dry-run/--no-dry-run", help="Verify backup without extracting")] = False,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Restore system state from a backup."""
+    settings, paths = _load(config)
+    from .backup_manager import BackupManager
+    manager = BackupManager(paths.project_root, paths.state_dir)
+    try:
+        report = manager.restore_backup(file, dry_run=dry_run)
+        if dry_run:
+            typer.echo("Dry-run verification completed.")
+            typer.echo(f"Valid: {report['valid']}")
+            typer.echo(f"Number of actions: {len(report['actions'])}")
+            for action in report["actions"]:
+                typer.echo(f" - {action['action']}: {action['path']} ({action['size']} bytes)")
+            if report["errors"]:
+                typer.echo("Errors found:", err=True)
+                for err in report["errors"]:
+                    typer.echo(f" - {err}", err=True)
+        else:
+            typer.echo(f"Backup restored successfully from {file.name}")
+    except Exception as e:
+        typer.echo(f"Error restoring backup: {e}", err=True)
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

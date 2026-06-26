@@ -35,7 +35,23 @@ function renderSettingsValidation() {
       ${renderSettingsRules(data.rules)}
       ${renderSourceCaption("config.json · environment · policy audits")}
     </section>
+    
+    <section class="panel" style="margin-top: 1.5rem;" id="backup-restore-panel">
+      ${renderBackupRestoreSection()}
+    </section>
+    
+    <section class="panel" style="margin-top: 1.5rem;" id="experiments-panel">
+      ${renderExperimentsSection()}
+    </section>
+    
+    <section class="panel" style="margin-top: 1.5rem;" id="events-panel">
+      ${renderEventsSection()}
+    </section>
   `;
+
+  setTimeout(() => {
+    bindSettingsExtensionsActions();
+  }, 100);
 }
 
 function renderSettingsRules(rows) {

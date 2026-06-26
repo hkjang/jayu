@@ -94,6 +94,16 @@ def test_get_endpoints(test_server):
         assert "history" in data
 
 def test_post_endpoints(test_server):
+    # Set permission mode to admin first to allow recording approvals
+    perm_req = Request(
+        f"{test_server}/api/v1/permission-mode",
+        data=json.dumps({"mode": "admin"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    with urlopen(perm_req) as res:
+        perm_data = json.loads(res.read().decode("utf-8"))
+        assert perm_data["status"] == "success"
+
     # Test POST /api/v1/approvals
     payload = {
         "run_id": "test_run",

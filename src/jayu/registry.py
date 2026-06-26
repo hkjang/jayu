@@ -40,7 +40,8 @@ class ExperimentRegistry:
                     git_revision TEXT,
                     config_hash TEXT,
                     environment_json TEXT,
-                    artifacts_json TEXT
+                    artifacts_json TEXT,
+                    run_type TEXT DEFAULT 'production'
                 )
                 """
             )
@@ -54,10 +55,29 @@ class ExperimentRegistry:
                 "config_hash": "TEXT",
                 "environment_json": "TEXT",
                 "artifacts_json": "TEXT",
+                "run_type": "TEXT DEFAULT 'production'",
             }
             for name, sql_type in migrations.items():
                 if name not in columns:
                     connection.execute(f"ALTER TABLE runs ADD COLUMN {name} {sql_type}")
+            
+            # Create experiments table
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS experiments (
+                    run_id TEXT PRIMARY KEY,
+                    objective TEXT,
+                    hypothesis TEXT,
+                    target_tickers TEXT,
+                    strategy_name TEXT,
+                    result_metrics TEXT,
+                    promoted INTEGER DEFAULT 0,
+                    promoted_at TEXT,
+                    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+                )
+                """
+            )
+            
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS run_data (
@@ -71,15 +91,22 @@ class ExperimentRegistry:
                 """
             )
 
-    def start(self, context: RunContext) -> None:
+    def start(self, context: RunContext, run_type: str | None = None) -> None:
+        if run_type is None:
+            mode = getattr(context.settings, "mode", "signal")
+            if mode in {"paper", "shadow", "backtest"}:
+                run_type = "experiment"
+            else:
+                run_type = "production"
+
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO runs (
                     run_id, command, status, started_at, artifact_dir,
                     config_json, data_hashes_json, random_seed, git_revision,
-                    config_hash, environment_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    config_hash, environment_json, run_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     context.run_id,
@@ -93,6 +120,7 @@ class ExperimentRegistry:
                     context.git_revision,
                     context.config_hash,
                     json.dumps(context.environment, ensure_ascii=False),
+                    run_type,
                 ),
             )
 
@@ -142,6 +170,75 @@ class ExperimentRegistry:
                         ),
                     ),
                 )
+
+    def register_experiment(
+        self,
+        run_id: str,
+        objective: str,
+        hypothesis: str,
+        target_tickers: list[str] | str,
+        strategy_name: str,
+    ) -> None:
+        tickers_str = json.dumps(target_tickers) if isinstance(target_tickers, list) else target_tickers
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO experiments (
+                    run_id, objective, hypothesis, target_tickers, strategy_name, promoted
+                ) VALUES (?, ?, ?, ?, ?, 0)
+                """,
+                (run_id, objective, hypothesis, tickers_str, strategy_name),
+            )
+            connection.execute(
+                "UPDATE runs SET run_type = 'experiment' WHERE run_id = ?",
+                (run_id,),
+            )
+
+    def record_experiment_result(
+        self,
+        run_id: str,
+        result_metrics: dict[str, Any],
+        promoted: bool = False,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE experiments
+                SET result_metrics = ?, promoted = ?, promoted_at = ?
+                WHERE run_id = ?
+                """,
+                (
+                    json.dumps(result_metrics, ensure_ascii=False),
+                    1 if promoted else 0,
+                    datetime.now(UTC).isoformat() if promoted else None,
+                    run_id,
+                ),
+            )
+
+    def promote_experiment(self, run_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE experiments
+                SET promoted = 1, promoted_at = ?
+                WHERE run_id = ?
+                """,
+                (datetime.now(UTC).isoformat(), run_id),
+            )
+
+    def get_experiments(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT r.*, e.objective, e.hypothesis, e.target_tickers, e.strategy_name, e.result_metrics, e.promoted, e.promoted_at
+                FROM runs r
+                JOIN experiments e ON r.run_id = e.run_id
+                ORDER BY r.started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def latest(self, limit: int = 20) -> list[dict[str, Any]]:
         with self._connect() as connection:

@@ -1,0 +1,19 @@
+{
+  "budgets": {
+    "Momentum_V4": {
+      "monthly_loss_limit": 1000.0,
+      "max_trade_count": 30,
+      "max_capital_allocation": 0.4
+    },
+    "MeanReversion_V2": {
+      "monthly_loss_limit": 500.0,
+      "max_trade_count": 20,
+      "max_capital_allocation": 0.3
+    },
+    "Default": {
+      "monthly_loss_limit": 800.0,
+      "max_trade_count": 25,
+      "max_capital_allocation": 0.25
+    }
+  }
+}

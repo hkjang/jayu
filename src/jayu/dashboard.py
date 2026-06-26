@@ -41,6 +41,15 @@ from .stock_lifecycle import build_stock_lifecycle_report
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
 from .survivorship import audit_survivorship
 from .toss import TOSS_GET_ENDPOINTS, TossCredentialsError, TossInvestClient
+from .domain_event_bus import DomainEventBus
+from .pre_trade_checklist import PreTradeChecklistEvaluator
+from .next_command_recommender import NextCommandRecommender
+from .backup_manager import BackupManager
+from .notification_policy_engine import NotificationPolicyEngine
+from .stock_knowledge_card import StockKnowledgeCardManager
+from .dashboard_permission_mode import DashboardPermissionModeManager, PermissionMode
+from .strategy_risk_budget import StrategyRiskBudgetManager
+from .registry import ExperimentRegistry
 
 GLOBAL_EXPLANATION_LEVEL: str = "normal"
 
@@ -2845,11 +2854,99 @@ def _dashboard_handler(
     paths: RuntimePaths,
     static_dir: Path,
 ) -> type[BaseHTTPRequestHandler]:
+    settings = load_settings(paths.project_root / "configs" / "settings.json")
+    
+    event_bus = DomainEventBus(paths.state_dir)
+    checklist_evaluator = PreTradeChecklistEvaluator(paths.project_root / "configs" / "pre_trade_checklist.yaml")
+    recommender = NextCommandRecommender(settings, paths)
+    backup_mgr = BackupManager(paths.project_root, paths.state_dir)
+    noti_engine = NotificationPolicyEngine(paths.state_dir)
+    knowledge_card_mgr = StockKnowledgeCardManager(paths.state_dir)
+    permission_mgr = DashboardPermissionModeManager(default_mode="read_only")
+    risk_budget_mgr = StrategyRiskBudgetManager(paths.project_root, paths.state_dir)
+    experiment_registry = ExperimentRegistry(paths.state_dir / "experiments.sqlite")
+
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             global GLOBAL_EXPLANATION_LEVEL
             parsed = urlparse(self.path)
             try:
+                # --- 신규 고도화 API 라우트 (GET) ---
+                if parsed.path == "/api/v1/permission-mode":
+                    self._json({"mode": permission_mgr.get_mode()})
+                    return
+                if parsed.path == "/api/v1/backup/list":
+                    if not backup_mgr.backup_dir.exists():
+                        self._json({"backups": []})
+                        return
+                    files = []
+                    for f in backup_mgr.backup_dir.glob("*.zip"):
+                        files.append({
+                            "name": f.name,
+                            "size": f.stat().st_size,
+                            "mtime": datetime.fromtimestamp(f.stat().st_mtime, UTC).isoformat()
+                        })
+                    self._json({"backups": sorted(files, key=lambda x: x["mtime"], reverse=True)})
+                    return
+                if parsed.path == "/api/v1/events":
+                    query = parse_qs(parsed.query)
+                    date_str = query.get("date", [None])[0]
+                    events = event_bus.get_events(date_str)
+                    self._json({"events": [e.model_dump() for e in events]})
+                    return
+                if parsed.path == "/api/v1/pretrade-checklist":
+                    res = checklist_evaluator.evaluate(
+                        signal_data={"risk_passed": True, "score": 0.8},
+                        account_data={"cash_usd": 1000.0, "cash_krw": 1500000.0},
+                        is_approved=True
+                    )
+                    self._json(res)
+                    return
+                if parsed.path == "/api/v1/recommender/next":
+                    self._json(recommender.recommend())
+                    return
+                if parsed.path == "/api/v1/notifications":
+                    self._json({"notifications": noti_engine.get_inbox()})
+                    return
+                if parsed.path == "/api/v1/knowledge-cards":
+                    query = parse_qs(parsed.query)
+                    ticker = query.get("ticker", [None])[0]
+                    if ticker:
+                        self._json(knowledge_card_mgr.get_card(ticker))
+                    else:
+                        self._json({"cards": knowledge_card_mgr.list_cards()})
+                    return
+                if parsed.path == "/api/v1/strategy/budgets":
+                    self._json({"budgets": risk_budget_mgr.get_all_budgets_status()})
+                    return
+                if parsed.path == "/api/v1/experiments":
+                    self._json({"experiments": experiment_registry.get_experiments()})
+                    return
+                if parsed.path == "/api/v1/query":
+                    query = parse_qs(parsed.query)
+                    resource = query.get("resource", [""])[0]
+                    fields_str = query.get("fields", [""])[0]
+                    fields = [f.strip() for f in fields_str.split(",") if f.strip()]
+                    if resource == "signals":
+                        run_id = query.get("run_id", ["latest"])[0]
+                        sig_data = build_dashboard_signals(paths, run_id=run_id)
+                        signals_list = sig_data.get("signals", [])
+                        filtered = []
+                        for sig in signals_list:
+                            if fields:
+                                filtered.append({k: sig.get(k) for k in fields if k in sig})
+                            else:
+                                filtered.append(sig)
+                        self._json({"signals": filtered})
+                        return
+                    elif resource == "overview":
+                        run_id = query.get("run_id", ["latest"])[0]
+                        overview = build_dashboard_overview(paths, run_id=run_id)
+                        if fields:
+                            self._json({k: overview.get(k) for k in fields if k in overview})
+                        else:
+                            self._json(overview)
+                        return
                 if parsed.path == "/api/v1/runs":
                     self._json(
                         {
@@ -2967,7 +3064,7 @@ def _dashboard_handler(
                             pass
                         self._json({"status": "success", "level": lvl})
                     else:
-                        self._json({"status": "error", "message": "Invalid level"}, status_code=400)
+                        self._json({"status": "error", "message": "Invalid level"}, status=400)
                     return
                 if parsed.path == "/api/v1/investment-decision-os":
                     from .market_regime_router import determine_market_regime
@@ -2999,7 +3096,7 @@ def _dashboard_handler(
                         diff_data["markdown"] = generate_compare_markdown(diff_data)
                         self._json(diff_data)
                     except Exception as e:
-                        self._json({"status": "error", "message": str(e)}, status_code=400)
+                        self._json({"status": "error", "message": str(e)}, status=400)
                     return
                 if parsed.path == "/api/v1/artifacts/search":
                     query = parse_qs(parsed.query)
@@ -3194,6 +3291,103 @@ def _dashboard_handler(
                 content_length = int(self.headers.get("Content-Length", 0))
                 post_data = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else ""
                 payload = json.loads(post_data) if post_data else {}
+
+                # --- 권한 모드 검증 필터 ---
+                path_action_map = {
+                    "/api/v1/permission-mode": "view",
+                    "/api/v1/approvals": "record_approval",
+                    "/api/v1/tax-lots/buy": "write_memo",
+                    "/api/v1/tax-lots/sell": "write_memo",
+                    "/api/v1/knowledge-cards": "write_memo",
+                    "/api/v1/backup/create": "trigger_backup",
+                    "/api/v1/backup/restore": "trigger_restore",
+                    "/api/v1/notifications/send": "modify_settings",
+                    "/api/v1/experiments": "modify_settings",
+                }
+                
+                req_action = path_action_map.get(parsed.path)
+                if req_action and not permission_mgr.is_action_allowed(req_action):
+                    self._json({
+                        "status": "error",
+                        "message": f"permission_denied: action '{req_action}' is not allowed in current mode '{permission_mgr.get_mode()}'"
+                    }, status=403)
+                    return
+
+                # --- 신규 고도화 API 라우트 (POST) ---
+                if parsed.path == "/api/v1/permission-mode":
+                    mode = payload.get("mode")
+                    if mode in {"read_only", "review_only", "approve_enabled", "admin"}:
+                        permission_mgr.set_mode(mode)
+                        self._json({"status": "success", "mode": mode})
+                    else:
+                        self._json({"status": "error", "message": "invalid mode"}, status=400)
+                    return
+
+                if parsed.path == "/api/v1/backup/create":
+                    zip_path, manifest = backup_mgr.create_backup()
+                    self._json({
+                        "status": "success",
+                        "backup_file": zip_path.name,
+                        "sha256": manifest["zip_sha256"],
+                        "timestamp": manifest["timestamp"]
+                    })
+                    return
+
+                if parsed.path == "/api/v1/backup/restore":
+                    file_name = payload.get("file")
+                    dry_run = payload.get("dry_run", False)
+                    if not file_name:
+                        self._json({"status": "error", "message": "missing file parameter"}, status=400)
+                        return
+                    zip_path = backup_mgr.backup_dir / file_name
+                    report = backup_mgr.restore_backup(zip_path, dry_run=dry_run)
+                    self._json({"status": "success", "report": report})
+                    return
+
+                if parsed.path == "/api/v1/knowledge-cards":
+                    ticker = payload.get("ticker")
+                    card_data = payload.get("card_data", {})
+                    if not ticker:
+                        self._json({"status": "error", "message": "missing ticker"}, status=400)
+                        return
+                    result = knowledge_card_mgr.save_card(ticker, card_data)
+                    self._json({"status": "success", "card": result})
+                    return
+
+                if parsed.path == "/api/v1/notifications/send":
+                    batched = noti_engine.process_and_batch_unsent()
+                    sent_ids = []
+                    for batch in batched:
+                        sent_ids.extend(batch.get("ids", []))
+                    if sent_ids:
+                        noti_engine.mark_as_sent(sent_ids)
+                    self._json({
+                        "status": "success",
+                        "sent_count": len(sent_ids),
+                        "batched_count": len(batched),
+                        "sent_batches": batched
+                    })
+                    return
+
+                if parsed.path == "/api/v1/experiments":
+                    run_id = payload.get("run_id")
+                    objective = payload.get("objective", "")
+                    hypothesis = payload.get("hypothesis", "")
+                    target_tickers = payload.get("target_tickers", [])
+                    strategy_name = payload.get("strategy_name", "")
+                    if not (run_id and strategy_name):
+                        self._json({"status": "error", "message": "missing run_id or strategy_name"}, status=400)
+                        return
+                    experiment_registry.register_experiment(
+                        run_id=run_id,
+                        objective=objective,
+                        hypothesis=hypothesis,
+                        target_tickers=target_tickers,
+                        strategy_name=strategy_name
+                    )
+                    self._json({"status": "success", "run_id": run_id})
+                    return
+
                 if parsed.path == "/api/v1/api-monitoring/test-connection":
                     provider = payload.get("provider")
                     result = test_provider_connection(paths, provider)
@@ -3236,7 +3430,7 @@ def _dashboard_handler(
                     user_decision = payload.get("user_decision")
                     rationale = payload.get("rationale", "")
                     if not (run_id and ticker and action and user_decision):
-                        self._json({"status": "error", "message": "missing fields"}, status_code=400)
+                        self._json({"status": "error", "message": "missing fields"}, status=400)
                         return
                     from .approval_audit_ledger import log_approval_decision
                     log_entry = log_approval_decision(
@@ -3252,7 +3446,7 @@ def _dashboard_handler(
                     currency = payload.get("currency", "USD")
                     commission = float(payload.get("commission", 0.0))
                     if not (ticker and quantity > 0 and unit_price > 0):
-                        self._json({"status": "error", "message": "missing or invalid fields"}, status_code=400)
+                        self._json({"status": "error", "message": "missing or invalid fields"}, status=400)
                         return
                     from .tax_lot_ledger import TaxLotLedger
                     ledger = TaxLotLedger(paths.state_dir / "tax_lot_ledger.json")
@@ -3266,7 +3460,7 @@ def _dashboard_handler(
                     sell_fx_rate = float(payload.get("sell_fx_rate", 1300.0))
                     commission = float(payload.get("commission", 0.0))
                     if not (ticker and quantity > 0 and sell_price > 0):
-                        self._json({"status": "error", "message": "missing or invalid fields"}, status_code=400)
+                        self._json({"status": "error", "message": "missing or invalid fields"}, status=400)
                         return
                     from .tax_lot_ledger import TaxLotLedger
                     ledger = TaxLotLedger(paths.state_dir / "tax_lot_ledger.json")
@@ -3298,6 +3492,35 @@ def _dashboard_handler(
                     {"error": "internal_error", "message": str(exc)},
                     status=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            try:
+                # --- 권한 모드 검증 필터 ---
+                path_action_map = {
+                    "/api/v1/knowledge-cards": "write_memo",
+                }
+                req_action = path_action_map.get(parsed.path)
+                if req_action and not permission_mgr.is_action_allowed(req_action):
+                    self._json({
+                        "status": "error",
+                        "message": f"permission_denied: action '{req_action}' is not allowed in current mode '{permission_mgr.get_mode()}'"
+                    }, status=403)
+                    return
+
+                if parsed.path == "/api/v1/knowledge-cards":
+                    query = parse_qs(parsed.query)
+                    ticker = query.get("ticker", [None])[0]
+                    if not ticker:
+                        self._json({"status": "error", "message": "missing ticker"}, status=400)
+                        return
+                    deleted = knowledge_card_mgr.delete_card(ticker)
+                    self._json({"status": "success", "deleted": deleted})
+                    return
+                
+                self._json({"error": "not_found"}, status=HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self._json({"error": "internal_error", "message": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def log_message(self, format: str, *args: Any) -> None:
             return

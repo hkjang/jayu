@@ -46,6 +46,9 @@ function renderRisk() {
       ${renderRiskSignals(data.tickers)}
       ${renderSourceCaption("signals_risk.json inside latest run")}
     </section>
+    <section class="panel" style="margin-top: 1.5rem;">
+      ${renderStrategyRiskBudgets(state.strategyBudgets)}
+    </section>
   `;
 }
 
@@ -90,4 +93,66 @@ function renderRiskSignals(rows) {
           <td class="code">${escapeHtml((row.failed || []).map((item) => item.code).filter(Boolean).join(", ") || "-")}</td>
         </tr>`).join("")}</tbody>
     </table></div>`;
+}
+
+function renderStrategyRiskBudgets(budgetsData) {
+  const list = budgetsData?.budgets || [];
+  
+  let rowsHtml = "";
+  if (list.length) {
+    rowsHtml = list.map(b => {
+      const remainingLoss = b.current_usage.remaining_loss_budget;
+      const remainingTrades = b.current_usage.remaining_trade_budget;
+      const lossPct = ((b.current_usage.monthly_loss / b.budget_limit.monthly_loss_limit) * 100).toFixed(1);
+      const tradePct = ((b.current_usage.trade_count / b.budget_limit.max_trade_count) * 100).toFixed(1);
+      
+      return `
+        <tr>
+          <td><strong>${escapeHtml(b.strategy)}</strong></td>
+          <td>${b.suspended ? '<span class="status-label status-failed">SUSPENDED</span>' : '<span class="status-label status-success">ACTIVE</span>'}</td>
+          <td class="numeric">$${b.current_usage.monthly_loss.toFixed(2)} / $${b.budget_limit.monthly_loss_limit.toFixed(2)} (${lossPct}%)</td>
+          <td class="numeric">${b.current_usage.trade_count} / ${b.budget_limit.max_trade_count} (${tradePct}%)</td>
+          <td class="numeric">${(b.current_usage.capital_allocation * 100).toFixed(1)}% / ${(b.budget_limit.max_capital_allocation * 100).toFixed(1)}%</td>
+          <td class="numeric" style="color: #60a5fa; font-weight: bold;">$${remainingLoss.toFixed(2)}</td>
+          <td class="numeric" style="color: #60a5fa; font-weight: bold;">${remainingTrades}회</td>
+          <td><span style="font-size: 11px; color:#94a3b8;">${b.reason ? escapeHtml(b.reason) : "한도 준수 중"}</span></td>
+        </tr>
+      `;
+    }).join("");
+  } else {
+    rowsHtml = '<tr><td colspan="8" style="text-align:center; color:#94a3b8; padding:20px;">설정된 전략 위험 예산이 없습니다.</td></tr>';
+  }
+
+  return `
+    <div class="panel-header">
+      <div>
+        <h2 style="color: #f87171; font-size: 1.2rem; margin:0;">🛡️ 전략 위험 예산 회계 (Strategy Risk Budgeting)</h2>
+        <p style="margin: 4px 0 0 0; font-size: 0.9rem; color: #94a3b8;">
+          전략의 과도한 누적 손실과 남발을 통제하기 위해 개별 전략별로 할당된 월간 자금, 손실 한도 및 최대 거래 횟수 소진율을 감시합니다.
+        </p>
+      </div>
+      <span class="status-label status-danger" style="font-size:0.75rem;">오버트레이딩 차단</span>
+    </div>
+    <div class="panel-body" style="padding-top: 1rem;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>전략명</th>
+              <th>동작 상태</th>
+              <th class="numeric">월 누적 손실 / 한도</th>
+              <th class="numeric">월 누적 거래 / 한도</th>
+              <th class="numeric">자금 사용률 / 한도</th>
+              <th class="numeric">남은 손실 예산</th>
+              <th class="numeric">남은 거래 횟수</th>
+              <th>차단 사유</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }

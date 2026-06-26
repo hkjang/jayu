@@ -42,6 +42,7 @@ const state = {
   // 시뮬레이션 로그
   simulationLog: null,
   simulationStatus: "idle",
+  permissionMode: "read_only",
 };
 
 const els = {
@@ -55,6 +56,7 @@ const els = {
   runTime: document.querySelector("#run-time"),
   hashSummary: document.querySelector("#hash-summary"),
   accountSummary: document.querySelector("#account-summary"),
+  permissionModeSelector: document.querySelector("#permission-mode-selector"),
 };
 
 function reconcileSelectedTossAccount() {
@@ -157,6 +159,7 @@ async function loadRuns() {
 async function loadPage() {
   setLoading(true);
   try {
+    await loadPermissionMode();
     if (!state.runs.length) await loadRuns();
     const run = encodeURIComponent(state.runId);
     if (RUN_CONTEXT_OPTIONAL_PAGES.has(state.page)) {
@@ -172,6 +175,14 @@ async function loadPage() {
       state.decision = await api(`/api/v1/decision?run_id=${run}`);
       state.overview = await api(`/api/v1/overview?run_id=${run}`);
     }
+    if (state.page === "overview") {
+      try {
+        state.nextCommand = await api("/api/v1/recommender/next");
+      } catch (err) {
+        console.warn("Failed to load next command recommendation", err);
+        state.nextCommand = null;
+      }
+    }
     if (!state.portfolioHub) {
       try {
         state.portfolioHub = await api("/api/v1/portfolio-hub");
@@ -184,6 +195,12 @@ async function loadPage() {
     }
     if (state.page === "risk") {
       state.risk = await api(`/api/v1/runs/${run}/risk`);
+      try {
+        state.strategyBudgets = await api("/api/v1/strategy/budgets");
+      } catch (err) {
+        console.warn("Failed to load strategy budgets", err);
+        state.strategyBudgets = null;
+      }
     }
     if (state.page === "signals") {
       state.signals = await api(`/api/v1/runs/${run}/signals`);
@@ -210,6 +227,24 @@ async function loadPage() {
     if (state.page === "settings") {
       const mode = encodeURIComponent(state.overview?.run?.mode || "shadow");
       state.settingsValidation = await api(`/api/v1/settings/validation?mode=${mode}`);
+      try {
+        state.backups = await api("/api/v1/backup/list");
+      } catch (err) {
+        console.warn("Failed to load backup list", err);
+        state.backups = null;
+      }
+      try {
+        state.events = await api("/api/v1/events");
+      } catch (err) {
+        console.warn("Failed to load events list", err);
+        state.events = null;
+      }
+      try {
+        state.experiments = await api("/api/v1/experiments");
+      } catch (err) {
+        console.warn("Failed to load experiments list", err);
+        state.experiments = null;
+      }
     }
     if (state.page === "toss") {
       state.tossStatus = await api("/api/v1/toss/status");
@@ -1085,6 +1120,41 @@ if (expSelector) {
       await loadPage();
     } catch (err) {
       alert("설명 수준 변경 실패: " + err.message);
+    }
+  });
+}
+
+async function loadPermissionMode() {
+  try {
+    const res = await api("/api/v1/permission-mode");
+    state.permissionMode = res.mode;
+    if (els.permissionModeSelector) {
+      els.permissionModeSelector.value = res.mode;
+    }
+  } catch (err) {
+    console.warn("Failed to load permission mode", err);
+  }
+}
+
+if (els.permissionModeSelector) {
+  els.permissionModeSelector.addEventListener("change", async (e) => {
+    const mode = e.target.value;
+    try {
+      const response = await fetch("/api/v1/permission-mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode })
+      });
+      const res = await response.json();
+      if (res.status === "success") {
+        state.permissionMode = res.mode;
+        els.liveRegion.textContent = `권한 모드가 ${res.mode}로 전환되었습니다.`;
+        await loadPage();
+      } else {
+        alert(`권한 모드 변경 실패: ${res.message}`);
+      }
+    } catch (err) {
+      alert(`권한 모드 변경 오류: ${err.message}`);
     }
   });
 }

@@ -460,8 +460,6 @@ function metricCard(label, value, status, detail, ratio = null, source = null) {
   const width = ratio == null ? 0 : Math.max(0, Math.min(100, Number(ratio) * 100));
   const resolvedSource = source === null ? metricSourceFor(label) : source;
   return `
-    <article class="metric-card">
-      <div class="metric-label"><span>${escapeHtml(label)}</span>${statusBadge(status)}</div>
       <strong class="metric-value">${escapeHtml(value)}</strong>
       <span class="metric-detail">${escapeHtml(detail || "")}</span>
       ${renderSourceLabel(resolvedSource)}
@@ -469,4 +467,158 @@ function metricCard(label, value, status, detail, ratio = null, source = null) {
     </article>
   `;
 }
+
+async function showStockKnowledgeCardModal(ticker) {
+  let card;
+  try {
+    card = await api(`/api/v1/knowledge-cards?ticker=${encodeURIComponent(ticker)}`);
+  } catch (err) {
+    console.error("Failed to load knowledge card", err);
+    return;
+  }
+
+  const existing = document.getElementById("knowledge-card-modal");
+  if (existing) existing.remove();
+
+  const modal = document.createElement("div");
+  modal.id = "knowledge-card-modal";
+  modal.style = "position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.7); display: flex; align-items: center; justify-content: center; z-index: 9999; backdrop-filter: blur(4px);";
+
+  const canEdit = ["review_only", "approve_enabled", "admin"].includes(state.permissionMode);
+  
+  const updateModalContent = (isEditMode) => {
+    if (isEditMode) {
+      modal.innerHTML = `
+        <div style="background: #1e1b4b; border: 1px solid #4f46e5; border-radius: 12px; width: 90%; max-width: 600px; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3); padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; color: #fff;">
+          <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.8rem;">
+            <h2 style="margin: 0; color: #60a5fa;">📝 종목 지식 카드 수정: ${escapeHtml(ticker)}</h2>
+            <button style="background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer;" type="button" onclick="document.getElementById('knowledge-card-modal').remove()">×</button>
+          </div>
+          <div style="display:flex; flex-direction:column; gap: 12px; font-size: 13px;">
+            <div>
+              <label style="display:block; margin-bottom:4px; font-weight:600; color:#cbd5e1;">💡 투자 가설 (Investment Hypothesis)</label>
+              <textarea id="edit-hypothesis" style="width:100%; min-height:80px; padding:8px; border-radius:6px; background:#0f172a; border:1px solid #312e81; color:#fff; resize:vertical;">${escapeHtml(card.investment_hypothesis || "")}</textarea>
+            </div>
+            <div>
+              <label style="display:block; margin-bottom:4px; font-weight:600; color:#cbd5e1;">📌 보유 이유 (Reason for Holding)</label>
+              <textarea id="edit-holding" style="width:100%; min-height:80px; padding:8px; border-radius:6px; background:#0f172a; border:1px solid #312e81; color:#fff; resize:vertical;">${escapeHtml(card.reason_for_holding || "")}</textarea>
+            </div>
+            <div>
+              <label style="display:block; margin-bottom:4px; font-weight:600; color:#cbd5e1;">⚠️ 주요 위험 요인 (Risk Factors)</label>
+              <textarea id="edit-risks" style="width:100%; min-height:60px; padding:8px; border-radius:6px; background:#0f172a; border:1px solid #312e81; color:#fff; resize:vertical;">${escapeHtml(card.risk_factors || "")}</textarea>
+            </div>
+            <div>
+              <label style="display:block; margin-bottom:4px; font-weight:600; color:#cbd5e1;">🛑 매도/청산 조건 (Exit Conditions)</label>
+              <textarea id="edit-exit" style="width:100%; min-height:60px; padding:8px; border-radius:6px; background:#0f172a; border:1px solid #312e81; color:#fff; resize:vertical;">${escapeHtml(card.exit_conditions || "")}</textarea>
+            </div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:0.5rem; border-top:1px solid rgba(255,255,255,0.08); padding-top:0.8rem;">
+            <button class="button button-secondary" type="button" id="btn-card-cancel">취소</button>
+            <button class="button button-primary" type="button" id="btn-card-save">저장</button>
+          </div>
+        </div>
+      `;
+      
+      document.getElementById("btn-card-cancel").onclick = () => updateModalContent(false);
+      document.getElementById("btn-card-save").onclick = async () => {
+        const payload = {
+          ticker,
+          card_data: {
+            investment_hypothesis: document.getElementById("edit-hypothesis").value,
+            reason_for_holding: document.getElementById("edit-holding").value,
+            risk_factors: document.getElementById("edit-risks").value,
+            exit_conditions: document.getElementById("edit-exit").value,
+          }
+        };
+        try {
+          const response = await fetch("/api/v1/knowledge-cards", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const res = await response.json();
+          if (res.status === "success") {
+            card = res.card;
+            updateModalContent(false);
+          } else {
+            alert("지식 카드 저장 실패: " + res.message);
+          }
+        } catch (err) {
+          alert("지식 카드 저장 오류: " + err.message);
+        }
+      };
+    } else {
+      modal.innerHTML = `
+        <div style="background: #1e1b4b; border: 1px solid #4f46e5; border-radius: 12px; width: 90%; max-width: 500px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3); padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; color: #fff;">
+          <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.8rem;">
+            <h2 style="margin: 0; color: #60a5fa;">📊 종목 지식 카드: ${escapeHtml(ticker)}</h2>
+            <button style="background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer;" type="button" onclick="document.getElementById('knowledge-card-modal').remove()">×</button>
+          </div>
+          <div style="display:flex; flex-direction:column; gap: 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1;">
+            <div>
+              <strong style="display:block; color: #f59e0b; margin-bottom: 2px;">💡 투자 가설</strong>
+              <p style="margin:0; background:rgba(0,0,0,0.2); padding:8px; border-radius:4px; border:1px solid rgba(255,255,255,0.03); white-space:pre-wrap;">${escapeHtml(card.investment_hypothesis || "")}</p>
+            </div>
+            <div>
+              <strong style="display:block; color: #f59e0b; margin-bottom: 2px;">📌 보유 이유</strong>
+              <p style="margin:0; background:rgba(0,0,0,0.2); padding:8px; border-radius:4px; border:1px solid rgba(255,255,255,0.03); white-space:pre-wrap;">${escapeHtml(card.reason_for_holding || "")}</p>
+            </div>
+            <div>
+              <strong style="display:block; color: #f59e0b; margin-bottom: 2px;">⚠️ 주요 위험 요인</strong>
+              <p style="margin:0; background:rgba(0,0,0,0.2); padding:8px; border-radius:4px; border:1px solid rgba(255,255,255,0.03); white-space:pre-wrap;">${escapeHtml(card.risk_factors || "")}</p>
+            </div>
+            <div>
+              <strong style="display:block; color: #f59e0b; margin-bottom: 2px;">🛑 매도/청산 조건</strong>
+              <p style="margin:0; background:rgba(0,0,0,0.2); padding:8px; border-radius:4px; border:1px solid rgba(255,255,255,0.03); white-space:pre-wrap;">${escapeHtml(card.exit_conditions || "")}</p>
+            </div>
+            <div style="font-size: 11px; color:#94a3b8; text-align:right; margin-top:4px;">최종 업데이트: ${new Date(card.updated_at).toLocaleString("ko-KR")}</div>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem; border-top:1px solid rgba(255,255,255,0.08); padding-top:0.8rem;">
+            <div>
+              ${canEdit ? `<button class="button button-danger" type="button" id="btn-card-delete" style="font-size:12px; background:rgba(239,68,68,0.1); border-color:#ef4444; color:#fca5a5;">삭제</button>` : ""}
+            </div>
+            <div style="display:flex; gap:8px;">
+              ${canEdit ? `<button class="button button-primary" type="button" id="btn-card-edit" style="font-size:12px;">수정</button>` : ""}
+              <button class="button button-secondary" type="button" onclick="document.getElementById('knowledge-card-modal').remove()" style="font-size:12px;">닫기</button>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      if (canEdit) {
+        document.getElementById("btn-card-edit").onclick = () => updateModalContent(true);
+        document.getElementById("btn-card-delete").onclick = async () => {
+          if (confirm(`정말로 [${ticker}] 종목 지식 카드를 삭제하시겠습니까?`)) {
+            try {
+              const response = await fetch(`/api/v1/knowledge-cards?ticker=${encodeURIComponent(ticker)}`, {
+                method: "DELETE"
+              });
+              const res = await response.json();
+              if (res.status === "success") {
+                document.getElementById("knowledge-card-modal").remove();
+              } else {
+                alert("지식 카드 삭제 실패: " + res.message);
+              }
+            } catch (err) {
+              alert("지식 카드 삭제 오류: " + err.message);
+            }
+          }
+        };
+      }
+    }
+  };
+
+  updateModalContent(false);
+  document.body.appendChild(modal);
+}
+
+document.addEventListener("click", (e) => {
+  const trigger = e.target.closest(".ticker-tooltip-trigger");
+  if (trigger) {
+    const ticker = trigger.dataset.ticker;
+    if (ticker) {
+      showStockKnowledgeCardModal(ticker);
+    }
+  }
+});
 

@@ -1,0 +1,40 @@
+# Jayu Pre-trade Checklist DSL Definition
+# 자동매매 또는 주문 실행 전에 안전을 위해 반드시 충족해야 하는 선언형 조건 정의
+
+# 데이터 신선도 조건 (단위: 분)
+# 가격 데이터나 수집된 데이터의 지연이 N분 이내여야 함
+data_freshness:
+  max_delay_minutes: 15
+  fail_severity: "blocked"
+
+# 리스크 게이트 통과 조건
+# behavior_guard 나 risk_ledger 에서 차단 항목이 없어야 함
+risk_gate:
+  require_all_passed: true
+  fail_severity: "blocked"
+
+# 시장 거래 시간대 제한
+# US(미국) 시장 정규 거래 시간 내에만 주문을 제출함 (정규장 기준)
+market_hours:
+  market: "US"
+  regular_hours_only: true
+  fail_severity: "blocked"
+
+# 계좌 예치금/가용 현금 최소 조건
+# 통화별 최소 가용 잔고 기준 설정
+account_cash:
+  min_cash_usd: 500.0
+  min_cash_krw: 500000.0
+  fail_severity: "warning"
+
+# 신호 신뢰도 최소 점수 조건
+# 생성된 투자 신호의 강도(Score)가 기준치를 넘어야 실행함
+signal_rating:
+  min_score: 0.6
+  fail_severity: "warning"
+
+# 사용자 명시적 승인 여부
+# 대시보드 등에서 의사결정 승인(Approval) 장부에 기록이 완료된 신호만 실거래 제출 허용
+user_approval:
+  require_explicit_approval: true
+  fail_severity: "blocked"
