@@ -587,6 +587,13 @@ def build_dashboard_data_quality(
         status = "data_error" if disagreements or blocked_tickers or failed_sources else "pass"
     if manifest.get("failure_code") in DATA_FAILURE_CODES:
         status = "data_error"
+        
+    total_sources = len(sources)
+    success_sources = max(0, total_sources - failed_sources)
+    success_rate = round(success_sources / total_sources, 4) if total_sources else 1.0
+    failed_providers = {item.get("provider") for item in sources if item.get("status") != "success" and item.get("provider")}
+    success_providers = max(0, len(providers) - len(failed_providers))
+    
     summary = {
         "status": status,
         "verified": valid_count,
@@ -598,6 +605,12 @@ def build_dashboard_data_quality(
         "disagreement_count": len(disagreements),
         "blocked_ticker_count": len(blocked_tickers),
         "blocked_tickers": blocked_tickers,
+        # Frontend compatibility fields
+        "total_source_count": total_sources,
+        "success_source_count": success_sources,
+        "success_rate": success_rate,
+        "total_providers": len(providers),
+        "success_providers": success_providers,
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -3636,6 +3649,12 @@ def _empty_data_summary() -> dict[str, Any]:
         "disagreement_count": 0,
         "blocked_ticker_count": 0,
         "blocked_tickers": [],
+        # Frontend compatibility fields
+        "total_source_count": 0,
+        "success_source_count": 0,
+        "success_rate": 1.0,
+        "total_providers": 0,
+        "success_providers": 0,
     }
 
 
