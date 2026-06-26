@@ -678,21 +678,21 @@ function renderDecisionDiffCard(diff) {
       <div class="panel-header">
         <div>
           <h2 style="font-size: 1.2rem; margin: 0;">오늘의 판단 변화 (Decision Diff)</h2>
-          <p style="margin: 4px 0 0 0; font-size: 0.9rem; color: #94a3b8;">
+          <p style="margin: 4px 0 0 0; font-size: 0.9rem; color: var(--muted);">
             이전 실행(<strong>${diff.left_run_id || "없음"}</strong>) 대비 오늘 실행(<strong>${diff.right_run_id || "없음"}</strong>)의 의사결정 변화 내역입니다.
           </p>
         </div>
         <span class="badge ${badgeClass}" style="padding: 4px 10px; border-radius: 12px; font-size: 0.8rem;">${isChanged ? "변화 감지됨" : "동일 유지"}</span>
       </div>
       <div class="panel-body" style="padding: 1rem 0 0 0;">
-        <div class="diff-summary-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 6px;">
-          <p style="font-size: 1rem; line-height: 1.5; margin: 0 0 0.5rem 0;">
+        <div class="diff-summary-box" style="background: var(--surface-subtle); border: 1px solid var(--border); padding: 1rem; border-radius: 6px;">
+          <p style="font-size: 1rem; line-height: 1.5; margin: 0 0 0.5rem 0; color: var(--text);">
             <strong>판결 흐름:</strong> 
-            <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; color: #cbd5e1;">${diff.left_status || "N/A"}</code> 
+            <code style="background: var(--neutral-bg); border: 1px solid var(--border); padding: 2px 6px; border-radius: 4px; color: var(--text);">${diff.left_status || "N/A"}</code> 
             ➔ 
             <code style="background: rgba(244,63,94,0.1); padding: 2px 6px; border-radius: 4px; color: #f43f5e; font-weight: bold;">${diff.right_status || "N/A"}</code>
           </p>
-          <p style="margin: 0; line-height: 1.6; color: #e2e8f0; font-size: 0.95rem;">${escapeHtml(diff.explanation || "")}</p>
+          <p style="margin: 0; line-height: 1.6; color: var(--text); font-size: 0.95rem;">${escapeHtml(diff.explanation || "")}</p>
         </div>
         
         ${blockersHtml || tickersHtml ? `
@@ -702,9 +702,9 @@ function renderDecisionDiffCard(diff) {
           </div>
         ` : ""}
         
-        <div style="margin-top: 1rem; padding-top: 0.8rem; border-top: 1px dashed rgba(255,255,255,0.08);">
-          <p style="margin: 0; font-size: 0.9rem; color: #94a3b8;">
-            <strong>💡 대응 권장 조치:</strong> <span style="color: #f1f5f9;">${escapeHtml(diff.recommended_action?.text || "")}</span>
+        <div style="margin-top: 1rem; padding-top: 0.8rem; border-top: 1px dashed var(--border);">
+          <p style="margin: 0; font-size: 0.9rem; color: var(--muted);">
+            <strong>💡 대응 권장 조치:</strong> <span style="color: var(--text); font-weight: 600;">${escapeHtml(diff.recommended_action?.text || "")}</span>
           </p>
         </div>
       </div>
@@ -719,21 +719,21 @@ function renderRoutineScheduler(routines) {
     <section class="panel routine-scheduler-section" style="margin-top: 1.5rem;">
       <div class="panel-header">
         <div>
-          <h2 style="font-size: 1.2rem; margin: 0; color: #818cf8;">⏳ 오늘의 투자 루틴 스케줄러</h2>
-          <p style="margin: 4px 0 0 0; font-size: 0.9rem; color: #94a3b8;">개인 투자 운영 OS로서 매일 확인해야 할 장전, 장중, 장후 필수 점검 사항과 실행 명령 가이드입니다.</p>
+          <h2 style="font-size: 1.2rem; margin: 0; color: var(--accent);">⏳ 오늘의 투자 루틴 스케줄러</h2>
+          <p style="margin: 4px 0 0 0; font-size: 0.9rem; color: var(--muted);">개인 투자 운영 OS로서 매일 확인해야 할 장전, 장중, 장후 필수 점검 사항과 실행 명령 가이드입니다.</p>
         </div>
       </div>
       <div class="panel-body" style="padding: 1rem 0 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem;">
         ${list.map(r => `
-          <article class="routine-card" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px; border: 1px solid var(--border); display: flex; flex-direction: column; justify-content: space-between;">
+          <article class="routine-card" style="background: var(--surface-subtle); padding: 1rem; border-radius: 8px; border: 1px solid var(--border); display: flex; flex-direction: column; justify-content: space-between;">
             <div>
-              <strong style="font-size: 1rem; color: #a5b4fc; display: block; margin-bottom: 0.5rem;">${escapeHtml(r.title)}</strong>
-              <p style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.8rem; line-height: 1.4;">${escapeHtml(r.description)}</p>
+              <strong style="font-size: 1rem; color: var(--text); display: block; margin-bottom: 0.5rem; font-weight: 700;">${escapeHtml(r.title)}</strong>
+              <p style="font-size: 0.8rem; color: var(--muted); margin-bottom: 0.8rem; line-height: 1.4;">${escapeHtml(r.description)}</p>
               
               <div class="routine-tasks" style="margin-bottom: 0.8rem;">
                 ${r.tasks.map(t => `
                   <div style="display: flex; align-items: flex-start; gap: 6px; font-size: 0.75rem; margin-bottom: 6px; line-height: 1.3;">
-                    <span style="color: ${t.completed ? '#10b981' : '#f59e0b'}; font-weight: bold; font-size: 0.85rem;">${t.completed ? '✓' : '⏳'}</span>
+                     <span style="color: ${t.completed ? '#10b981' : '#f59e0b'}; font-weight: bold; font-size: 0.85rem;">${t.completed ? '✓' : '⏳'}</span>
                     <span style="color: var(--text);">${escapeHtml(t.label)}</span>
                   </div>
                 `).join("")}
@@ -741,7 +741,7 @@ function renderRoutineScheduler(routines) {
             </div>
             
             ${r.commands && r.commands.length ? `
-              <div class="routine-commands" style="display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 0.5rem; margin-top: auto;">
+              <div class="routine-commands" style="display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed var(--border); padding-top: 0.5rem; margin-top: auto;">
                 ${r.commands.map(cmd => `
                   <button class="button button-secondary" type="button" data-command="${escapeHtml(cmd.command)}" style="padding: 4px 8px; font-size: 0.7rem; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%;">
                     📋 ${escapeHtml(cmd.label)}
@@ -759,25 +759,25 @@ function renderRoutineScheduler(routines) {
 function renderNextCommandRecommendation(recommendation) {
   if (!recommendation) return "";
   return `
-    <article class="panel" style="margin-top: 1.5rem; border: 1px solid rgba(255, 255, 255, 0.08); border-left: 4px solid #3b82f6; background: rgba(59, 130, 246, 0.04);">
-      <div class="panel-header" style="padding-bottom: 0.5rem; border-bottom: 1px dashed rgba(255,255,255,0.06);">
+    <article class="panel" style="margin-top: 1.5rem; border: 1px solid var(--border); border-left: 4px solid var(--info); background: var(--info-bg);">
+      <div class="panel-header" style="padding-bottom: 0.5rem; border-bottom: 1px dashed var(--border);">
         <div>
-          <h2 style="font-size: 1.1rem; margin: 0; color: #60a5fa; display: flex; align-items: center; gap: 8px;">
+          <h2 style="font-size: 1.1rem; margin: 0; color: var(--info); display: flex; align-items: center; gap: 8px;">
             <span>🤖 AI 후속 CLI 명령 추천</span>
           </h2>
-          <p style="margin: 4px 0 0 0; font-size: 0.85rem; color: #94a3b8;">현재 시스템 상태 및 운용 성과를 토대로 제안되는 다음 행동입니다.</p>
+          <p style="margin: 4px 0 0 0; font-size: 0.85rem; color: var(--muted);">현재 시스템 상태 및 운용 성과를 토대로 제안되는 다음 행동입니다.</p>
         </div>
-        <span class="status-label status-success" style="font-size: 0.75rem; padding: 2px 6px; background: rgba(16, 185, 129, 0.1); color: #34d399; border-radius: 4px;">한국어 가이드</span>
+        <span class="status-label status-success" style="font-size: 0.75rem; padding: 2px 6px; background: var(--success-bg); color: var(--success); border: 1px solid var(--success); border-radius: 4px;">한국어 가이드</span>
       </div>
       <div class="panel-body" style="padding-top: 1rem; display: flex; flex-direction: column; gap: 12px;">
-        <div style="background: rgba(15, 23, 42, 0.6); color: #38bdf8; padding: 12px 16px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center; border: 1px solid rgba(255,255,255,0.04);">
+        <div style="background: var(--neutral-bg); color: var(--accent); padding: 12px 16px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--border);">
           <span id="recommended-cli-command" style="word-break: break-all;">${escapeHtml(recommendation.command)}</span>
-          <button class="button button-secondary" style="font-size: 0.75rem; padding: 4px 8px; border-color: rgba(255,255,255,0.1); color: #94a3b8; background: transparent; cursor: pointer; white-space: nowrap; margin-left: 8px;" 
+          <button class="button button-secondary" style="font-size: 0.75rem; padding: 4px 8px; border-color: var(--border); color: var(--text); background: var(--surface); cursor: pointer; white-space: nowrap; margin-left: 8px;" 
             type="button" onclick="navigator.clipboard.writeText(document.getElementById('recommended-cli-command').textContent); alert('명령어가 클립보드에 복사되었습니다.');">
             📋 복사
           </button>
         </div>
-        <div style="font-size: 0.85rem; color: #cbd5e1; line-height: 1.5;">
+        <div style="font-size: 0.85rem; color: var(--text); line-height: 1.5;">
           <p style="margin: 0 0 4px 0;"><strong>이유:</strong> ${escapeHtml(recommendation.reason)}</p>
           <p style="margin: 0;"><strong>예상 결과:</strong> ${escapeHtml(recommendation.expected_result)}</p>
         </div>
