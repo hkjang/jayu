@@ -1906,3 +1906,401 @@ function renderRunEventsTimeline(logs) {
     </div>
   `;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 개인 투자 운영 OS 확장 모듈 프론트엔드 연동 구현 (2차 고도화)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function renderBackupRestoreSection() {
+  const isAdmin = state.permissionMode === "admin";
+  return `
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 12px;">
+      <div>
+        <h2 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📦 운영 백업 및 복원 콘솔</h2>
+        <p style="font-size:12px; color:#64748b; margin:4px 0 0 0;">시스템 설정, 실행 이력, 신호, 보고서 및 SQLite 데이터마트를 백업하고 안전하게 복원합니다.</p>
+      </div>
+      <button id="btn-create-backup" class="button button-primary" ${isAdmin ? "" : "disabled"} style="font-size:12px; padding: 6px 12px; height: auto;">
+        📦 즉시 백업 생성
+      </button>
+    </div>
+    <div id="backup-console-status" style="margin-bottom:12px; display:none; padding:10px; border-radius:6px; font-size:12px;"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>백업 파일명</th>
+            <th>크기</th>
+            <th>생성 일시</th>
+            <th style="text-align:right;">작업</th>
+          </tr>
+        </thead>
+        <tbody id="backup-list-tbody">
+          <tr><td colspan="4" style="text-align:center; padding:20px; color:#64748b;">백업 목록을 불러오는 중...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderExperimentsSection() {
+  const isAdmin = state.permissionMode === "admin";
+  return `
+    <div class="panel-header" style="border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 12px;">
+      <div>
+        <h2 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🔬 시뮬레이션 실험 Registry</h2>
+        <p style="font-size:12px; color:#64748b; margin:4px 0 0 0;">운영 실행과 분리된 전략 실험, 단타 시뮬레이션, Paper 결과를 실험 단위로 등록하고 비교 관리합니다.</p>
+      </div>
+    </div>
+    
+    <div style="display:grid; grid-template-columns: 1fr 340px; gap: 20px;">
+      <div>
+        <h3 style="font-size:13px; color:#334155; margin:0 0 10px 0; font-weight:700;">🔬 등록된 실험 목록</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>전략명</th>
+                <th>대상 종목</th>
+                <th>가설 / 목적</th>
+                <th>성과 지표</th>
+                <th>상태</th>
+              </tr>
+            </thead>
+            <tbody id="experiment-list-tbody">
+              <tr><td colspan="5" style="text-align:center; padding:20px; color:#64748b;">실험 목록을 불러오는 중...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      <div style="background:#f8fafc; border: 1px solid #e2e8f0; border-radius:8px; padding:15px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);">
+        <h3 style="font-size:13px; color:#0f172a; margin:0 0 12px 0; font-weight:700; border-bottom:1px solid #e2e8f0; padding-bottom:8px;">🔬 신규 실험 등록</h3>
+        <form id="form-register-experiment" style="display:flex; flex-direction:column; gap:10px;">
+          <div>
+            <label style="display:block; font-size:11px; color:#475569; margin-bottom:4px; font-weight:600;">실행 ID (Run ID) *</label>
+            <input type="text" id="exp-run-id" required placeholder="예: run_20260627_120000" style="width:100%; padding:6px 10px; font-size:12px; border: 1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; color:#475569; margin-bottom:4px; font-weight:600;">전략명 (Strategy Name) *</label>
+            <input type="text" id="exp-strategy" required placeholder="예: Momentum_V4" style="width:100%; padding:6px 10px; font-size:12px; border: 1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; color:#475569; margin-bottom:4px; font-weight:600;">대상 종목 (쉼표 구분) *</label>
+            <input type="text" id="exp-tickers" required placeholder="예: SOXL, TQQQ" style="width:100%; padding:6px 10px; font-size:12px; border: 1px solid #cbd5e1; border-radius:6px; box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; color:#475569; margin-bottom:4px; font-weight:600;">실험 목적 (Objective)</label>
+            <textarea id="exp-objective" rows="2" placeholder="실험의 목적을 설명하세요" style="width:100%; padding:6px 10px; font-size:12px; border: 1px solid #cbd5e1; border-radius:6px; resize:none; box-sizing:border-box;"></textarea>
+          </div>
+          <div>
+            <label style="display:block; font-size:11px; color:#475569; margin-bottom:4px; font-weight:600;">가설 (Hypothesis)</label>
+            <textarea id="exp-hypothesis" rows="2" placeholder="가설을 설명하세요" style="width:100%; padding:6px 10px; font-size:12px; border: 1px solid #cbd5e1; border-radius:6px; resize:none; box-sizing:border-box;"></textarea>
+          </div>
+          <button type="submit" class="button button-primary" ${isAdmin ? "" : "disabled"} style="width:100%; font-size:12px; padding:8px; height:auto; margin-top:5px;">
+            🔬 실험 등록하기
+          </button>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function renderEventsSection() {
+  return `
+    <div class="panel-header" style="border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 12px;">
+      <div>
+        <h2 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🔔 실시간 도메인 이벤트 타임라인 (Event Bus)</h2>
+        <p style="font-size:12px; color:#64748b; margin:4px 0 0 0;">신호 생성, 리스크 차단, 의사결정 승인, 알림 라우팅 등 시스템 핵심 도메인 이벤트를 실시간으로 모니터링합니다.</p>
+      </div>
+    </div>
+    <div class="timeline-wrap" style="max-height:350px; overflow-y:auto; background:#0f172a; border-radius:8px; padding:15px; border:1px solid #1e293b;">
+      <div id="event-timeline-container" style="display:flex; flex-direction:column; gap:12px;">
+        <div style="text-align:center; padding:20px; color:#94a3b8; font-size:12px;">이벤트 로그를 불러오는 중...</div>
+      </div>
+    </div>
+  `;
+}
+
+async function bindSettingsExtensionsActions() {
+  // 1. 데이터 로드
+  await Promise.all([
+    loadBackupList(),
+    loadExperimentList(),
+    loadEventTimeline()
+  ]);
+
+  // 2. 백업 생성 이벤트 바인딩
+  const btnCreateBackup = document.querySelector("#btn-create-backup");
+  if (btnCreateBackup) {
+    btnCreateBackup.addEventListener("click", async () => {
+      const statusDiv = document.querySelector("#backup-console-status");
+      statusDiv.style.display = "block";
+      statusDiv.style.background = "#eff6ff";
+      statusDiv.style.color = "#1d4ed8";
+      statusDiv.style.border = "1px solid #bfdbfe";
+      statusDiv.textContent = "⚙️ 백업 파일 압축 및 체크섬 생성 중...";
+      btnCreateBackup.disabled = true;
+
+      try {
+        const response = await fetch("/api/v1/backup/create", { method: "POST" });
+        const res = await response.json();
+        if (res.status === "success") {
+          statusDiv.style.background = "#ecfdf5";
+          statusDiv.style.color = "#065f46";
+          statusDiv.style.border = "1px solid #a7f3d0";
+          statusDiv.textContent = `✅ 백업 성공: ${res.backup_file} (SHA256: ${res.sha256.slice(0,8)}...)`;
+          await loadBackupList();
+        } else {
+          throw new Error(res.message || "알 수 없는 오류");
+        }
+      } catch (err) {
+        statusDiv.style.background = "#fef2f2";
+        statusDiv.style.color = "#991b1b";
+        statusDiv.style.border = "1px solid #fca5a5";
+        statusDiv.textContent = `❌ 백업 실패: ${err.message}`;
+      } finally {
+        if (state.permissionMode === "admin") {
+          btnCreateBackup.disabled = false;
+        }
+      }
+    });
+  }
+
+  // 3. 실험 등록 폼 이벤트 바인딩
+  const formExp = document.querySelector("#form-register-experiment");
+  if (formExp) {
+    formExp.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const runId = document.querySelector("#exp-run-id").value.trim();
+      const strategy = document.querySelector("#exp-strategy").value.trim();
+      const tickers = document.querySelector("#exp-tickers").value.split(",").map(t => t.trim().toUpperCase()).filter(t => t);
+      const objective = document.querySelector("#exp-objective").value.trim();
+      const hypothesis = document.querySelector("#exp-hypothesis").value.trim();
+
+      try {
+        const response = await fetch("/api/v1/experiments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            run_id: runId,
+            strategy_name: strategy,
+            target_tickers: tickers,
+            objective: objective,
+            hypothesis: hypothesis
+          })
+        });
+        const res = await response.json();
+        if (res.status === "success") {
+          alert(`🔬 실험 등록 성공! (Run ID: ${res.run_id})`);
+          formExp.reset();
+          await loadExperimentList();
+        } else {
+          throw new Error(res.message || "등록 실패");
+        }
+      } catch (err) {
+        alert(`❌ 실험 등록 실패: ${err.message}`);
+      }
+    });
+  }
+}
+
+async function loadBackupList() {
+  const tbody = document.querySelector("#backup-list-tbody");
+  if (!tbody) return;
+
+  try {
+    const res = await api("/api/v1/backup/list");
+    const backups = res.backups || [];
+    if (backups.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:#64748b;">백업 파일이 존재하지 않습니다.</td></tr>`;
+      return;
+    }
+
+    const isAdmin = state.permissionMode === "admin";
+    tbody.innerHTML = backups.map(b => {
+      const sizeKB = (b.size / 1024).toFixed(1);
+      const timeStr = new Date(b.mtime).toLocaleString("ko-KR");
+      return `
+        <tr>
+          <td class="code" style="font-weight:600; color:#0f172a;">${escapeHtml(b.name)}</td>
+          <td>${sizeKB} KB</td>
+          <td>${timeStr}</td>
+          <td style="text-align:right; display:flex; gap:6px; justify-content:flex-end;">
+            <button class="button btn-backup-dryrun" data-file="${escapeHtml(b.name)}" style="font-size:11px; padding:3px 8px; height:auto; background:#f1f5f9; color:#334155; border:1px solid #cbd5e1;">
+              🔍 검증
+            </button>
+            <button class="button button-danger btn-backup-restore" data-file="${escapeHtml(b.name)}" ${isAdmin ? "" : "disabled"} style="font-size:11px; padding:3px 8px; height:auto;">
+              ⏪ 복원
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    // 이벤트 바인딩
+    document.querySelectorAll(".btn-backup-dryrun").forEach(btn => {
+      btn.addEventListener("click", () => handleBackupRestore(btn.dataset.file, true));
+    });
+    document.querySelectorAll(".btn-backup-restore").forEach(btn => {
+      btn.addEventListener("click", () => handleBackupRestore(btn.dataset.file, false));
+    });
+
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:#ef4444;">백업 목록 로드 실패: ${err.message}</td></tr>`;
+  }
+}
+
+async function handleBackupRestore(filename, dryRun) {
+  const modeText = dryRun ? "드라이런 검증" : "실제 복원";
+  if (!dryRun && !confirm(`⚠️ 정말로 백업 파일 [${filename}]로 복원하시겠습니까?\n현재 모든 운영 데이터(state, runs, signals 등)가 덮어씌워지며 복원 완료 후 서버가 최신 데이터로 동기화됩니다.`)) {
+    return;
+  }
+
+  const statusDiv = document.querySelector("#backup-console-status");
+  if (statusDiv) {
+    statusDiv.style.display = "block";
+    statusDiv.style.background = "#fef3c7";
+    statusDiv.style.color = "#d97706";
+    statusDiv.style.border = "1px solid #fde68a";
+    statusDiv.textContent = `⚙️ 백업 복원 [${modeText}] 진행 중...`;
+  }
+
+  try {
+    const response = await fetch("/api/v1/backup/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file: filename, dry_run: dryRun })
+    });
+    const res = await response.json();
+    if (res.status === "success") {
+      const r = res.report;
+      if (statusDiv) {
+        if (r.valid) {
+          statusDiv.style.background = "#ecfdf5";
+          statusDiv.style.color = "#065f46";
+          statusDiv.style.border = "1px solid #a7f3d0";
+          statusDiv.textContent = `✅ 복원 [${modeText}] 무결성 검증 성공! 변경 작업 수: ${r.actions.length}건`;
+        } else {
+          statusDiv.style.background = "#fef2f2";
+          statusDiv.style.color = "#991b1b";
+          statusDiv.style.border = "1px solid #fca5a5";
+          statusDiv.textContent = `❌ 복원 [${modeText}] 검증 실패: ${r.error || "무결성 위반 감지"}`;
+        }
+      }
+      
+      let details = r.actions.map(a => `· [${a.type}] ${a.path} (${a.status})`).join("\n");
+      alert(`[${modeText} 결과]\n무결성 상태: ${r.valid ? "유효 (PASS)" : "무효 (FAIL)"}\n\n작업 내역:\n${details || "없음"}`);
+
+      if (!dryRun && r.valid) {
+        await loadPage();
+      }
+    } else {
+      throw new Error(res.message || "복원 처리 오류");
+    }
+  } catch (err) {
+    if (statusDiv) {
+      statusDiv.style.background = "#fef2f2";
+      statusDiv.style.color = "#991b1b";
+      statusDiv.style.border = "1px solid #fca5a5";
+      statusDiv.textContent = `❌ 복원 실패: ${err.message}`;
+    }
+    alert(`❌ 복원 오류: ${err.message}`);
+  }
+}
+
+async function loadExperimentList() {
+  const tbody = document.querySelector("#experiment-list-tbody");
+  if (!tbody) return;
+
+  try {
+    const res = await api("/api/v1/experiments");
+    const exps = res.experiments || [];
+    if (exps.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:#64748b;">등록된 시뮬레이션 실험이 없습니다.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = exps.map(e => {
+      const tickersStr = (e.target_tickers || []).join(", ");
+      const metrics = e.result_metrics || {};
+      const metricsStr = Object.entries(metrics).map(([k, v]) => `${k}: ${v}`).join(", ") || "대기 중";
+      const statusBadgeHtml = e.promoted 
+        ? `<span class="badge badge-success">🚀 운영 승격</span>` 
+        : `<span class="badge badge-warning">🔬 실험 중</span>`;
+      
+      return `
+        <tr>
+          <td><strong style="color:#0f172a;">${escapeHtml(e.strategy_name)}</strong><br><span class="code" style="font-size:10px; color:#64748b;">${escapeHtml(e.run_id)}</span></td>
+          <td><span class="code">${escapeHtml(tickersStr)}</span></td>
+          <td>
+            <div style="font-weight:600; font-size:12px; color:#334155;">${escapeHtml(e.objective || "-")}</div>
+            <div style="font-size:11px; color:#64748b; margin-top:2px;">가설: ${escapeHtml(e.hypothesis || "-")}</div>
+          </td>
+          <td class="code" style="font-size:11px;">${escapeHtml(metricsStr)}</td>
+          <td>${statusBadgeHtml}</td>
+        </tr>
+      `;
+    }).join("");
+
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:#ef4444;">실험 목록 로드 실패: ${err.message}</td></tr>`;
+  }
+}
+
+async function loadEventTimeline() {
+  const container = document.querySelector("#event-timeline-container");
+  if (!container) return;
+
+  try {
+    const res = await api("/api/v1/events");
+    const events = res.events || [];
+    if (events.length === 0) {
+      container.innerHTML = `<div style="text-align:center; padding:20px; color:#94a3b8; font-size:12px;">발행된 도메인 이벤트가 없습니다.</div>`;
+      return;
+    }
+
+    container.innerHTML = events.map(e => {
+      const time = new Date(e.created_at).toLocaleTimeString("ko-KR", { hour12: false });
+      const sev = String(e.severity || "info").toLowerCase();
+      
+      let badgeColor = "#3b82f6"; // blue (info)
+      if (sev === "critical" || sev === "error" || sev === "blocked") badgeColor = "#ef4444"; // red
+      else if (sev === "warning" || sev === "warn") badgeColor = "#f59e0b"; // yellow
+      
+      let icon = "🔔";
+      if (e.event_type.includes("created")) icon = "✨";
+      else if (e.event_type.includes("blocked")) icon = "🛑";
+      else if (e.event_type.includes("approved") || e.event_type.includes("recorded")) icon = "✍️";
+      else if (e.event_type.includes("completed")) icon = "🏁";
+      else if (e.event_type.includes("queued")) icon = "💬";
+
+      const payloadStr = JSON.stringify(e.payload || {});
+
+      return `
+        <div style="display:flex; gap:10px; border-bottom:1px solid #1e293b; padding-bottom:8px; align-items:flex-start;">
+          <span style="font-size:14px; background:#1e293b; padding:4px; border-radius:4px; display:flex; align-items:center; justify-content:center;">
+            ${icon}
+          </span>
+          <div style="flex:1; min-width:0;">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:2px;">
+              <span style="font-weight:700; color:#818cf8;">${escapeHtml(e.event_type.toUpperCase())}</span>
+              <span style="color:#64748b;">${time}</span>
+            </div>
+            <div style="font-size:12px; color:#e2e8f0; word-break:break-all;">
+              <strong style="color:#cbd5e1;">[${escapeHtml(e.source_module)}]</strong> 
+              ${escapeHtml(e.ticker ? `(${e.ticker}) ` : "")}
+              ${escapeHtml(payloadStr.length > 120 ? payloadStr.slice(0, 120) + "..." : payloadStr)}
+            </div>
+          </div>
+          <span style="background:${badgeColor}22; color:${badgeColor}; border:1px solid ${badgeColor}; padding:1px 4px; border-radius:3px; font-size:9px; font-weight:800;">
+            ${sev.toUpperCase()}
+          </span>
+        </div>
+      `;
+    }).join("");
+
+  } catch (err) {
+    container.innerHTML = `<div style="text-align:center; padding:20px; color:#ef4444; font-size:12px;">이벤트 로드 실패: ${err.message}</div>`;
+  }
+}
+
