@@ -58,6 +58,12 @@
           <button class="nav-item" data-page="autotrading" type="button">
             <span class="nav-index">13</span><span>자동매매 준비</span>
           </button>
+          <button class="nav-item" data-page="simulation-log" type="button">
+            <span class="nav-index">14</span><span>시뮬레이션 로그</span>
+          </button>
+          <button class="nav-item" data-page="run-history" type="button">
+            <span class="nav-index">15</span><span>실행 이력 & 로그</span>
+          </button>
         </nav>
         <div class="sidebar-note">
           <span>분석 보조 시스템</span>
@@ -84,6 +90,14 @@
             <div>
               <span>Toss 계좌</span>
               <strong id="account-summary">미선택</strong>
+            </div>
+            <div>
+              <span style="font-size:11px;color:#64748b;display:block;margin-bottom:2px">설명 수준</span>
+              <select id="explanation-level-selector" style="font-size:12px;padding:2px 4px;border-radius:4px;border:1px solid #cbd5e1;background:#fff;cursor:pointer">
+                <option value="beginner">🌱 초보자</option>
+                <option value="normal" selected>⚖️ 일반</option>
+                <option value="expert">🧠 전문가</option>
+              </select>
             </div>
             <button id="refresh-button" class="button button-secondary" type="button">
               새로고침

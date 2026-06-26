@@ -12,6 +12,7 @@ from jayu.dashboard import (
     build_dashboard_decision,
     build_dashboard_data_quality,
     build_dashboard_overview,
+    build_dashboard_api_monitoring,
     build_dashboard_promotion,
     build_dashboard_risk,
     build_dashboard_settings_validation,
@@ -330,6 +331,7 @@ class FakeTossDashboardClient:
                 "quoteCurrency": quote_currency,
                 "rate": "1400",
                 "midRate": "1395",
+                "changeRate": 0.02,
                 "rateChangeType": "UP",
                 "validFrom": "2026-03-25T09:30:00+09:00",
                 "validUntil": "2026-03-25T09:31:00+09:00",
@@ -353,13 +355,122 @@ def test_dashboard_overview_prioritizes_data_error_and_actions(tmp_path: Path):
     assert report["gates"]["risk"]["blocked_count"] == 1
     assert report["signals"]["blocked"] == 1
     assert report["today_board"]["tasks"][0]["label"] == "데이터 검증 확인"
+    assert report["today_board"]["tasks"][0]["action_type"] == "data_check"
+    assert report["today_board"]["tasks"][0]["queue_status"] == "new"
     assert report["today_board"]["risky_stocks"][0]["ticker"] == "SOXL"
+    assert report["today_board"]["risky_stocks"][0]["action_type"] == "risk_review"
     assert report["today_board"]["buy_candidates"] == []
+    assert report["today_board"]["action_queue"][0]["queue_section"] == "tasks"
+    timeline = report["decision_timeline"]
+    assert [item["id"] for item in timeline] == [
+        "data_collection",
+        "provider_validation",
+        "signal_generation",
+        "risk_review",
+        "toss_reconciliation",
+        "order_review",
+        "notification_ready",
+    ]
+    assert timeline[1]["failure_code"] == "DATA_DISAGREEMENT"
+    assert timeline[3]["failure_code"] == "SECTOR_EXPOSURE_EXCEEDED"
+    assert timeline[3]["next_action"]["page"] == "risk"
+    assert timeline[5]["status"] == "not_evaluated"
+    replay = report["session_replay"]
+    assert replay["summary"]["run_id"] == "run-001"
+    assert replay["summary"]["step_count"] >= 7
+    assert any(item["id"] == "risk_review" for item in replay["events"])
+    assert report["data_lineage"]["summary"]["run_id"] == "run-001"
+    assert report["data_lineage"]["summary"]["provider_count"] == 2
+    assert report["failure_patterns"]["summary"]["latest_failure_code"] == "DATA_DISAGREEMENT"
+    assert report["failure_patterns"]["summary"]["top_code_count"] >= 1
+    assert report["run_evidence"]["summary"]["run_id"] == "run-001"
+    assert report["run_evidence"]["summary"]["missing_required_count"] == 0
     overview_metrics = report["metric_dictionary"]["overview"]
     assert any(item["key"] == "data_validation" for item in overview_metrics)
     assert overview_metrics[0]["plain_name"] == "가격 데이터 신뢰도"
     assert report["decision"]["top_reasons"][0]["code"] == "DATA_DISAGREEMENT"
     assert report["recommended_actions"][0]["page"] == "data-quality"
+    assert report["recovery_guide"]["status"] == "blocked"
+    assert report["recovery_guide"]["summary"]["blocked_count"] >= 1
+    assert {item["code"] for item in report["recovery_guide"]["items"]} >= {
+        "DATA_DISAGREEMENT",
+        "SECTOR_EXPOSURE_EXCEEDED",
+    }
+
+
+def test_dashboard_overview_promotes_toss_stock_warning_to_today_board(tmp_path: Path):
+    paths = _paths(tmp_path)
+    run_dir = _write_run(paths)
+    atomic_write_json(
+        run_dir / "signals_risk.json",
+        {
+            "AAPL": {
+                "signal": "entry",
+                "action": "buy",
+                "eligible": True,
+                "status": "eligible",
+                "price": 120.0,
+                "stop_price": 112.0,
+                "target_price": 140.0,
+                "approved_position_pct": 0.05,
+            }
+        },
+    )
+    atomic_write_json(
+        paths.state_dir / "stock_warning_gate.json",
+        {
+            "AAPL": {
+                "has_warning": True,
+                "message": "Broker warning flag: OVERHEATED",
+                "warnings": {"result": [{"warningType": "OVERHEATED"}]},
+            }
+        },
+    )
+
+    report = build_dashboard_overview(paths, run_id="run-001")
+
+    assert report["today_board"]["buy_candidates"] == []
+    warning_item = next(
+        item for item in report["today_board"]["risky_stocks"] if item["ticker"] == "AAPL"
+    )
+    assert warning_item["status"] == "blocked"
+    assert warning_item["action_type"] == "broker_warning"
+    assert warning_item["queue_status"] == "new"
+    assert warning_item["queue_id"] == "broker-warning-aapl"
+    assert warning_item["detail"] == "Broker warning flag: OVERHEATED"
+    assert "Toss /api/v1/stocks/{symbol}/warnings" in warning_item["source"]
+
+
+def test_dashboard_overview_adds_order_prepare_queue_for_buy_candidates(tmp_path: Path):
+    paths = _paths(tmp_path)
+    run_dir = _write_run(paths)
+    atomic_write_json(
+        run_dir / "signals_risk.json",
+        {
+            "AAPL": {
+                "signal": "entry",
+                "action": "buy",
+                "eligible": True,
+                "status": "eligible",
+                "price": 120.0,
+                "stop_price": 112.0,
+                "target_price": 140.0,
+                "approved_position_pct": 0.05,
+            }
+        },
+    )
+
+    report = build_dashboard_overview(paths, run_id="run-001")
+
+    buy_item = report["today_board"]["buy_candidates"][0]
+    assert buy_item["ticker"] == "AAPL"
+    assert buy_item["action_type"] == "buy_review"
+    assert buy_item["queue_status"] == "new"
+    order_item = report["today_board"]["order_prepares"][0]
+    assert order_item["action_type"] == "order_prepare"
+    assert order_item["page"] == "toss-account"
+    assert "OrderIntent" in order_item["source"]
+    assert any(item["queue_id"] == "order-prepare-buy-candidates" for item in report["today_board"]["action_queue"])
 
 
 def test_dashboard_decision_api_prioritizes_next_action_and_blockers(tmp_path: Path):
@@ -418,6 +529,11 @@ def test_dashboard_data_quality_flattens_provider_values_and_dates(tmp_path: Pat
     assert {row["kind"] for row in report["mismatches"]} == {"value", "date"}
     value = next(row for row in report["mismatches"] if row["kind"] == "value")
     assert value["values"] == {"yahoo": 100.0, "tiingo": 98.0}
+    lineage = report["data_lineage"]
+    assert lineage["summary"]["run_id"] == "run-001"
+    assert lineage["summary"]["provider_count"] == 2
+    assert any(node["id"] == "process:data_collection" for node in lineage["nodes"])
+    assert any(edge["to"] == "artifact:data_sources" for edge in lineage["edges"])
 
 
 def test_dashboard_risk_keeps_current_limit_and_excess(tmp_path: Path):
@@ -437,6 +553,33 @@ def test_dashboard_risk_keeps_current_limit_and_excess(tmp_path: Path):
 def test_dashboard_signals_exposes_publication_prices_and_reasons(tmp_path: Path):
     paths = _paths(tmp_path)
     run_dir = _write_run(paths)
+    previous_run = paths.runs_dir / "run-000"
+    previous_run.mkdir()
+    atomic_write_json(
+        previous_run / "manifest.json",
+        {
+            "run_id": "run-000",
+            "command": "signal",
+            "execution_mode": "shadow",
+            "status": "success",
+            "started_at": "2026-06-10T00:00:00+00:00",
+            "finished_at": "2026-06-10T00:05:00+00:00",
+            "result": {"mode": "shadow"},
+        },
+    )
+    atomic_write_json(
+        previous_run / "signals_risk.json",
+        {
+            "SOXL": {
+                "signal": "entry",
+                "action": "buy",
+                "eligible": True,
+                "status": "eligible",
+                "price": 95.0,
+                "reason_codes": ["MOMENTUM_OK"],
+            }
+        },
+    )
     atomic_write_json(
         run_dir / "signal_publication.json",
         {
@@ -444,6 +587,62 @@ def test_dashboard_signals_exposes_publication_prices_and_reasons(tmp_path: Path
             "run_id": "run-001",
             "signal_date": "2026-06-14",
             "failure_code": "SAFETY_VERDICT_BLOCKED",
+        },
+    )
+    atomic_write_json(
+        paths.state_dir / "signal_outcome.json",
+        {
+            "status": "partial",
+            "horizons": [1, 5, 20],
+            "summary": {
+                "status": "partial",
+                "signal_count": 2,
+                "evaluated_count": 1,
+                "pending_count": 1,
+                "buy_candidate_count": 1,
+                "blocked_buy_count": 1,
+                "hold_count": 0,
+                "sell_candidate_count": 0,
+            },
+            "aggregate": {"1d": {"avg_return": -0.03, "sample_count": 1, "hit_rate": 0.0}},
+            "by_decision_group": [
+                {
+                    "key": "blocked_buy",
+                    "label": "차단된 매수",
+                    "signal_count": 1,
+                    "evaluated_count": 1,
+                    "horizons": {
+                        "1d": {
+                            "avg_return": -0.03,
+                            "sample_count": 1,
+                            "hit_rate": 0.0,
+                        }
+                    },
+                }
+            ],
+            "by_strategy": [],
+            "blocked_avoidance": {
+                "1d": {
+                    "blocked_count": 1,
+                    "sample_count": 1,
+                    "avoided_loss_count": 1,
+                    "avg_avoided_loss": 0.03,
+                }
+            },
+            "source": "signals JSON · price history JSON · signal_outcome.py",
+        },
+    )
+    atomic_write_json(
+        paths.state_dir / "stock_lifecycle.json",
+        {
+            "states": {
+                "SOXL": {
+                    "ticker": "SOXL",
+                    "status": "candidate",
+                    "transitioned_at": "2026-06-10T00:05:00+00:00",
+                }
+            },
+            "history": [],
         },
     )
 
@@ -460,6 +659,32 @@ def test_dashboard_signals_exposes_publication_prices_and_reasons(tmp_path: Path
     assert row["stop_price"] == 92.0
     assert row["target_price"] == 118.0
     assert row["failed"][0]["code"] == "SECTOR_EXPOSURE_EXCEEDED"
+    history = report["signal_history"]
+    assert history["status"] == "success"
+    card = history["cards"][0]
+    assert card["ticker"] == "SOXL"
+    assert card["windows"]["7d"]["run_count"] == 2
+    assert card["windows"]["7d"]["eligible_count"] == 1
+    assert card["windows"]["7d"]["blocked_count"] == 1
+    assert card["trend"] == "deteriorating"
+    assert "운영 가능 → 차단" in card["changes"][0]["summary"]
+    outcome = report["signal_outcome"]
+    assert outcome["status"] == "partial"
+    assert outcome["summary"]["evaluated_count"] == 1
+    assert outcome["blocked_avoidance"]["1d"]["avg_avoided_loss"] == 0.03
+    assert "state/signal_outcome.json" in outcome["source"]
+    lifecycle = report["stock_lifecycle"]
+    assert lifecycle["summary"]["status_counts"]["caution"] == 1
+    lifecycle_item = lifecycle["items"][0]
+    assert lifecycle_item["ticker"] == "SOXL"
+    assert lifecycle_item["status"] == "caution"
+    assert lifecycle_item["previous_status"] == "candidate"
+    assert lifecycle["history"][0]["to_status"] == "caution"
+    stability = report["signal_stability"]
+    assert stability["summary"]["ticker_count"] == 1
+    assert stability["items"][0]["ticker"] == "SOXL"
+    assert stability["items"][0]["auto_candidate_excluded"] is True
+    assert stability["items"][0]["windows"]["10d"]["transition_count"] >= 1
 
 
 def test_dashboard_trader_lens_builds_reward_risk_and_provider_trust(tmp_path: Path):
@@ -553,6 +778,34 @@ def test_dashboard_toss_status_is_read_only_and_masks_credentials(tmp_path: Path
     assert all("client-secret" not in json.dumps(row) for row in report["endpoints"])
 
 
+def test_dashboard_api_monitoring_exposes_toss_api_drift(tmp_path: Path):
+    paths = _paths(tmp_path)
+    atomic_write_json(
+        paths.state_dir / "toss_api_drift.json",
+        {
+            "last_checked_at": datetime.now(UTC).isoformat(),
+            "status": "drifted",
+            "missing_endpoints": ["/api/v1/new-spec-route"],
+            "extra_endpoints": ["/api/v1/local-only-route"],
+            "fallback_snapshot_used": True,
+            "fetch_error": "HTTP 503",
+        },
+    )
+    atomic_write_json(paths.state_dir / "toss_openapi_snapshot.json", {"paths": {}})
+
+    report = build_dashboard_api_monitoring(paths)
+    drift = report["toss_api_drift"]
+
+    assert report["summary"]["status"] == "warning"
+    assert drift["status"] == "drifted"
+    assert drift["status_label"] == "스펙 변경 감지"
+    assert drift["missing_count"] == 1
+    assert drift["extra_count"] == 1
+    assert drift["fallback_snapshot_used"] is True
+    assert drift["snapshot_available"] is True
+    assert drift["next_action"] == "uv run jayu toss endpoints --sync"
+
+
 def test_dashboard_toss_accounts_normalizes_and_masks_account_rows(tmp_path: Path):
     paths = _paths(tmp_path)
     (tmp_path / "config.json").write_text(
@@ -591,6 +844,21 @@ def test_dashboard_toss_accounts_normalizes_and_masks_account_rows(tmp_path: Pat
 
 def test_dashboard_toss_portfolio_auto_selects_first_account_and_holdings(tmp_path: Path):
     paths = _paths(tmp_path)
+    atomic_write_json(
+        paths.state_dir / "account_attribution.json",
+        {
+            "status": "success",
+            "summary": {
+                "account_value_delta_krw": 40_000,
+                "price_effect_krw": 20_000,
+                "fx_effect_krw": 10_000,
+                "holding_flow_krw": 60_000,
+                "cash_delta_krw": -50_000,
+            },
+            "rows": [{"symbol": "AAPL", "value_delta_krw": 60_000}],
+            "source": "account_attribution.json",
+        },
+    )
     fake = FakeTossDashboardClient()
 
     report = build_dashboard_toss_portfolio(paths, client=fake)
@@ -626,6 +894,20 @@ def test_dashboard_toss_portfolio_auto_selects_first_account_and_holdings(tmp_pa
     assert {"중타", "장타"}.issubset(set(us_holding["portfolio_type_labels"]))
     assert report["fx_rates"][1]["base_currency"] == "USD"
     assert report["fx_rates"][1]["rate"] == 1400
+    assert report["fx_rates"][1]["fx_change_pct"] == 0.02
+    fx_impact = report["fx_impact"]
+    assert fx_impact["status"] == "success"
+    assert fx_impact["summary"]["evaluated_count"] == 2
+    assert fx_impact["summary"]["fx_effect_krw"] == pytest.approx(6334.8416)
+    assert fx_impact["summary"]["total_day_pnl_krw"] == pytest.approx(12187.2115)
+    aapl_impact = next(item for item in fx_impact["rows"] if item["symbol"] == "AAPL")
+    assert aapl_impact["asset_return_pct"] == 0.04
+    assert aapl_impact["fx_return_pct"] == 0.02
+    assert aapl_impact["asset_effect_krw"] == pytest.approx(12669.6833)
+    assert aapl_impact["fx_effect_krw"] == pytest.approx(6334.8416)
+    assert aapl_impact["day_return_krw"] == pytest.approx(0.0608)
+    assert report["account_attribution"]["status"] == "success"
+    assert report["account_attribution"]["summary"]["account_value_delta_krw"] == 40_000
     assert {item["region"]: item["count"] for item in report["region_totals"]} == {"KR": 1, "US": 1}
     assert {item["currency"]: item["count"] for item in report["currency_totals"]} == {
         "KRW": 1,
@@ -728,6 +1010,97 @@ def test_dashboard_lists_runs_and_rejects_path_traversal(tmp_path: Path):
         build_dashboard_overview(paths, run_id="../state")
 
 
+def test_dashboard_latest_prefers_completed_run_over_stale_running(tmp_path: Path):
+    paths = _paths(tmp_path)
+    completed_dir = paths.runs_dir / "run-completed"
+    completed_dir.mkdir()
+    atomic_write_json(
+        completed_dir / "manifest.json",
+        {
+            "run_id": "run-completed",
+            "command": "simulate",
+            "execution_mode": "research",
+            "status": "success",
+            "started_at": "2026-06-21T07:24:00+09:00",
+            "finished_at": "2026-06-21T07:24:36+09:00",
+            "result": {"mode": "research"},
+        },
+    )
+    running_dir = paths.runs_dir / "run-running"
+    running_dir.mkdir()
+    atomic_write_json(
+        running_dir / "manifest.json",
+        {
+            "run_id": "run-running",
+            "command": "simulate",
+            "execution_mode": "research",
+            "status": "running",
+            "started_at": "2026-06-21T07:25:01+09:00",
+            "finished_at": None,
+            "result": {"mode": "research"},
+        },
+    )
+
+    runs = list_dashboard_runs(paths)
+    assert runs[0]["run_id"] == "run-running"
+    assert runs[0]["is_complete"] is False
+    assert runs[1]["is_complete"] is True
+
+    report = build_dashboard_overview(paths, run_id="latest")
+    assert report["run"]["run_id"] == "run-completed"
+
+
+def test_dashboard_survivorship_exception_warning_is_not_blocker(tmp_path: Path):
+    paths = _paths(tmp_path)
+    run_dir = paths.runs_dir / "run-survivorship-review"
+    run_dir.mkdir()
+    atomic_write_json(
+        run_dir / "manifest.json",
+        {
+            "run_id": "run-survivorship-review",
+            "command": "simulate",
+            "execution_mode": "research",
+            "status": "success",
+            "started_at": "2026-06-21T07:24:00+09:00",
+            "finished_at": "2026-06-21T07:24:36+09:00",
+            "survivorship_audit": {
+                "policy": "strict",
+                "valid": True,
+                "universe_source": "manual_current_universe",
+                "universe_as_of": "2026-06-21",
+                "includes_delisted": False,
+                "exception_reason": "local research exception",
+                "warnings": [
+                    "SURVIVORSHIP_BIAS_RISK: manual_current_universe is not point-in-time membership"
+                ],
+            },
+            "result": {"mode": "research"},
+        },
+    )
+    atomic_write_json(
+        run_dir / "safety_verdict.json",
+        {
+            "overall": "review",
+            "reasons": [
+                {
+                    "component": "survivorship",
+                    "code": "SURVIVORSHIP_BIAS_RISK",
+                    "message": "SURVIVORSHIP_BIAS_RISK: manual_current_universe is not point-in-time membership",
+                }
+            ],
+        },
+    )
+
+    overview = build_dashboard_overview(paths, run_id="latest")
+    decision = build_dashboard_decision(paths, run_id="latest")
+
+    assert overview["gates"]["survivorship"]["status"] == "pass"
+    assert overview["decision"]["overall"] == "warning"
+    assert overview["decision"]["top_reasons"][0]["severity"] == "warning"
+    assert "SURVIVORSHIP_BIAS_RISK" not in overview["decision"]["headline"]
+    assert decision["top_blockers"] == []
+
+
 def test_dashboard_static_assets_are_bundled_without_order_actions():
     static_dir = dashboard_static_dir()
     assert (static_dir / "index.html").exists()
@@ -744,6 +1117,8 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "READ_ONLY_ACCOUNT" in content
     assert "renderTossAccountDashboard" in content
     assert "renderTossRegionTabs" in content
+    assert "renderReconciliationReview" in content
+    assert "RECONCILIATION_ISSUE_LABELS" in content
     assert "renderExposureDonut" in content
     assert "renderSituationTags" in content
     assert "renderPortfolioTypeCards" in content
@@ -756,9 +1131,56 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "renderDataSourceNote" in content
     assert "renderSourceLabel" in content
     assert "renderSourceCaption" in content
+    assert "RUN_CONTEXT_OPTIONAL_PAGES" in content
+    assert "function isCompletedRun" in content
+    assert "state.runs.find(isCompletedRun)" in content
+    assert "renderAutotradingReadiness" in content
+    assert "자동매매 준비 점수" in content
+    assert "renderPaperPromotionReport" in content
+    assert "Paper Trading 승격 리포트" in content
     assert "renderMetricDictionaryStrip" in content
     assert "renderTodayBoard" in content
+    assert "renderDecisionTimeline" in content
+    assert "renderSessionReplay" in content
+    assert "투자 세션 리플레이" in content
+    assert "renderDataLineageGraph" in content
+    assert "데이터 계보 그래프" in content
+    assert "데이터 계보 요약" in content
+    assert "renderFailurePatternOverview" in content
+    assert "반복 실패 패턴" in content
+    assert "renderRunEvidenceOverview" in content
+    assert "실행 증거 완성도" in content
+    assert "renderRecoveryGuide" in content
+    assert "실패 복구 가이드" in content
+    assert "renderSignalHistoryCards" in content
+    assert "renderSignalOutcomePanel" in content
+    assert "renderStockLifecycle" in content
+    assert "종목 상태 머신" in content
+    assert "renderSignalStabilityPanel" in content
+    assert "신호 안정성 점수" in content
+    assert "renderFxImpactPanel" in content
+    assert "FX impact split" in content
+    assert "FX day" in content
+    assert "renderAccountAttributionPanel" in content
+    assert "계좌 변화 원인" in content
+    assert "state/signal_outcome.json" in content
+    assert "종목별 판단 이력" in content
+    assert "투자 판단 타임라인" in content
+    assert "renderHubSignalConflictPanel" in content
+    assert "renderHubDividendCashflow" in content
+    assert "hubMetricSource" in content
+    assert "hubSummaryCard" in content
+    assert "배당 현금흐름 추정" in content
+    assert "ACTION_QUEUE_STATUS_LABELS" in content
+    assert "ACTION_TYPE_LABELS" in content
+    assert "order_prepares" in content
     assert "renderPaperOrderContract" in content
+    assert "renderAllocationPreview" in content
+    assert "자금 배분 시뮬레이터" in content
+    assert "renderOrderIntentQuality" in content
+    assert "주문 의도 품질 점수" in content
+    assert "renderTossApiDriftPanel" in content
+    assert "Toss OpenAPI Drift Check" in content
     assert "운영 지표 쉬운 설명" in content
     assert "신호 지표 쉬운 설명" in content
     assert "오늘 확인할 항목" in content
@@ -768,19 +1190,69 @@ def test_dashboard_static_assets_are_bundled_without_order_actions():
     assert "portfolio_type_overrides.json" in content
     assert "data-source-inline" in css
     assert "data-source-caption" in css
+    assert "tv-news-context" in css
+    assert "tv-related-symbol" in css
     assert "metric-help-panel" in css
     assert "metric-help-grid" in css
     assert "today-board" in css
     assert "today-card" in css
+    assert "today-item-tags" in css
+    assert "decision-timeline" in css
+    assert "timeline-item" in css
+    assert "session-replay-section" in css
+    assert "session-replay-event" in css
+    assert "data-lineage-panel" in content
+    assert "data-lineage-overview" in css
+    assert "data-lineage-node" in css
+    assert "data-lineage-edge" in css
+    assert "failure-pattern-section" in css
+    assert "failure-pattern-item" in css
+    assert "run-evidence-section" in css
+    assert "run-evidence-item" in css
+    assert "recovery-guide-section" in css
+    assert "recovery-guide-card" in css
+    assert "signal-history-section" in css
+    assert "signal-history-card" in css
+    assert "stock-lifecycle-section" in css
+    assert "stock-lifecycle-card" in css
+    assert "signal-stability-section" in css
+    assert "signal-stability-card" in css
+    assert "signal-outcome-section" in css
+    assert "signal-outcome-card" in css
+    assert "fx-impact" in css
+    assert "fx-impact-row" in css
+    assert "account-attribution" in css
+    assert "account-attribution-row" in css
+    assert "hub-conflict-section" in css
+    assert "hub-dividend-cashflow" in css
+    assert "hub-price-source" in css
+    assert "hub-source-inline" in css
+    assert "reconciliation-issue-table" in css
+    assert "order-quality-panel" in css
+    assert "allocation-preview-section" in css
+    assert "allocation-preview-card" in css
+    assert "toss-drift-panel" in css
+    assert "at-score-section" in css
+    assert "at-paper-report" in css
     assert "Data sources:" in content
     assert "Toss warnings endpoint" in content
     assert "Toss status config" in content
     assert "generated markdown slips" in content
     assert "TradingView scanner popup-technicals" in content
+    assert "TradingView 뉴스 플로우" in content
+    assert "동반 언급 심볼" in content
+    assert "주요 뉴스 맥락" in content
+    assert "TradingView news-mediator relatedSymbols · derived role map" in content
     assert "Yahoo Finance OHLCV · derived RSI" in content
     assert "Yahoo Finance adjusted close series" in content
+    assert "Yahoo Finance info.dividendYield" in content
+    assert "Yahoo Finance OHLCV latest close · daily change" in content
+    assert "portfolio_hub.py signal rules · Yahoo Finance derived indicators" in content
+    assert "portfolio_hub.py portfolio type meta · portfolio_mapping.json portfolio_types" in content
     assert "Toss /api/v1/stocks/{symbol}/warnings" in content
     assert "runs/*/manifest.json" in content
+    assert "runs/*/manifest.json · signals_risk.json" in content
+    assert "manifest.json · data_sources.json · signals_risk.json" in content
     assert "TradingView 상세 스냅샷" in content
     assert "초단기 상세 진단" in content
     assert "성과 산출 가능한 실행 없음" in content
@@ -832,6 +1304,11 @@ def test_dashboard_http_server_serves_static_page_and_api(tmp_path: Path):
         ) as response:
             decision = json.loads(response.read().decode("utf-8"))
         with urlopen(  # noqa: S310
+            f"http://127.0.0.1:{port}/api/v1/runs",
+            timeout=5,
+        ) as response:
+            runs_payload = json.loads(response.read().decode("utf-8"))
+        with urlopen(  # noqa: S310
             f"http://127.0.0.1:{port}/api/v1/runs/run-001/signals",
             timeout=5,
         ) as response:
@@ -860,6 +1337,8 @@ def test_dashboard_http_server_serves_static_page_and_api(tmp_path: Path):
     assert payload["run"]["run_id"] == "run-001"
     assert payload["decision"]["overall"] == "data_error"
     assert decision["recommended_next_action"]["page"] == "data-quality"
+    assert runs_payload["failure_patterns"]["summary"]["latest_failure_code"] == "DATA_DISAGREEMENT"
+    assert payload["run_evidence"]["summary"]["missing_required_count"] == 0
     assert signals["summary"]["blocked_count"] == 1
     assert trader_lens["summary"]["average_reward_to_risk"] == 2.25
     assert promotion["summary"]["status"] == "blocked"
@@ -891,23 +1370,77 @@ def test_dashboard_toss_order_plan(tmp_path: Path):
                     "action": "BUY",
                     "estimated_quantity": 3,
                     "price": 120,
+                    "arrival_mid": 120.1,
+                    "final_price": 121,
+                    "atr": 2.5,
+                    "relative_spread": 0.001,
                 }
             ]
         },
     )
     atomic_write_json(paths.state_dir / "stock_warning_gate.json", {"AAPL": {"has_warning": False}})
     atomic_write_json(paths.state_dir / "market_session_status.json", {"US": {"open": True}})
-    atomic_write_json(paths.signal_file, {"AAPL": {"eligible": True}})
+    atomic_write_json(
+        paths.state_dir / "allocation_preview.json",
+        {
+            "status": "success",
+            "summary": {"after_cash_krw": 100000, "cash_pct_after": 0.2},
+            "holdings": [{"ticker": "AAPL", "after_weight": 0.1}],
+            "source": "allocation_preview.json",
+        },
+    )
+    atomic_write_json(paths.signal_file, {"AAPL": {"eligible": True, "signal": "buy_candidate"}})
 
     report = build_dashboard_toss_order_plan(paths)
     assert report["order_plan"]["orders"][0]["ticker"] == "AAPL"
     assert report["warnings_gate"]["AAPL"]["has_warning"] is False
     assert report["market_session"]["US"]["open"] is True
     assert report["today_signals"]["AAPL"]["eligible"] is True
+    assert report["allocation_preview"]["status"] == "success"
+    assert report["allocation_preview"]["summary"]["cash_pct_after"] == 0.2
     assert report["paper_order_contract"]["contract"]["intent"] == "OrderIntent"
     assert report["paper_order_contract"]["intents"][0]["ticker"] == "AAPL"
     assert report["paper_order_contract"]["approval"]["model"] == "OrderApproval"
     assert report["paper_order_contract"]["approval"]["live_order_enabled"] is False
+    quality = report["paper_order_contract"]["intents"][0]["quality"]
+    assert quality["score"] == 100
+    assert quality["status"] == "success"
+    assert {item["id"] for item in quality["checks"]} == {
+        "structure",
+        "signal_alignment",
+        "warning_gate",
+        "market_session",
+        "execution_inputs",
+        "approval_lock",
+    }
+    assert report["paper_order_contract"]["quality_summary"]["average_score"] == 100
+    assert report["paper_order_contract"]["quality_summary"]["rejected_count"] == 0
+
+
+def test_dashboard_toss_order_plan_reports_rejected_order_intents(tmp_path: Path):
+    paths = _paths(tmp_path)
+    paths.state_dir.mkdir(parents=True, exist_ok=True)
+    paths.signals_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(
+        paths.state_dir / "order_plan.json",
+        {
+            "orders": [
+                {"ticker": "MSFT", "action": "BUY", "estimated_quantity": 0, "price": 430},
+                {"ticker": "TSLA", "action": "WATCH", "estimated_quantity": 1, "price": 400},
+            ]
+        },
+    )
+    atomic_write_json(paths.signal_file, {})
+
+    report = build_dashboard_toss_order_plan(paths)
+    contract = report["paper_order_contract"]
+
+    assert contract["intents"] == []
+    assert contract["quality_summary"]["status"] == "blocked"
+    assert contract["quality_summary"]["rejected_count"] == 2
+    assert contract["rejected_intents"][0]["ticker"] == "MSFT"
+    assert "수량" in contract["rejected_intents"][0]["reasons"][0]
+    assert contract["rejected_intents"][1]["ticker"] == "TSLA"
 
 
 def test_dashboard_toss_reconciliation_with_account(tmp_path: Path, monkeypatch):
@@ -930,6 +1463,76 @@ def test_dashboard_toss_reconciliation_with_account(tmp_path: Path, monkeypatch)
     
     build_dashboard_toss_reconciliation(paths, account="custom-acc-seq")
     assert received_account == ["custom-acc-seq"]
+
+
+def test_dashboard_toss_reconciliation_adds_mapping_and_policy_review(
+    tmp_path: Path,
+    monkeypatch,
+):
+    paths = _paths(tmp_path)
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "toss_api_key": "mock-key",
+                "toss_secret_key": "mock-secret",
+                "toss_account": "1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths.portfolio_file.write_text(
+        "\n".join(
+            [
+                "name,ticker,quantity,market_value,currency",
+                "Apple,AAPL,10,9000000,KRW",
+                "Mystery,MYST,1,1000000,KRW",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    paths.portfolio_mapping_file.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(
+        paths.portfolio_mapping_file,
+        {
+            "version": 1,
+            "tickers": {
+                "AAPL": {
+                    "leverage_factor": 1.0,
+                    "underlying_group": "apple",
+                    "sector": "technology",
+                    "factors": ["technology", "growth"],
+                    "currency": "USD",
+                }
+            },
+        },
+    )
+
+    def mock_reconcile(client, paths, *, account=None):
+        return {
+            "status": "synchronized",
+            "differences": [],
+            "unmapped_tickers": ["MYST"],
+        }
+
+    monkeypatch.setattr("jayu.toss.reconcile_portfolio_with_toss", mock_reconcile)
+
+    report = build_dashboard_toss_reconciliation(paths, account="custom-acc-seq")
+
+    assert report["status"] == "synchronized"
+    assert report["review_status"] == "needs_review"
+    assert report["review_summary"]["issue_count"] >= 4
+    issue_types = {item["issue_type"] for item in report["mapping_issues"]}
+    assert {"unmapped", "missing_type", "missing_sector", "overweight"} <= issue_types
+    aapl_overweight = next(
+        item
+        for item in report["mapping_issues"]
+        if item["ticker"] == "AAPL" and item["issue_type"] == "overweight"
+    )
+    assert aapl_overweight["observed"] == 0.9
+    assert aapl_overweight["source"].startswith("portfolio.csv")
+    assert report["position_policy_checks"][0]["source"] == "portfolio.csv · risk.portfolio_policy"
+    assert "portfolio_type_overrides.json" in report["review_source"]
+    assert report["portfolio_type_totals"]
 
 
 def test_dashboard_toss_reconciliation_sync_endpoint_with_account(tmp_path: Path, monkeypatch):
@@ -1040,6 +1643,7 @@ def test_build_dashboard_analysis_structure(tmp_path, monkeypatch):
     # Toss portfolio is empty dict (no credentials)
     assert isinstance(result["toss"], dict)
     assert result["tradingview_details"]["status"] == "unavailable"
+    assert result["tradingview_news"]["status"] == "unavailable"
 
 
 def test_build_dashboard_analysis_bad_ticker(tmp_path, monkeypatch):
@@ -1092,6 +1696,8 @@ def test_build_analysis_portfolio_stats_explains_failed_runs(tmp_path):
 def test_tradingview_technical_summary_maps_scores(monkeypatch):
     from jayu.dashboard import build_tradingview_technical_summary
 
+    requested_fields = []
+
     class FakeResp:
         def __init__(self, fields: str):
             self.fields = fields
@@ -1126,6 +1732,7 @@ def test_tradingview_technical_summary_maps_scores(monkeypatch):
         assert params["symbol"] == "AMEX:SOXL"
         assert headers["Referer"] == "https://www.tradingview.com/"
         assert timeout == 10
+        requested_fields.append(params["fields"])
         return FakeResp(params["fields"])
 
     import requests as req_module
@@ -1139,7 +1746,24 @@ def test_tradingview_technical_summary_maps_scores(monkeypatch):
     assert result["consensus"]["signal"] == "strong_buy"
     assert result["consensus"]["action"] == "buy"
     assert result["consensus_score"] == 0.6
-    assert len(result["timeframes"]) == 5
+    assert len(result["timeframes"]) == 10
+    assert [row["timeframe"] for row in result["timeframes"]] == [
+        "1M",
+        "1W",
+        "1D",
+        "240",
+        "120",
+        "60",
+        "30",
+        "15",
+        "5",
+        "1",
+    ]
+    assert any("Recommend.All|5" in fields for fields in requested_fields)
+    assert any("Recommend.All|15" in fields for fields in requested_fields)
+    assert any("Recommend.All|30" in fields for fields in requested_fields)
+    assert any("Recommend.All|1W" in fields for fields in requested_fields)
+    assert any("Recommend.All|1M" in fields for fields in requested_fields)
     assert result["timeframes"][0]["recommend_ma"] == 0.8
     assert result["timeframes"][0]["recommendation"]["label"] == "강한 매수"
     assert result["timeframes"][0]["oscillators"]["rsi"] == 61.5
@@ -1181,7 +1805,7 @@ def test_tradingview_technical_summary_keeps_partial_timeframes(monkeypatch):
 
     assert result["status"] == "partial"
     assert result["consensus"]["label"] == "매수"
-    assert len(result["timeframes"]) == 4
+    assert len(result["timeframes"]) == 9
     assert result["errors"][0]["timeframe"] == "1"
 
 
@@ -1238,3 +1862,74 @@ def test_tradingview_symbol_details_normalizes_right_panel_fields(monkeypatch):
     assert result["performance"]["one_month"] == 97.7414
     assert result["volume"]["average_10d"] == 71218496
     assert result["fund"]["nav_discount_premium"] == -0.0432
+
+
+def test_tradingview_news_flow_summarizes_related_symbols(monkeypatch):
+    from jayu.dashboard import build_tradingview_news_flow
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "items": [
+                    {
+                        "id": "etfcom:1",
+                        "title": "DRAM Powers Another Big Week of ETF Inflows",
+                        "published": 1778533216,
+                        "urgency": 2,
+                        "storyPath": "/news/etfcom:1-dram-powers/",
+                        "provider": {"id": "etfcom", "name": "etf.com", "url": "https://www.etf.com/"},
+                        "relatedSymbols": [
+                            {"symbol": "AMEX:SOXL", "logoid": "direxion"},
+                            {"symbol": "NASDAQ:SMH", "logoid": "vaneck"},
+                            {"symbol": "NASDAQ:QQQ", "logoid": "invesco"},
+                        ],
+                    },
+                    {
+                        "id": "etfcom:2",
+                        "title": "US Stocks Reclaim the Lead",
+                        "published": 1777899600,
+                        "urgency": 2,
+                        "storyPath": "/news/etfcom:2-us-stocks/",
+                        "provider": {"id": "etfcom", "name": "etf.com"},
+                        "relatedSymbols": [
+                            {"symbol": "AMEX:SOXL", "logoid": "direxion"},
+                            {"symbol": "NASDAQ:SMH", "logoid": "vaneck"},
+                            {"symbol": "AMEX:VOO", "logoid": "vanguard"},
+                        ],
+                    },
+                ]
+            }
+
+    def fake_get(url, *, params, headers, timeout):
+        assert url == "https://news-mediator.tradingview.com/public/news-flow/v2/news"
+        assert ("filter", "lang:en") in params
+        assert ("filter", "symbol:AMEX:SOXL") in params
+        assert ("client", "landing") in params
+        assert headers["Referer"] == "https://www.tradingview.com/"
+        assert timeout == 10
+        return FakeResp()
+
+    import requests as req_module
+
+    monkeypatch.setattr(req_module, "get", fake_get)
+
+    result = build_tradingview_news_flow("SOXL")
+
+    assert result["status"] == "ok"
+    assert result["source"] == "TradingView news-mediator"
+    assert result["item_count"] == 2
+    assert result["items"][0]["url"] == "https://www.tradingview.com/news/etfcom:1-dram-powers/"
+    assert result["items"][0]["related_symbols"][0]["is_primary"] is True
+    assert result["primary_mentions"]["count"] == 2
+    assert result["related_symbols"][0]["symbol"] == "NASDAQ:SMH"
+    assert result["related_symbols"][0]["count"] == 2
+    assert result["related_symbols"][0]["role"]["id"] == "semiconductor"
+    assert result["related_symbols"][1]["role"]["id"] == "broad_market"
+    assert result["news_context"]["dominant_theme"]["id"] == "semiconductor"
+    assert result["news_context"]["theme_counts"][0]["mention_count"] == 2
+    assert result["news_context"]["primary_mention_rate"] == 1.0
+    assert any("직접 섹터" in note["text"] for note in result["news_context"]["context_notes"])
+    assert result["provider_counts"]["etf.com"] == 2

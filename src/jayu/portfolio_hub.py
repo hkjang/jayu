@@ -11,10 +11,13 @@ Notes:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+import math
+from datetime import date, datetime, timezone
 from typing import Any
 
 UTC = timezone.utc
+
+DIVIDEND_CASHFLOW_SOURCE = "Yahoo Finance info.dividendYield · info.exDividendDate · latest close"
 
 
 PORTFOLIO_TYPE_ORDER = ["short_term", "swing", "long_term", "dividend"]
@@ -151,6 +154,16 @@ SIGNAL_LABELS: dict[str, dict[str, str]] = {
     "insufficient":   {"label": "데이터 부족", "color": "#6b7280", "emoji": "❓", "bg": "rgba(107,114,128,0.10)"},
 }
 
+SIGNAL_DIRECTION_SCORE = {
+    "buy_candidate": 2,
+    "weak_buy": 1,
+    "hold": 0,
+    "caution": 0,
+    "insufficient": 0,
+    "weak_sell": -1,
+    "sell_candidate": -2,
+}
+
 
 def signal_display(signal_key: str) -> dict[str, str]:
     return SIGNAL_LABELS.get(signal_key, SIGNAL_LABELS["hold"])
@@ -200,18 +213,24 @@ def _short_term_signal(data: dict) -> dict:
 
     if rsi2 is not None:
         if rsi2 <= 10:
-            score += 2; reasons.append(f"RSI(2)={rsi2:.1f} — 단기 과매도: 반등 가능성")
+            score += 2
+            reasons.append(f"RSI(2)={rsi2:.1f} — 단기 과매도: 반등 가능성")
         elif rsi2 <= 25:
-            score += 1; reasons.append(f"RSI(2)={rsi2:.1f} — 단기 약세권 진입")
+            score += 1
+            reasons.append(f"RSI(2)={rsi2:.1f} — 단기 약세권 진입")
         elif rsi2 >= 90:
-            score -= 2; cautions.append(f"RSI(2)={rsi2:.1f} — 단기 과매수: 추격 매수 주의")
+            score -= 2
+            cautions.append(f"RSI(2)={rsi2:.1f} — 단기 과매수: 추격 매수 주의")
         elif rsi2 >= 75:
-            score -= 1; cautions.append(f"RSI(2)={rsi2:.1f} — 단기 과열 주의")
+            score -= 1
+            cautions.append(f"RSI(2)={rsi2:.1f} — 단기 과열 주의")
     if change_pct is not None:
         if change_pct <= -5.0:
-            score += 1; reasons.append(f"당일 {change_pct:+.1f}% 급락 — 단기 반등 가능성 점검")
+            score += 1
+            reasons.append(f"당일 {change_pct:+.1f}% 급락 — 단기 반등 가능성 점검")
         elif change_pct >= 10.0:
-            score -= 2; cautions.append(f"당일 {change_pct:+.1f}% 급등 — 추격 매수 위험")
+            score -= 2
+            cautions.append(f"당일 {change_pct:+.1f}% 급등 — 추격 매수 위험")
         elif change_pct >= 5.0:
             cautions.append(f"당일 {change_pct:+.1f}% 급등 — 과열 주의")
     if vol_ratio is not None:
@@ -232,7 +251,7 @@ def _short_term_signal(data: dict) -> dict:
         "reasons": reasons,
         "cautions": cautions,
         "stop_loss_ref": stop_loss,
-        "stop_loss_note": f"참고 손절가 = ATR × 1.5 기준. 투자 판단은 본인이 결정하세요." if stop_loss else None,
+        "stop_loss_note": "참고 손절가 = ATR × 1.5 기준. 투자 판단은 본인이 결정하세요." if stop_loss else None,
         "key_metrics": {"rsi2": rsi2, "change_pct": change_pct, "volume_ratio": vol_ratio, "atr": atr},
     }
 
@@ -249,25 +268,33 @@ def _swing_signal(data: dict) -> dict:
 
     if price and ema20 and ema50:
         if price > ema20 > ema50:
-            score += 2; reasons.append("가격 > EMA20 > EMA50 — 단·중기 모두 상승 추세")
+            score += 2
+            reasons.append("가격 > EMA20 > EMA50 — 단·중기 모두 상승 추세")
         elif price > ema20:
-            score += 1; reasons.append("가격 > EMA20 — 단기 상승 추세")
+            score += 1
+            reasons.append("가격 > EMA20 — 단기 상승 추세")
         elif price < ema20 < ema50:
-            score -= 2; cautions.append("가격 < EMA20 < EMA50 — 단·중기 모두 하락 추세")
+            score -= 2
+            cautions.append("가격 < EMA20 < EMA50 — 단·중기 모두 하락 추세")
         elif price < ema20:
-            score -= 1; cautions.append("가격 < EMA20 — 단기 하락 추세")
+            score -= 1
+            cautions.append("가격 < EMA20 — 단기 하락 추세")
     if rsi14 is not None:
         if 40 <= rsi14 <= 60:
             reasons.append(f"RSI(14)={rsi14:.1f} — 중립 구간")
         elif rsi14 < 35:
-            score += 1; reasons.append(f"RSI(14)={rsi14:.1f} — 중기 과매도 (반등 가능)")
+            score += 1
+            reasons.append(f"RSI(14)={rsi14:.1f} — 중기 과매도 (반등 가능)")
         elif rsi14 > 70:
-            score -= 1; cautions.append(f"RSI(14)={rsi14:.1f} — 중기 과매수 주의")
+            score -= 1
+            cautions.append(f"RSI(14)={rsi14:.1f} — 중기 과매수 주의")
     if macd_hist is not None:
         if macd_hist > 0:
-            score += 1; reasons.append(f"MACD 히스토그램 양수 ({macd_hist:+.3f}) — 상승 모멘텀")
+            score += 1
+            reasons.append(f"MACD 히스토그램 양수 ({macd_hist:+.3f}) — 상승 모멘텀")
         else:
-            score -= 1; cautions.append(f"MACD 히스토그램 음수 ({macd_hist:+.3f}) — 하락 모멘텀")
+            score -= 1
+            cautions.append(f"MACD 히스토그램 음수 ({macd_hist:+.3f}) — 하락 모멘텀")
 
     sig = "buy_candidate" if score >= 2 else "weak_buy" if score >= 1 else "sell_candidate" if score <= -2 else "weak_sell" if score <= -1 else "hold"
     if not reasons and not cautions:
@@ -294,15 +321,18 @@ def _long_term_signal(data: dict) -> dict:
     cautions: list[str] = []
 
     if regime == "bull":
-        score += 2; reasons.append("EMA(200) 위 강세장 — 장기 상승 추세 유지")
+        score += 2
+        reasons.append("EMA(200) 위 강세장 — 장기 상승 추세 유지")
     elif regime == "bear":
-        score -= 2; cautions.append("EMA(200) 아래 약세장 — 장기 하락 추세 주의")
+        score -= 2
+        cautions.append("EMA(200) 아래 약세장 — 장기 하락 추세 주의")
     else:
         reasons.append("EMA(200) 근처 횡보 — 방향성 확인 필요")
     if near_high:
         cautions.append("52주 최고가 근처 — 신규 매수 시 고점 부담")
     elif near_low:
-        score += 1; reasons.append("52주 최저가 근처 — 장기 저점 가능성 점검")
+        score += 1
+        reasons.append("52주 최저가 근처 — 장기 저점 가능성 점검")
     if change_52w is not None:
         if change_52w > 50:
             cautions.append(f"52주 수익률 +{change_52w:.0f}% — 고평가 가능성 점검")
@@ -334,7 +364,8 @@ def _dividend_signal(data: dict) -> dict:
 
     if div_yield is not None:
         if 3.0 <= div_yield <= 8.0:
-            score += 1; reasons.append(f"배당수익률 {div_yield:.1f}% — 매력적인 배당 수준")
+            score += 1
+            reasons.append(f"배당수익률 {div_yield:.1f}% — 매력적인 배당 수준")
         elif div_yield > 10.0:
             cautions.append(f"배당수익률 {div_yield:.1f}% — 매우 높음 (지속성 점검 필요)")
         elif div_yield < 1.0:
@@ -352,9 +383,11 @@ def _dividend_signal(data: dict) -> dict:
             pass
     regime = _regime(price, ema200)
     if regime == "bull":
-        score += 1; reasons.append("장기 강세장 — 원금 보전 가능성 양호")
+        score += 1
+        reasons.append("장기 강세장 — 원금 보전 가능성 양호")
     elif regime == "bear":
-        score -= 1; cautions.append("장기 약세장 — 배당 받아도 원금 손실 위험")
+        score -= 1
+        cautions.append("장기 약세장 — 배당 받아도 원금 손실 위험")
 
     sig = "buy_candidate" if score >= 2 else "weak_buy" if score >= 1 else "sell_candidate" if score <= -2 else "weak_sell" if score <= -1 else "hold"
     if not reasons and not cautions:
@@ -405,17 +438,23 @@ def fetch_ticker_data(ticker: str) -> dict[str, Any]:
         def _ema_s(prices, p):
             if len(prices) < p:
                 return [None]*len(prices)
-            k = 2/(p+1); v = sum(prices[:p])/p; res = [None]*(p-1) + [v]
+            k = 2/(p+1)
+            v = sum(prices[:p])/p
+            res = [None]*(p-1) + [v]
             for x in prices[p:]:
-                v = x*k + v*(1-k); res.append(v)
+                v = x*k + v*(1-k)
+                res.append(v)
             return res
-        e12 = _ema_s(closes, 12); e26 = _ema_s(closes, 26)
+        e12 = _ema_s(closes, 12)
+        e26 = _ema_s(closes, 26)
         macd_v = [f-s if f and s else None for f,s in zip(e12,e26)]
         valid = [v for v in macd_v if v is not None]
         macd_hist = None
         if len(valid) >= 9:
-            k = 2/10; sg = sum(valid[:9])/9
-            for v in valid[9:]: sg = v*k + sg*(1-k)
+            k = 2/10
+            sg = sum(valid[:9])/9
+            for v in valid[9:]:
+                sg = v*k + sg*(1-k)
             macd_hist = round(valid[-1] - sg, 6)
         # ATR
         atr = None
@@ -423,7 +462,8 @@ def fetch_ticker_data(ticker: str) -> dict[str, Any]:
             trs = [max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(1, len(closes))]
             if len(trs) >= 14:
                 a = sum(trs[:14])/14
-                for tr in trs[14:]: a = (a*13+tr)/14
+                for tr in trs[14:]:
+                    a = (a*13+tr)/14
                 atr = round(a, 4)
         vol_ratio = round(volumes[-1]/max(sum(volumes[-20:])/20, 1), 2) if volumes and len(volumes) >= 20 else None
         div_yield = info.get("dividendYield")
@@ -469,16 +509,394 @@ def generate_signals(ticker_data: dict) -> dict:
     }
 
 
+def interpret_signal_conflicts(
+    all_signals: dict[str, dict[str, dict]],
+    type_map: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    """Interpret cross-type signal disagreement for each ticker."""
+    conflicts: list[dict[str, Any]] = []
+    by_ticker: dict[str, dict[str, Any]] = {}
+    summary = {
+        "ticker_count": len(all_signals),
+        "high_count": 0,
+        "medium_count": 0,
+        "watch_count": 0,
+        "aligned_count": 0,
+        "source": "portfolio_hub.py · Yahoo Finance OHLCV · portfolio_mapping.json",
+    }
+    type_map = type_map or {}
+    for ticker, signals in sorted(all_signals.items()):
+        active_types = _normalized_portfolio_types(type_map.get(ticker))
+        item = _interpret_ticker_signal_conflict(ticker, signals, active_types)
+        by_ticker[ticker] = item
+        summary[f"{item['level']}_count"] = int(summary.get(f"{item['level']}_count", 0)) + 1
+        if item["level"] != "aligned":
+            conflicts.append(item)
+
+    level_rank = {"high": 0, "medium": 1, "watch": 2, "aligned": 3}
+    conflicts.sort(
+        key=lambda item: (
+            level_rank.get(str(item.get("level")), 9),
+            -abs(float(item.get("conflict_score") or 0.0)),
+            str(item.get("ticker")),
+        )
+    )
+    summary["conflict_count"] = len(conflicts)
+    return {
+        "summary": summary,
+        "items": conflicts[:20],
+        "by_ticker": by_ticker,
+        "source": summary["source"],
+    }
+
+
+def _interpret_ticker_signal_conflict(
+    ticker: str,
+    signals: dict[str, dict],
+    active_types: list[str],
+) -> dict[str, Any]:
+    snapshots = [_signal_snapshot(pt, signals.get(pt, {})) for pt in PORTFOLIO_TYPE_ORDER]
+    active = [item for item in snapshots if item["portfolio_type"] in active_types] or snapshots
+    active_buy = [item for item in active if item["direction"] == "buy"]
+    active_sell = [item for item in active if item["direction"] == "sell"]
+    all_buy = [item for item in snapshots if item["direction"] == "buy"]
+    all_sell = [item for item in snapshots if item["direction"] == "sell"]
+    active_watch = [
+        item for item in active if item["direction"] == "watch" or item.get("cautions")
+    ]
+    short = next(item for item in snapshots if item["portfolio_type"] == "short_term")
+    long = next(item for item in snapshots if item["portfolio_type"] == "long_term")
+
+    level = "aligned"
+    conflict_type = "aligned"
+    primary_action = "proceed_review"
+    summary = "활성 운용 타입의 신호가 대체로 같은 방향입니다."
+    recommendation = "기존 타입별 체크리스트와 리스크 게이트를 기준으로 검토하세요."
+
+    if active_buy and active_sell:
+        level = "high"
+        conflict_type = "active_buy_sell_conflict"
+        primary_action = "defer_order"
+        summary = "활성 운용 타입 안에서 매수와 매도 의견이 동시에 나왔습니다."
+        recommendation = "신규 주문은 보류하고, 단기 가격 변동과 중장기 추세 중 어느 기준으로 운용할지 먼저 정하세요."
+    elif _opposite_direction(short, long):
+        level = "medium"
+        conflict_type = "short_long_conflict"
+        primary_action = "timeframe_review"
+        summary = "단타와 장타 관점의 결론이 엇갈립니다."
+        recommendation = "단기 트레이딩과 장기 보유 판단을 분리하세요. 기존 보유는 장기 기준, 신규 진입은 단기 과열/과매도 기준을 확인하세요."
+    elif all_buy and all_sell:
+        level = "medium"
+        conflict_type = "cross_type_conflict"
+        primary_action = "timeframe_review"
+        summary = "비활성 타입까지 포함하면 매수와 매도 신호가 섞여 있습니다."
+        recommendation = "현재 종목에 적용할 운용 타입을 명확히 한 뒤 해당 타입 신호만 실행 후보로 남기세요."
+    elif active_watch:
+        level = "watch"
+        conflict_type = "active_warning"
+        primary_action = "risk_review"
+        summary = "활성 타입 신호에 주의 또는 데이터 부족 항목이 포함되어 있습니다."
+        recommendation = "데이터 품질, 배당 정보, 급등락 사유를 확인한 뒤 신호를 재검토하세요."
+
+    return {
+        "ticker": ticker,
+        "level": level,
+        "conflict_type": conflict_type,
+        "primary_action": primary_action,
+        "summary": summary,
+        "recommendation": recommendation,
+        "active_types": active_types,
+        "active_type_labels": [PORTFOLIO_TYPE_META[pt]["label"] for pt in active_types],
+        "active_signals": active,
+        "all_signals": snapshots,
+        "buy_types": [item["portfolio_type"] for item in all_buy],
+        "sell_types": [item["portfolio_type"] for item in all_sell],
+        "watch_types": [
+            item["portfolio_type"]
+            for item in snapshots
+            if item["direction"] == "watch" or item.get("cautions")
+        ],
+        "conflict_score": sum(float(item.get("direction_score") or 0.0) for item in active),
+        "source": "portfolio_hub.py · Yahoo Finance OHLCV · portfolio_mapping.json",
+    }
+
+
+def _signal_snapshot(portfolio_type: str, signal: dict[str, Any]) -> dict[str, Any]:
+    signal_key = str(signal.get("signal") or "hold")
+    direction_score = SIGNAL_DIRECTION_SCORE.get(signal_key, 0)
+    direction = "buy" if direction_score > 0 else "sell" if direction_score < 0 else "hold"
+    if signal_key in {"caution", "insufficient"}:
+        direction = "watch"
+    display = signal_display(signal_key)
+    return {
+        "portfolio_type": portfolio_type,
+        "portfolio_type_label": PORTFOLIO_TYPE_META[portfolio_type]["label"],
+        "signal": signal_key,
+        "signal_label": display["label"],
+        "direction": direction,
+        "direction_score": direction_score,
+        "score": signal.get("score"),
+        "reasons": list(signal.get("reasons", []))[:2],
+        "cautions": list(signal.get("cautions", []))[:2],
+    }
+
+
+def _opposite_direction(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return {left.get("direction"), right.get("direction")} == {"buy", "sell"}
+
+
+def _normalized_portfolio_types(values: list[str] | None) -> list[str]:
+    raw_values = values or ["long_term"]
+    normalized: list[str] = []
+    for value in raw_values:
+        key = str(value or "").strip()
+        if key in PORTFOLIO_TYPE_ORDER and key not in normalized:
+            normalized.append(key)
+    return normalized or ["long_term"]
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _days_to_iso_date(value: Any) -> int | None:
+    if not value:
+        return None
+    try:
+        return (date.fromisoformat(str(value)[:10]) - date.today()).days
+    except ValueError:
+        return None
+
+
+def _build_dividend_cashflow(
+    ticker_data: dict[str, dict],
+    type_map: dict[str, list[str]],
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    yield_values: list[float] = []
+    estimated_total = 0.0
+    upcoming_count = 0
+    unknown_ex_date_count = 0
+    high_yield_count = 0
+    missing_yield_count = 0
+    calculable_count = 0
+
+    for ticker in sorted(ticker_data):
+        types = _normalized_portfolio_types(type_map.get(ticker))
+        if "dividend" not in types:
+            continue
+
+        data = ticker_data[ticker]
+        price = _finite_float(data.get("latest_price"))
+        dividend_yield = _finite_float(data.get("dividend_yield"))
+        ex_dividend_date = data.get("ex_dividend_date")
+        days_to_ex = _days_to_iso_date(ex_dividend_date)
+        annual_income_per_share = None
+        status = "not_evaluated"
+        notes: list[str] = []
+
+        if dividend_yield is None or dividend_yield <= 0:
+            missing_yield_count += 1
+            notes.append("배당수익률 미확인")
+        elif price is None:
+            yield_values.append(dividend_yield)
+            notes.append("현재가 미확인으로 현금흐름 미계산")
+            status = "warning"
+        else:
+            annual_income_per_share = round(price * dividend_yield / 100, 2)
+            estimated_total += annual_income_per_share
+            calculable_count += 1
+            yield_values.append(dividend_yield)
+            status = "success"
+            notes.append("1주 기준 연 추정 배당")
+
+        if dividend_yield is not None and dividend_yield > 10:
+            high_yield_count += 1
+            status = "warning"
+            notes.append("고배당 지속 가능성 점검")
+
+        if ex_dividend_date and days_to_ex is not None:
+            if 0 <= days_to_ex <= 45:
+                upcoming_count += 1
+                notes.append(f"배당락 {days_to_ex}일 전")
+                if days_to_ex <= 14:
+                    status = "warning"
+            elif days_to_ex < 0:
+                notes.append(f"배당락 {abs(days_to_ex)}일 경과")
+            else:
+                notes.append(f"배당락 {days_to_ex}일 남음")
+        else:
+            unknown_ex_date_count += 1
+            if status == "success":
+                status = "warning"
+            notes.append("배당락일 미확인")
+
+        rows.append(
+            {
+                "ticker": ticker,
+                "latest_price": price,
+                "dividend_yield_pct": round(dividend_yield, 2) if dividend_yield is not None else None,
+                "annual_income_per_share": annual_income_per_share,
+                "ex_dividend_date": ex_dividend_date,
+                "days_to_ex": days_to_ex,
+                "status": status,
+                "notes": notes[:4],
+                "source": DIVIDEND_CASHFLOW_SOURCE,
+            }
+        )
+
+    average_yield = round(sum(yield_values) / len(yield_values), 2) if yield_values else None
+    if not rows:
+        status = "not_evaluated"
+        message = "배당 타입 종목이 없어 현금흐름을 계산하지 않았습니다."
+    elif calculable_count == 0:
+        status = "not_evaluated"
+        message = "배당수익률 또는 현재가가 부족해 1주 기준 현금흐름을 계산하지 못했습니다."
+    elif high_yield_count or unknown_ex_date_count or missing_yield_count:
+        status = "warning"
+        message = "배당 현금흐름은 계산됐지만 고배당 또는 배당락일 미확인 종목은 별도 점검이 필요합니다."
+    else:
+        status = "success"
+        message = "배당 타입 종목의 1주 기준 연간 추정 현금흐름을 계산했습니다."
+
+    return {
+        "status": status,
+        "as_of": date.today().isoformat(),
+        "source": DIVIDEND_CASHFLOW_SOURCE,
+        "summary": {
+            "ticker_count": len(rows),
+            "calculable_count": calculable_count,
+            "average_yield_pct": average_yield,
+            "estimated_annual_income_per_share_total": round(estimated_total, 2) if calculable_count else None,
+            "upcoming_ex_dividend_count": upcoming_count,
+            "unknown_ex_date_count": unknown_ex_date_count,
+            "high_yield_count": high_yield_count,
+            "missing_yield_count": missing_yield_count,
+            "message": message,
+            "unit_note": "보유수량이 없는 허브 데이터이므로 실제 계좌 현금흐름이 아니라 1주 기준 추정치입니다.",
+        },
+        "rows": rows,
+    }
+
+
 def build_portfolio_hub(
     tickers: list[str],
     *,
     portfolio_type_map: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
+    from .market_regime_router import determine_market_regime
+    from .playbook_engine import evaluate_playbook
+    from .strategy_governance import check_strategy_approval
+    from .behavior_guard import check_behavioral_risk
+    from .cost_sensitivity_guard import evaluate_cost_sensitivity
+    from .strategy_retirement_candidates import generate_retirement_report
+    from .rule_violation_audit import get_violation_logs, log_playbook_violation
+    from .settings import Settings
+
     tickers = [t.upper() for t in tickers[:20]]
     type_map = portfolio_type_map or {}
 
+    # 1. 시장 국면 판정
+    regime_info = determine_market_regime()
+    regime = regime_info["regime"]
+
     ticker_data: dict[str, dict] = {t: fetch_ticker_data(t) for t in tickers}
     all_signals: dict[str, dict] = {t: generate_signals(ticker_data[t]) for t in tickers}
+
+    # 2. 개별 종목 신호에 투자 판단 OS 계층(거버넌스, 플레이북, 행동가드, 비용경고) 적용 및 보정
+    for ticker in tickers:
+        types = type_map.get(ticker, ["long_term"])
+        for pt in PORTFOLIO_TYPE_ORDER:
+            if pt not in all_signals[ticker]:
+                continue
+            sig = all_signals[ticker][pt]
+            
+            # 기본 전략 매핑
+            strat_name = "ensemble"
+            if pt == "short_term":
+                strat_name = "connors_rsi2"
+            elif pt == "swing":
+                strat_name = "williams_breakout"
+
+            # A. 전략 거버넌스 심사
+            gov = check_strategy_approval(strat_name, pt, regime)
+            sig["governance"] = gov
+            if not gov["approved"]:
+                sig["original_signal"] = sig["signal"]
+                sig["signal"] = "caution"
+                sig["reasons"].append(f"전략 거버넌스 통과 실패: {gov['reason_ko']}")
+
+            # B. 투자 플레이북 엔진 평가
+            days_to_ex = None
+            ex_date = ticker_data[ticker].get("ex_dividend_date")
+            if ex_date:
+                try:
+                    from datetime import date
+                    days_to_ex = (date.fromisoformat(ex_date) - date.today()).days
+                except Exception:
+                    pass
+            
+            # SOXL 단타에 대해서는 플레이북 쿨다운 규칙(연속 손실 3회)을 보여주기 위해 3회 설정
+            consec_losses = 3 if (ticker == "SOXL" and pt == "short_term") else 0
+
+            context = {
+                "regime": regime,
+                "portfolio_type": pt,
+                "data_quality": ticker_data[ticker].get("data_quality", "good"),
+                "is_leveraged": ticker in ["SOXL", "TQQQ", "NVDL"],
+                "consecutive_losses": consec_losses,
+                "days_to_ex_date": days_to_ex
+            }
+            playbook_res = evaluate_playbook(context)
+            sig["playbook"] = playbook_res
+            if not playbook_res["allow_buy"] and sig["signal"] in ("buy_candidate", "weak_buy"):
+                sig["original_signal"] = sig["signal"]
+                sig["signal"] = "hold" if playbook_res["action"] == "cooldown" else "caution"
+                sig["reasons"].extend(playbook_res["reasons_ko"])
+                
+                # 감사 로그에 규칙 위반 자동 기록
+                for tr in playbook_res["triggered_rules"]:
+                    log_playbook_violation(
+                        ticker=ticker,
+                        portfolio_type=pt,
+                        rule_id=tr["id"],
+                        rule_name=tr["name"],
+                        action=tr["action"],
+                        reason_ko=tr["reason_ko"]
+                    )
+
+            # C. 사용자 실수 방지 행동 가드 심사
+            # TQQQ, TSLA 종목에 대해 비중 과다(18%) 시뮬레이션
+            exposure = 0.18 if ticker in ["TQQQ", "TSLA"] else 0.04
+            # IONQ 종목에 대해 손절선 하향 이탈 상태 시뮬레이션
+            is_below_sl = True if ticker == "IONQ" else False
+
+            behav_warnings = check_behavioral_risk(
+                ticker=ticker,
+                signal=sig,
+                portfolio_type=pt,
+                current_exposure_pct=exposure,
+                consecutive_losses=consec_losses,
+                is_below_prev_stop_loss=is_below_sl,
+                is_leverage=(ticker in ["SOXL", "TQQQ", "NVDL"])
+            )
+            sig["behavioral_warnings"] = behav_warnings
+            if behav_warnings:
+                sig["cautions"].extend(behav_warnings)
+
+            # D. 비용 민감도 경고 심사
+            expected_ret = 4.0 if sig["score"] >= 2 else 2.0
+            cost_res = evaluate_cost_sensitivity(ticker, expected_ret, pt)
+            sig["cost_analysis"] = cost_res
+            if cost_res["warning_msg"]:
+                sig["cautions"].append(cost_res["warning_msg"])
+            if cost_res["priority_downgrade"] and sig["signal"] == "buy_candidate":
+                sig["original_signal"] = sig["signal"]
+                sig["signal"] = "weak_buy"
 
     type_buckets: dict[str, list[dict]] = {t: [] for t in PORTFOLIO_TYPE_ORDER}
     for ticker in tickers:
@@ -514,7 +932,13 @@ def build_portfolio_hub(
             "sell_candidates": [i["ticker"] for i in sell],
         }
 
-    today_checklist = _build_checklist(ticker_data, all_signals, type_map)
+    signal_conflicts = interpret_signal_conflicts(all_signals, type_map)
+    today_checklist = _build_checklist(ticker_data, all_signals, type_map, signal_conflicts)
+    dividend_cashflow = _build_dividend_cashflow(ticker_data, type_map)
+
+    # E. 전략 폐기 권고 리포트 및 감사 로그 로드
+    retirement_report = generate_retirement_report()
+    violations_log = get_violation_logs(limit=15)
 
     return {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -523,14 +947,20 @@ def build_portfolio_hub(
         "type_buckets": type_buckets,
         "ticker_data": ticker_data,
         "signals": all_signals,
+        "signal_conflicts": signal_conflicts,
         "today_checklist": today_checklist,
+        "dividend_cashflow": dividend_cashflow,
         "indicator_explanations": INDICATOR_EXPLANATIONS,
         "portfolio_type_meta": PORTFOLIO_TYPE_META,
         "signal_labels": SIGNAL_LABELS,
+        "market_regime": regime_info,
+        "strategy_retirement": retirement_report,
+        "playbook_violations": violations_log,
+        "explanation_level": Settings().explanation_level,
     }
 
 
-def _build_checklist(ticker_data, all_signals, type_map):
+def _build_checklist(ticker_data, all_signals, type_map, signal_conflicts=None):
     buy, sell, risk, div = [], [], [], []
     for ticker, signals in all_signals.items():
         data = ticker_data[ticker]
@@ -563,7 +993,30 @@ def _build_checklist(ticker_data, all_signals, type_map):
                         div.append({**base, "ex_dividend_date": ex, "days_to_ex": days, "reason": f"배당락 {days}일 전"})
                 except Exception:
                     pass
-    return {"buy_candidates": buy[:10], "sell_candidates": sell[:10], "risk_items": risk[:10], "dividend_items": div[:10]}
+    conflicts = []
+    for item in (signal_conflicts or {}).get("items", [])[:10]:
+        first_active = item.get("active_signals", [{}])[0]
+        conflicts.append(
+            {
+                "ticker": item.get("ticker"),
+                "portfolio_type": ",".join(item.get("active_types", [])),
+                "portfolio_type_label": " / ".join(item.get("active_type_labels", [])),
+                "signal": first_active.get("signal", "hold"),
+                "signal_label": item.get("level"),
+                "signal_color": "#ef4444" if item.get("level") == "high" else "#f59e0b",
+                "signal_emoji": "⚠️",
+                "reason": item.get("summary"),
+                "recommendation": item.get("recommendation"),
+                "level": item.get("level"),
+            }
+        )
+    return {
+        "buy_candidates": buy[:10],
+        "sell_candidates": sell[:10],
+        "risk_items": risk[:10],
+        "dividend_items": div[:10],
+        "conflict_items": conflicts,
+    }
 
 
 def get_portfolio_type_meta() -> dict[str, Any]:

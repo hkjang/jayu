@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import subprocess
+import sys
+import threading
 import time
 import webbrowser
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,18 +20,118 @@ from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
+from .account_attribution import empty_account_attribution
+from .allocation_simulator import empty_allocation_preview
+from .data_lineage import build_data_lineage_report, empty_data_lineage
 from .failure_codes import FailureCode
+from .failure_patterns import build_failure_patterns_report, empty_failure_patterns
 from .io import read_json, stable_hash
 from .metric_dictionary import metric_dictionary_payload
 from .paper_trading import OrderApproval, OrderIntent, OrderPlan
 from .paths import RuntimePaths
-from .portfolio import load_portfolio_mapping
+from .portfolio import load_portfolio, load_portfolio_mapping
 from .provider_factory import build_provider_registry, provider_configuration_audit, provider_policy
+from .recovery_guide import build_recovery_guide, empty_recovery_guide
+from .run_evidence import build_run_evidence_report, empty_run_evidence
 from .safety import evaluate_shadow_promotion
 from .settings import Settings, load_settings
+from .session_replay import build_session_replay_report, empty_session_replay
+from .signal_stability import build_signal_stability_from_runs
+from .stock_lifecycle import build_stock_lifecycle_report
 from .strategy_space import load_strategy_spaces, validate_strategy_spaces
 from .survivorship import audit_survivorship
 from .toss import TOSS_GET_ENDPOINTS, TossCredentialsError, TossInvestClient
+
+GLOBAL_EXPLANATION_LEVEL: str = "normal"
+
+# 시뮬레이션 로그 스트리밍을 위한 글로벌 버퍼 및 프로세스 관리
+SIMULATION_BUFFER: list[str] = [
+    "====================================================================\n"
+    "  🔬 단타 시뮬레이션 v4  |  2026-06-21 08:25\n"
+    "  종목: ['SOXL', 'TQQQ', 'TSLA', 'IONQ', 'NVDL', 'QBTS']\n"
+    "  500회/종목/국면 | 유전(65%)+메타가중 / 랜덤(35%)\n"
+    "  Walk-Forward: 멀티윈도우 3구간 | ADX 스위칭 필터 | 국면별 독립 파라미터\n"
+    "====================================================================\n"
+    "INFO simulation started\n"
+    "  📉 현재 VIX 지수: 16.40\n"
+    "  📈 지수 ^IXIC 모멘텀 수집 완료\n"
+    "  📈 지수 ^SOX 모멘텀 수집 완료\n"
+    "\n"
+    "[SOXL] 데이터 로드 중...\n"
+    "  1056행 | 워밍업 제외 199행 | 지표: RSI/EMA/MACD/BB/StochRSI/OBV/ADX/Regime\n"
+    "INFO indicators calculated\n"
+    "  └ [BULL 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 0개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [BULL] 기존 유지 (Sharpe 11.7 | 수익 7.0%)\n"
+    "  └ [BEAR 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 0개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [BEAR] 기존 유지 (Sharpe 11.7 | 수익 7.0%)\n"
+    "  └ [SIDEWAYS 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 0개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [SIDEWAYS] 기존 유지 (Sharpe 11.7 | 수익 7.0%)\n"
+    "\n"
+    "[TQQQ] 데이터 로드 중...\n"
+    "  1056행 | 워밍업 제외 199행 | 지표: RSI/EMA/MACD/BB/StochRSI/OBV/ADX/Regime\n"
+    "INFO indicators calculated\n"
+    "  └ [BULL 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 1개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [BULL] 기존 유지 (Sharpe 29.81 | 수익 3.7%)\n"
+    "  └ [BEAR 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 1개)... 완료 (유효 0회, 평가 151회, 조기종료)\n"
+    "    → [BEAR] 기존 유지 (Sharpe 29.81 | 수익 3.7%)\n"
+    "  └ [SIDEWAYS 국면] 최적화 진화...\n"
+    "    500회 시뮬레이션 (유전자풀 1개)...\n"
+]
+SIMULATION_LOCK = threading.Lock()
+SIMULATION_PROCESS: subprocess.Popen | None = None
+SIMULATION_THREAD: threading.Thread | None = None
+SIMULATION_STATUS: str = "idle"  # "idle" | "running" | "completed" | "failed"
+
+def _run_simulation_thread(project_root: Path, tickers: list[str] | None = None) -> None:
+    global SIMULATION_PROCESS, SIMULATION_STATUS
+    
+    cmd = [sys.executable, "-m", "jayu.cli", "simulate"]
+    if tickers:
+        for t in tickers:
+            cmd.extend(["--ticker", t])
+            
+    try:
+        with SIMULATION_LOCK:
+            SIMULATION_STATUS = "running"
+            SIMULATION_BUFFER.append(f"INFO simulation starting (Command: {' '.join(cmd)})\n")
+            
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(project_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        SIMULATION_PROCESS = process
+        
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            with SIMULATION_LOCK:
+                SIMULATION_BUFFER.append(line)
+                
+        rc = process.wait()
+        with SIMULATION_LOCK:
+            if rc == 0:
+                SIMULATION_STATUS = "completed"
+                SIMULATION_BUFFER.append("\nINFO simulation finished successfully.\n")
+            else:
+                SIMULATION_STATUS = "failed"
+                SIMULATION_BUFFER.append(f"\nERROR simulation failed with exit code {rc}.\n")
+    except Exception as e:
+        with SIMULATION_LOCK:
+            SIMULATION_STATUS = "failed"
+            SIMULATION_BUFFER.append(f"\nERROR failed to start simulation process: {e}\n")
+    finally:
+        with SIMULATION_LOCK:
+            SIMULATION_PROCESS = None
 
 SCHEMA_VERSION = "1.0"
 TOSS_SYMBOL_CHUNK_SIZE = 180
@@ -41,6 +144,7 @@ DATA_FAILURE_CODES = {
     FailureCode.UNVERIFIED_PRICE_DATA.value,
     FailureCode.SIGNAL_PUBLICATION_INVALID.value,
 }
+TERMINAL_RUN_STATUSES = {"success", "failed", "error", "cancelled", "canceled"}
 
 PORTFOLIO_TYPE_ORDER = ("short_term", "swing", "long_term", "dividend")
 PORTFOLIO_TYPE_ALIASES = {
@@ -169,14 +273,18 @@ def list_dashboard_runs(paths: RuntimePaths, *, limit: int = 100) -> list[dict[s
         if not manifest:
             continue
         result = _mapping(manifest.get("result"))
+        status = str(manifest.get("status") or "unknown")
+        finished_at = manifest.get("finished_at")
+        is_complete = _is_completed_run({"status": status, "finished_at": finished_at})
         rows.append(
             {
                 "run_id": str(manifest.get("run_id") or run_dir.name),
                 "mode": str(result.get("mode") or manifest.get("execution_mode") or "unknown"),
-                "status": str(manifest.get("status") or "unknown"),
+                "status": status,
                 "failure_code": manifest.get("failure_code"),
                 "started_at": manifest.get("started_at"),
-                "finished_at": manifest.get("finished_at"),
+                "finished_at": finished_at,
+                "is_complete": is_complete,
                 "command": manifest.get("command"),
             }
         )
@@ -184,6 +292,18 @@ def list_dashboard_runs(paths: RuntimePaths, *, limit: int = 100) -> list[dict[s
         key=lambda item: str(item.get("finished_at") or item.get("started_at") or ""), reverse=True
     )
     return rows[:limit]
+
+
+def _is_completed_run(run: Mapping[str, Any]) -> bool:
+    status = str(run.get("status") or "").lower()
+    return bool(run.get("finished_at")) or status in TERMINAL_RUN_STATUSES
+
+
+def _select_latest_completed_run_id(runs: Sequence[Mapping[str, Any]]) -> str:
+    for run in runs:
+        if _is_completed_run(run):
+            return str(run.get("run_id"))
+    return str(runs[0].get("run_id"))
 
 
 def build_dashboard_overview(
@@ -206,6 +326,7 @@ def build_dashboard_overview(
     promotion = _mapping(read_json(run_dir / "promotion.json", default={}))
     if not promotion:
         promotion = _mapping(read_json(paths.state_dir / "promotion.json", default={}))
+    stock_warning_gate = _mapping(read_json(paths.state_dir / "stock_warning_gate.json", default={}))
     signals = _signal_map(run_dir)
     execution_status = _execution_status(manifest)
     safety_decision = str(
@@ -229,6 +350,43 @@ def build_dashboard_overview(
     health_threshold = _promotion_threshold(run_dir, paths)
     survivorship = _survivorship_gate(manifest)
     recommended_actions = _recommended_actions(reasons, display_status)
+    operational_status = _mapping(read_json(paths.state_dir / "operational_status.json", default={}))
+    recovery_guide = build_recovery_guide(
+        reasons,
+        manifest=manifest,
+        verdict=verdict,
+        operational_status=operational_status,
+        run_dir=run_dir,
+        now=reference,
+    )
+    today_board = _today_board(
+        signal_rows,
+        reasons,
+        recommended_actions,
+        paths,
+        stock_warning_gate,
+    )
+    decision_timeline = _decision_timeline(
+        paths=paths,
+        run_dir=run_dir,
+        manifest=manifest,
+        data_quality=data_quality,
+        risk=risk,
+        signals=signals,
+        signal_rows=signal_rows,
+        today_board=today_board,
+        recommended_actions=recommended_actions,
+        execution_status=execution_status,
+        display_status=display_status,
+    )
+    session_replay = build_session_replay_report(
+        run_dir,
+        project_root=paths.project_root,
+        state_dir=paths.state_dir,
+        now=reference,
+    )
+    failure_patterns = build_failure_patterns_report(paths.runs_dir)
+    run_evidence = build_run_evidence_report(run_dir, now=reference)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -270,7 +428,13 @@ def build_dashboard_overview(
             **counts,
             "rows": signal_rows,
         },
-        "today_board": _today_board(signal_rows, reasons, recommended_actions, paths),
+        "today_board": today_board,
+        "decision_timeline": decision_timeline,
+        "data_lineage": data_quality.get("data_lineage"),
+        "session_replay": session_replay,
+        "failure_patterns": failure_patterns,
+        "run_evidence": run_evidence,
+        "recovery_guide": recovery_guide,
         "metric_dictionary": metric_dictionary_payload("overview"),
         "health": {
             "score": health_score,
@@ -309,6 +473,11 @@ def build_dashboard_decision(
         if isinstance(item, Mapping)
     ]
     primary_action = actions[0] if actions else _default_action(str(decision.get("overall")))
+    blockers = [
+        reason
+        for reason in reasons
+        if str(reason.get("severity") or "blocking") in {"blocking", "blocked"}
+    ]
     affected_tickers = sorted(
         {
             str(ticker)
@@ -325,7 +494,7 @@ def build_dashboard_decision(
         "overall": decision.get("overall", "not_evaluated"),
         "headline": decision.get("headline"),
         "status_rank": _decision_rank(str(decision.get("overall"))),
-        "top_blockers": [_decision_blocker(reason) for reason in reasons],
+        "top_blockers": [_decision_blocker(reason) for reason in blockers],
         "recommended_next_action": primary_action,
         "recommended_actions": actions,
         "affected_tickers": affected_tickers,
@@ -356,6 +525,7 @@ def build_dashboard_data_quality(
             "quality_reports": [],
             "disagreements": [],
             "mismatches": [],
+            "data_lineage": empty_data_lineage(),
         }
     manifest = _mapping(read_json(run_dir / "manifest.json", default={}))
     source_payload = _mapping(read_json(run_dir / "data_sources.json", default={}))
@@ -414,6 +584,11 @@ def build_dashboard_data_quality(
         "quality_reports": reports,
         "disagreements": disagreements,
         "mismatches": _flatten_mismatches(disagreements),
+        "data_lineage": build_data_lineage_report(
+            run_dir,
+            project_root=paths.project_root,
+            state_dir=paths.state_dir,
+        ),
     }
 
 
@@ -491,6 +666,10 @@ def build_dashboard_signals(
             "summary": _empty_signal_summary(),
             "publication": {"status": "missing"},
             "rows": [],
+            "signal_history": _empty_signal_history(),
+            "signal_outcome": _empty_signal_outcome(),
+            "stock_lifecycle": _empty_stock_lifecycle(),
+            "signal_stability": _empty_signal_stability(),
             "metric_dictionary": metric_dictionary_payload("signals"),
         }
     signals = _signal_map(run_dir)
@@ -523,6 +702,10 @@ def build_dashboard_signals(
         },
         "publication": publication,
         "rows": rows,
+        "signal_history": _signal_history_cards(paths, run_dir, rows),
+        "signal_outcome": _dashboard_signal_outcome(paths, run_dir),
+        "stock_lifecycle": _dashboard_stock_lifecycle(paths, run_dir, rows),
+        "signal_stability": _dashboard_signal_stability(paths, run_dir, rows),
         "metric_dictionary": metric_dictionary_payload("signals"),
     }
 
@@ -828,6 +1011,8 @@ def build_dashboard_toss_portfolio(
             "selected_account": None,
             "holdings": [],
             "allocation": [],
+            "fx_impact": _empty_toss_fx_impact("missing_credentials"),
+            "account_attribution": empty_account_attribution(),
             "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
             "portfolio_type_profiles": _portfolio_type_profile_rows(),
             "sections": {},
@@ -845,6 +1030,8 @@ def build_dashboard_toss_portfolio(
             "selected_account": None,
             "holdings": [],
             "allocation": [],
+            "fx_impact": _empty_toss_fx_impact("failed"),
+            "account_attribution": empty_account_attribution(),
             "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
             "portfolio_type_profiles": _portfolio_type_profile_rows(),
             "sections": {"accounts": accounts_result},
@@ -862,6 +1049,8 @@ def build_dashboard_toss_portfolio(
             "selected_account": None,
             "holdings": [],
             "allocation": [],
+            "fx_impact": _empty_toss_fx_impact("no_accounts"),
+            "account_attribution": empty_account_attribution(),
             "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
             "portfolio_type_profiles": _portfolio_type_profile_rows(),
             "sections": {"accounts": accounts_result},
@@ -884,7 +1073,9 @@ def build_dashboard_toss_portfolio(
     enrichment_sections = _toss_enrichment_sections(resolved_client, holdings)
     sections.update(enrichment_sections)
     holdings = _apply_toss_enrichment(holdings, enrichment_sections)
+    holdings = _apply_toss_fx_impact(holdings, fx_rates)
     holdings = _apply_portfolio_type_metadata(holdings, paths)
+    fx_impact = _toss_fx_impact_summary(holdings)
     summary = _toss_portfolio_summary(
         holdings,
         [],
@@ -914,6 +1105,8 @@ def build_dashboard_toss_portfolio(
         "buying_power": [],
         "valuation_currency": "KRW",
         "fx_rates": fx_rates,
+        "fx_impact": fx_impact,
+        "account_attribution": _dashboard_account_attribution(paths),
         "currency_totals": _toss_currency_totals(holdings),
         "region_totals": _toss_region_totals(holdings),
         "category_totals": _toss_category_totals(holdings),
@@ -1034,6 +1227,7 @@ def build_dashboard_toss_reconciliation(
         client = _dashboard_toss_client(settings)
         from .toss import reconcile_portfolio_with_toss
         report = reconcile_portfolio_with_toss(client, paths, account=account)
+        report = _augment_toss_reconciliation_report(report, paths, settings)
         return {
             "schema_version": SCHEMA_VERSION,
             **report,
@@ -1046,6 +1240,214 @@ def build_dashboard_toss_reconciliation(
             "differences": [],
             "unmapped_tickers": [],
         }
+
+
+def _augment_toss_reconciliation_report(
+    report: Mapping[str, Any],
+    paths: RuntimePaths,
+    settings: Settings,
+) -> dict[str, Any]:
+    enriched = dict(report)
+    default = _empty_toss_reconciliation_review()
+    enriched.update({key: enriched.get(key, value) for key, value in default.items()})
+    if not paths.portfolio_file.exists():
+        return enriched
+    try:
+        mapping = _load_dashboard_portfolio_mapping(paths)
+        portfolio_mapping = mapping or load_portfolio_mapping(paths.portfolio_mapping_file)
+        positions = load_portfolio(
+            paths.portfolio_file,
+            usd_krw=1350.0,
+            mapping=portfolio_mapping,
+            fx_rates={"KRW": 1.0, "USD": 1350.0},
+        )
+    except Exception as exc:
+        enriched["review_status"] = "failed"
+        enriched["review_message"] = f"Local portfolio policy review failed: {exc}"
+        return enriched
+
+    overrides = _load_portfolio_type_overrides(paths)
+    local_rows: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    position_checks: list[dict[str, Any]] = []
+    total_value = sum(float(position.market_value_krw or 0.0) for position in positions)
+    existing_unmapped = {str(item).upper() for item in _sequence(enriched.get("unmapped_tickers"))}
+
+    for position in positions:
+        row = _reconciliation_position_row(position)
+        lookup = _portfolio_mapping_lookup(portfolio_mapping, row)
+        override = _portfolio_type_override_for_holding(overrides, row)
+        type_keys, reason, source, override_info = _portfolio_type_keys_for_holding(
+            row,
+            lookup,
+            overrides,
+        )
+        primary = type_keys[0] if type_keys else "long_term"
+        profile = PORTFOLIO_TYPE_PROFILES[primary]
+        weight = (float(position.market_value_krw or 0.0) / total_value) if total_value else 0.0
+        policy = _portfolio_policy_for_type(settings, primary)
+        max_position_pct = _float_or_none(getattr(policy, "max_position_pct", None))
+
+        row.update(
+            {
+                "portfolio_types": type_keys,
+                "portfolio_type_labels": [
+                    PORTFOLIO_TYPE_PROFILES[key]["label"] for key in type_keys
+                ],
+                "primary_portfolio_type": primary,
+                "primary_portfolio_type_label": profile["label"],
+                "portfolio_type_reason": reason,
+                "portfolio_type_source": source,
+                "portfolio_type_override": override_info,
+                "weight": _round_or_none(weight, 6),
+                "source": "portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json",
+            }
+        )
+        local_rows.append(row)
+
+        issue_context = {
+            "ticker": row["symbol"],
+            "portfolio_type": primary,
+            "portfolio_type_label": profile["label"],
+            "source": "portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json",
+        }
+        lookup_mapped = bool(getattr(lookup, "mapped", False))
+        explicit_types = _normalize_portfolio_type_keys(
+            getattr(getattr(lookup, "mapping", None), "portfolio_types", ())
+        )
+        mapping_sector = str(getattr(getattr(lookup, "mapping", None), "sector", "") or "").strip()
+
+        if not lookup_mapped or row["symbol"].upper() in existing_unmapped:
+            issues.append(
+                {
+                    **issue_context,
+                    "issue_type": "unmapped",
+                    "severity": "blocked",
+                    "label": "매핑 미등록",
+                    "detail": "portfolio_mapping.json에 종목 레버리지, 섹터, 팩터, 운용 타입을 등록하세요.",
+                }
+            )
+        if lookup_mapped and not explicit_types and override is None:
+            issues.append(
+                {
+                    **issue_context,
+                    "issue_type": "missing_type",
+                    "severity": "warning",
+                    "label": "운용 타입 미지정",
+                    "detail": "portfolio_mapping.json 또는 portfolio_type_overrides.json에 단타/중타/장타/배당 타입을 명시하세요.",
+                }
+            )
+        if not lookup_mapped or mapping_sector.lower() in {"", "other", "unknown", "none"}:
+            issues.append(
+                {
+                    **issue_context,
+                    "issue_type": "missing_sector",
+                    "severity": "warning",
+                    "label": "섹터 미지정",
+                    "detail": "섹터 노출과 타입별 리스크 집계를 위해 portfolio_mapping.json의 sector를 보강하세요.",
+                }
+            )
+        if max_position_pct is not None and weight > max_position_pct:
+            issues.append(
+                {
+                    **issue_context,
+                    "issue_type": "overweight",
+                    "severity": "warning",
+                    "label": "타입별 단일종목 한도 초과",
+                    "detail": (
+                        f"{profile['label']} 정책의 단일종목 한도 {max_position_pct:.1%}를 "
+                        f"현재 비중 {weight:.1%}가 초과합니다."
+                    ),
+                    "observed": _round_or_none(weight, 6),
+                    "limit": _round_or_none(max_position_pct, 6),
+                }
+            )
+        position_checks.append(
+            {
+                "ticker": row["symbol"],
+                "weight": _round_or_none(weight, 6),
+                "portfolio_type": primary,
+                "portfolio_type_label": profile["label"],
+                "max_position_pct": _round_or_none(max_position_pct, 6),
+                "status": "warning"
+                if max_position_pct is not None and weight > max_position_pct
+                else "success",
+                "source": "portfolio.csv · risk.portfolio_policy",
+            }
+        )
+
+    enriched["mapping_issues"] = sorted(
+        issues,
+        key=lambda item: (
+            0 if item.get("severity") == "blocked" else 1,
+            str(item.get("issue_type")),
+            str(item.get("ticker")),
+        ),
+    )
+    enriched["position_policy_checks"] = position_checks
+    enriched["portfolio_type_totals"] = _toss_portfolio_type_totals(local_rows)
+    enriched["review_summary"] = _toss_reconciliation_review_summary(enriched["mapping_issues"])
+    enriched["review_status"] = "needs_review" if enriched["mapping_issues"] else "clean"
+    enriched["review_source"] = (
+        "portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json · "
+        "risk.portfolio_policy · Toss holdings GET"
+    )
+    return enriched
+
+
+def _empty_toss_reconciliation_review() -> dict[str, Any]:
+    return {
+        "review_status": "not_evaluated",
+        "review_summary": {
+            "issue_count": 0,
+            "blocked_count": 0,
+            "warning_count": 0,
+            "unmapped_count": 0,
+            "missing_type_count": 0,
+            "missing_sector_count": 0,
+            "overweight_count": 0,
+        },
+        "mapping_issues": [],
+        "position_policy_checks": [],
+        "portfolio_type_totals": _empty_toss_portfolio_type_totals(),
+        "review_source": "portfolio.csv · portfolio_mapping.json · portfolio_type_overrides.json",
+    }
+
+
+def _reconciliation_position_row(position: Any) -> dict[str, Any]:
+    symbol = str(getattr(position, "ticker", "") or "").strip().upper()
+    return {
+        "symbol": symbol,
+        "ticker": symbol,
+        "name": str(getattr(position, "name", "") or symbol),
+        "quantity": _round_or_none(_float_or_none(getattr(position, "quantity", None)), 6),
+        "market_value_krw": _round_or_none(
+            _float_or_none(getattr(position, "market_value_krw", None)),
+            4,
+        ),
+        "sector": str(getattr(position, "sector", "") or ""),
+        "currency": str(getattr(position, "currency", "") or ""),
+        "warning_count": 0,
+    }
+
+
+def _portfolio_policy_for_type(settings: Settings, portfolio_type: str) -> Any | None:
+    policies = getattr(getattr(settings, "risk", None), "portfolio_policy", {}) or {}
+    return policies.get(portfolio_type)
+
+
+def _toss_reconciliation_review_summary(
+    issues: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    return {
+        "issue_count": len(issues),
+        "blocked_count": sum(item.get("severity") == "blocked" for item in issues),
+        "warning_count": sum(item.get("severity") == "warning" for item in issues),
+        "unmapped_count": sum(item.get("issue_type") == "unmapped" for item in issues),
+        "missing_type_count": sum(item.get("issue_type") == "missing_type" for item in issues),
+        "missing_sector_count": sum(item.get("issue_type") == "missing_sector" for item in issues),
+        "overweight_count": sum(item.get("issue_type") == "overweight" for item in issues),
+    }
 
 
 def build_dashboard_toss_order_plan(paths: RuntimePaths) -> dict[str, Any]:
@@ -1085,27 +1487,70 @@ def build_dashboard_toss_order_plan(paths: RuntimePaths) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "order_plan": order_plan,
-        "paper_order_contract": _paper_order_contract(order_plan, today_signals),
+        "allocation_preview": _dashboard_allocation_preview(paths),
+        "paper_order_contract": _paper_order_contract(
+            order_plan,
+            today_signals,
+            warnings_gate,
+            market_session,
+        ),
         "warnings_gate": warnings_gate,
         "market_session": market_session,
         "today_signals": today_signals,
     }
 
 
+def _dashboard_allocation_preview(paths: RuntimePaths) -> dict[str, Any]:
+    preview_path = paths.state_dir / "allocation_preview.json"
+    payload = read_json(preview_path, default=None)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    return empty_allocation_preview()
+
+
 def _paper_order_contract(
     order_plan: Mapping[str, Any],
     today_signals: Mapping[str, Any],
+    warnings_gate: Mapping[str, Any] | None = None,
+    market_session: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     intents: list[OrderIntent] = []
-    for order in _sequence(order_plan.get("orders")):
+    rejected: list[dict[str, Any]] = []
+    warnings_gate = _mapping(warnings_gate)
+    market_session = _mapping(market_session)
+    for index, order in enumerate(_sequence(order_plan.get("orders")), start=1):
         if not isinstance(order, Mapping):
+            rejected.append(
+                _rejected_order_intent(
+                    index,
+                    {},
+                    ["주문 항목이 객체 형식이 아닙니다."],
+                    "order_plan.json",
+                )
+            )
             continue
         ticker = str(order.get("ticker") or order.get("symbol") or "").upper()
         if not ticker:
+            rejected.append(
+                _rejected_order_intent(
+                    index,
+                    order,
+                    ["ticker 또는 symbol 값이 없습니다."],
+                    "order_plan.json",
+                )
+            )
             continue
         side_raw = str(order.get("side") or order.get("action") or "").lower()
         side = "sell" if side_raw == "sell" else "buy" if side_raw == "buy" else None
         if side is None:
+            rejected.append(
+                _rejected_order_intent(
+                    index,
+                    order,
+                    ["side/action은 buy 또는 sell이어야 합니다."],
+                    "order_plan.json",
+                )
+            )
             continue
         signal = _mapping(today_signals.get(ticker))
         quantity = _float_or_none(
@@ -1121,7 +1566,13 @@ def _paper_order_contract(
         )
         arrival_mid = _float_or_none(order.get("arrival_mid")) or decision_price
         final_price = _float_or_none(order.get("final_price")) or arrival_mid
-        if quantity is None or quantity <= 0 or decision_price is None or decision_price <= 0:
+        missing: list[str] = []
+        if quantity is None or quantity <= 0:
+            missing.append("수량이 없거나 0 이하입니다.")
+        if decision_price is None or decision_price <= 0:
+            missing.append("기준 가격이 없거나 0 이하입니다.")
+        if missing:
+            rejected.append(_rejected_order_intent(index, order, missing, "order_plan.json"))
             continue
         intents.append(
             OrderIntent(
@@ -1148,19 +1599,350 @@ def _paper_order_contract(
         ),
     )
     payload = plan.to_dict()
+    quality_rows = [
+        _order_intent_quality(
+            intent,
+            today_signals=today_signals,
+            warnings_gate=warnings_gate,
+            market_session=market_session,
+        )
+        for intent in intents
+    ]
+    payload["intents"] = [
+        {**intent, "quality": quality_rows[index]}
+        for index, intent in enumerate(payload.get("intents", []))
+    ]
     payload.update(
         {
             "read_only": True,
             "live_order_enabled": False,
+            "quality_summary": _order_intent_quality_summary(quality_rows, rejected),
+            "rejected_intents": rejected,
             "contract": {
                 "intent": "OrderIntent",
                 "plan": "OrderPlan",
                 "approval": "OrderApproval",
             },
-            "source": "order_plan.json · today_signals.json · jayu.paper_trading",
+            "source": (
+                "order_plan.json · today_signals.json · stock_warning_gate.json · "
+                "market_session_status.json · jayu.paper_trading"
+            ),
         }
     )
     return payload
+
+
+ORDER_INTENT_QUALITY_WEIGHTS = {
+    "structure": 25,
+    "signal_alignment": 20,
+    "warning_gate": 20,
+    "market_session": 15,
+    "execution_inputs": 15,
+    "approval_lock": 5,
+}
+
+
+def _rejected_order_intent(
+    index: int,
+    order: Mapping[str, Any],
+    reasons: Sequence[str],
+    source: str,
+) -> dict[str, Any]:
+    return {
+        "index": index,
+        "ticker": str(order.get("ticker") or order.get("symbol") or "-").upper(),
+        "status": "blocked",
+        "score": 0,
+        "grade": "F",
+        "reasons": [str(reason) for reason in reasons],
+        "source": source,
+    }
+
+
+def _order_intent_quality(
+    intent: OrderIntent,
+    *,
+    today_signals: Mapping[str, Any],
+    warnings_gate: Mapping[str, Any],
+    market_session: Mapping[str, Any],
+) -> dict[str, Any]:
+    checks = [
+        _intent_structure_check(intent),
+        _intent_signal_check(intent, today_signals),
+        _intent_warning_check(intent, warnings_gate),
+        _intent_market_session_check(intent, market_session),
+        _intent_execution_input_check(intent),
+        _intent_approval_lock_check(),
+    ]
+    score = round(sum(_float_or_none(check.get("score")) or 0.0 for check in checks), 1)
+    blocked = any(check.get("status") == "blocked" for check in checks)
+    status = "blocked" if blocked else "success" if score >= 80 else "warning" if score >= 50 else "not_evaluated"
+    return {
+        "score": score,
+        "max_score": 100,
+        "grade": _quality_grade(score),
+        "status": status,
+        "summary": _quality_summary(status, score),
+        "checks": checks,
+        "source": "order_plan.json · today_signals.json · stock_warning_gate.json · market_session_status.json",
+    }
+
+
+def _quality_check(
+    key: str,
+    label: str,
+    weight: float,
+    ratio: float,
+    status: str,
+    value: str,
+    message: str,
+    source: str,
+    details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    score = max(0.0, min(float(weight), float(weight) * max(0.0, min(float(ratio), 1.0))))
+    return {
+        "id": key,
+        "label": label,
+        "score": round(score, 1),
+        "max_score": weight,
+        "status": status,
+        "value": value,
+        "message": message,
+        "source": source,
+        "details": dict(details or {}),
+    }
+
+
+def _intent_structure_check(intent: OrderIntent) -> dict[str, Any]:
+    ok = (
+        bool(intent.ticker)
+        and intent.side in {"buy", "sell"}
+        and intent.quantity > 0
+        and intent.decision_price > 0
+        and intent.arrival_mid > 0
+        and intent.final_price > 0
+    )
+    return _quality_check(
+        "structure",
+        "필수 주문 필드",
+        ORDER_INTENT_QUALITY_WEIGHTS["structure"],
+        1.0 if ok else 0.0,
+        "success" if ok else "blocked",
+        f"{intent.side} {intent.quantity:g}주 @ {intent.decision_price:g}",
+        "종목, 방향, 수량, 기준가, 도착가, 최종가가 모두 있어야 합니다.",
+        "order_plan.json",
+        {
+            "ticker": intent.ticker,
+            "side": intent.side,
+            "quantity": intent.quantity,
+            "decision_price": intent.decision_price,
+            "arrival_mid": intent.arrival_mid,
+            "final_price": intent.final_price,
+        },
+    )
+
+
+def _intent_signal_check(intent: OrderIntent, today_signals: Mapping[str, Any]) -> dict[str, Any]:
+    signal = _mapping(today_signals.get(intent.ticker))
+    if not signal:
+        return _quality_check(
+            "signal_alignment",
+            "신호 정합성",
+            ORDER_INTENT_QUALITY_WEIGHTS["signal_alignment"],
+            0.4,
+            "warning",
+            "신호 없음",
+            "today_signals에 같은 종목 신호가 없어 주문 의도만 단독 검토합니다.",
+            "today_signals.json",
+        )
+    eligible = signal.get("eligible")
+    signal_name = str(signal.get("signal") or signal.get("decision") or signal.get("action") or "unknown")
+    buy_like = signal_name in {"buy", "buy_candidate", "weak_buy", "approved", "eligible"}
+    sell_like = signal_name in {"sell", "sell_candidate", "weak_sell", "exit", "reduce"}
+    aligned = (intent.side == "buy" and buy_like) or (intent.side == "sell" and sell_like)
+    if eligible is False:
+        ratio = 0.0
+        status = "blocked"
+        message = "신호가 eligible=false라 주문 후보로 넘기면 안 됩니다."
+    elif aligned:
+        ratio = 1.0
+        status = "success"
+        message = "주문 방향과 today_signals의 결론이 일치합니다."
+    else:
+        ratio = 0.5
+        status = "warning"
+        message = "주문 방향과 today_signals의 결론이 명확히 일치하지 않습니다."
+    return _quality_check(
+        "signal_alignment",
+        "신호 정합성",
+        ORDER_INTENT_QUALITY_WEIGHTS["signal_alignment"],
+        ratio,
+        status,
+        f"{signal_name} · eligible={eligible}",
+        message,
+        "today_signals.json",
+        {"signal": signal_name, "eligible": eligible, "side": intent.side},
+    )
+
+
+def _intent_warning_check(intent: OrderIntent, warnings_gate: Mapping[str, Any]) -> dict[str, Any]:
+    warning = _mapping(warnings_gate.get(intent.ticker))
+    if not warning:
+        return _quality_check(
+            "warning_gate",
+            "매수 유의사항",
+            ORDER_INTENT_QUALITY_WEIGHTS["warning_gate"],
+            0.6,
+            "not_evaluated",
+            "미조회",
+            "stock_warning_gate에 해당 종목의 주의사항 결과가 없습니다.",
+            "stock_warning_gate.json",
+        )
+    has_warning = warning.get("has_warning") is True
+    status = "blocked" if has_warning else "success"
+    return _quality_check(
+        "warning_gate",
+        "매수 유의사항",
+        ORDER_INTENT_QUALITY_WEIGHTS["warning_gate"],
+        0.0 if has_warning else 1.0,
+        status,
+        "경고 있음" if has_warning else "정상",
+        "투자경고·거래정지·VI 등 매수 유의사항을 주문 전 확인합니다.",
+        "stock_warning_gate.json · Toss /api/v1/stocks/{symbol}/warnings",
+        dict(warning),
+    )
+
+
+def _intent_market_session_check(
+    intent: OrderIntent,
+    market_session: Mapping[str, Any],
+) -> dict[str, Any]:
+    market = _ticker_market(intent.ticker)
+    session = _mapping(market_session.get(market))
+    if not session:
+        return _quality_check(
+            "market_session",
+            "시장 개장 상태",
+            ORDER_INTENT_QUALITY_WEIGHTS["market_session"],
+            0.5,
+            "not_evaluated",
+            f"{market} 미조회",
+            "market_session_status에 해당 시장 개장 정보가 없습니다.",
+            "market_session_status.json",
+            {"market": market},
+        )
+    is_open = session.get("open") is True or session.get("is_open") is True
+    return _quality_check(
+        "market_session",
+        "시장 개장 상태",
+        ORDER_INTENT_QUALITY_WEIGHTS["market_session"],
+        1.0 if is_open else 0.0,
+        "success" if is_open else "blocked",
+        f"{market} {'개장' if is_open else '폐장'}",
+        "Paper 검증은 가능하지만, 실주문 검토 전에는 시장 개장 여부를 확인해야 합니다.",
+        "market_session_status.json",
+        {"market": market, **dict(session)},
+    )
+
+
+def _intent_execution_input_check(intent: OrderIntent) -> dict[str, Any]:
+    supplied = 2
+    total = 4
+    if intent.atr > 0:
+        supplied += 1
+    if intent.relative_spread is not None:
+        supplied += 1
+    ratio = supplied / total
+    status = "success" if ratio >= 1.0 else "warning" if ratio >= 0.5 else "not_evaluated"
+    return _quality_check(
+        "execution_inputs",
+        "체결 품질 입력",
+        ORDER_INTENT_QUALITY_WEIGHTS["execution_inputs"],
+        ratio,
+        status,
+        f"{supplied}/{total}",
+        "arrival_mid, final_price, ATR, spread가 많을수록 Paper 체결 품질 평가가 정교해집니다.",
+        "order_plan.json · jayu.paper_trading",
+        {
+            "arrival_mid": intent.arrival_mid,
+            "final_price": intent.final_price,
+            "atr": intent.atr,
+            "relative_spread": intent.relative_spread,
+            "latency_ms": intent.latency_ms,
+        },
+    )
+
+
+def _intent_approval_lock_check() -> dict[str, Any]:
+    return _quality_check(
+        "approval_lock",
+        "Live 주문 잠금",
+        ORDER_INTENT_QUALITY_WEIGHTS["approval_lock"],
+        1.0,
+        "success",
+        "비활성",
+        "대시보드 주문 의도 검증은 live 주문 전송 없이 읽기 전용으로만 동작합니다.",
+        "OrderApproval.live_order_enabled=false",
+    )
+
+
+def _order_intent_quality_summary(
+    quality_rows: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    if not quality_rows:
+        return {
+            "status": "not_evaluated" if not rejected else "blocked",
+            "average_score": 0,
+            "grade": "F",
+            "intent_count": 0,
+            "rejected_count": len(rejected),
+            "summary": "품질 점수를 계산할 유효한 OrderIntent가 없습니다.",
+            "source": "order_plan.json · OrderIntent validation",
+        }
+    scores = [_float_or_none(item.get("score")) or 0.0 for item in quality_rows]
+    average = round(sum(scores) / len(scores), 1)
+    blocked_count = sum(1 for item in quality_rows if item.get("status") == "blocked")
+    status = "blocked" if blocked_count or rejected else "success" if average >= 80 else "warning"
+    return {
+        "status": status,
+        "average_score": average,
+        "grade": _quality_grade(average),
+        "intent_count": len(quality_rows),
+        "rejected_count": len(rejected),
+        "blocked_count": blocked_count,
+        "summary": _quality_summary(status, average),
+        "source": "order_plan.json · today_signals.json · stock_warning_gate.json · market_session_status.json",
+    }
+
+
+def _quality_grade(score: float) -> str:
+    if score >= 90:
+        return "A"
+    if score >= 80:
+        return "B"
+    if score >= 65:
+        return "C"
+    if score >= 50:
+        return "D"
+    return "F"
+
+
+def _quality_summary(status: str, score: float) -> str:
+    if status == "success":
+        return f"주문 의도 품질 {score:.1f}점입니다. Paper 검증 후보로 볼 수 있습니다."
+    if status == "blocked":
+        return f"주문 의도 품질 {score:.1f}점입니다. 차단 조건을 먼저 해소해야 합니다."
+    if status == "warning":
+        return f"주문 의도 품질 {score:.1f}점입니다. 부족한 입력과 신호 정합성을 보강하세요."
+    return "주문 의도 품질을 판단할 유효 데이터가 부족합니다."
+
+
+def _ticker_market(ticker: str) -> str:
+    clean = ticker.upper()
+    if clean.endswith(".KS") or clean.endswith(".KQ") or clean.isdigit() or clean.startswith("KRX:"):
+        return "KR"
+    return "US"
 
 
 
@@ -1326,6 +2108,8 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
                 except OSError:
                     cache_stats[subdir.name] = {"file_count": 0, "total_bytes": 0}
 
+    toss_api_drift = _toss_api_drift_status(paths, now=now)
+
     # --- Build provider detail list ---
     provider_categories: dict[str, str] = {
         "yahoo": "price",
@@ -1441,9 +2225,20 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
     providers_with_partial = sum(
         1 for p in providers_detail if p["recent"]["status"] == "partial"
     )
+    toss_drift_attention = toss_api_drift.get("status") in {
+        "drifted",
+        "failed_to_fetch",
+        "not_checked",
+        "stale",
+        "unknown",
+    }
     overall_status = (
         "failed" if providers_with_failures > 0
-        else "warning" if providers_with_partial > 0 or configured_count < total_providers
+        else "warning" if (
+            providers_with_partial > 0
+            or configured_count < total_providers
+            or toss_drift_attention
+        )
         else "success"
     )
 
@@ -1483,6 +2278,7 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
             "has_client_secret": bool(_secret_value(settings.kakao_client_secret)),
         },
         "cache_stats": cache_stats,
+        "toss_api_drift": toss_api_drift,
         "config": {
             "primary_price_provider": settings.data_provider,
             "fallback_price_provider": settings.data_fallback_provider,
@@ -1494,6 +2290,123 @@ def build_dashboard_api_monitoring(paths: RuntimePaths) -> dict[str, Any]:
         },
         "api_logs": _load_recent_api_logs(paths),
     }
+
+
+def _toss_api_drift_status(paths: RuntimePaths, *, now: datetime | None = None) -> dict[str, Any]:
+    """Return the latest Toss OpenAPI drift check status for the dashboard."""
+    now = now or datetime.now(UTC)
+    report_path = paths.state_dir / "toss_api_drift.json"
+    snapshot_path = paths.state_dir / "toss_openapi_snapshot.json"
+    local_paths = sorted(endpoint.path for endpoint in TOSS_GET_ENDPOINTS)
+    base = {
+        "source": "state/toss_api_drift.json · TOSS_GET_ENDPOINTS · Toss OpenAPI latest spec",
+        "snapshot_source": "state/toss_openapi_snapshot.json",
+        "local_endpoint_count": len(local_paths),
+        "local_endpoints": [
+            {
+                "operation_id": endpoint.operation_id,
+                "path": endpoint.path,
+                "requires_account": endpoint.requires_account,
+            }
+            for endpoint in TOSS_GET_ENDPOINTS
+        ],
+        "snapshot_available": snapshot_path.exists(),
+        "max_age_hours": 168,
+    }
+    if not report_path.exists():
+        return {
+            **base,
+            "status": "not_checked",
+            "status_label": "아직 확인 안 함",
+            "last_checked_at": None,
+            "age_hours": None,
+            "missing_endpoints": [],
+            "extra_endpoints": [],
+            "missing_count": 0,
+            "extra_count": 0,
+            "fallback_snapshot_used": False,
+            "summary": "Toss OpenAPI drift check 결과가 아직 없습니다. `uv run jayu toss endpoints --sync`로 스펙 차이를 확인하세요.",
+            "next_action": "uv run jayu toss endpoints --sync",
+        }
+
+    report = _mapping(read_json(report_path, default={}))
+    missing = [str(item) for item in _sequence(report.get("missing_endpoints"))]
+    extra = [str(item) for item in _sequence(report.get("extra_endpoints"))]
+    checked_at = str(report.get("last_checked_at") or "") or None
+    checked_dt = _parse_datetime_utc(checked_at)
+    age_hours = (
+        round((now - checked_dt).total_seconds() / 3600, 2)
+        if checked_dt is not None
+        else None
+    )
+    stale = checked_dt is None or now - checked_dt > timedelta(hours=base["max_age_hours"])
+    raw_status = str(report.get("status") or "unknown")
+    status = "stale" if stale and raw_status == "synchronized" else raw_status
+    if raw_status == "drifted" or missing or extra:
+        status = "drifted"
+    elif raw_status == "failed_to_fetch":
+        status = "failed_to_fetch"
+    elif raw_status not in {"synchronized", "drifted", "failed_to_fetch"}:
+        status = "unknown"
+
+    return {
+        **base,
+        "status": status,
+        "status_label": _toss_api_drift_label(status),
+        "last_checked_at": checked_at,
+        "age_hours": age_hours,
+        "missing_endpoints": missing,
+        "extra_endpoints": extra,
+        "missing_count": len(missing),
+        "extra_count": len(extra),
+        "fetch_error": report.get("fetch_error") or report.get("message"),
+        "fallback_snapshot_used": report.get("fallback_snapshot_used") is True,
+        "summary": _toss_api_drift_summary(status, len(missing), len(extra), age_hours),
+        "next_action": "uv run jayu toss endpoints --sync",
+    }
+
+
+def _parse_datetime_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _toss_api_drift_label(status: str) -> str:
+    return {
+        "synchronized": "동기화됨",
+        "drifted": "스펙 변경 감지",
+        "failed_to_fetch": "스펙 조회 실패",
+        "not_checked": "미확인",
+        "stale": "확인 오래됨",
+        "unknown": "상태 불명",
+    }.get(status, "상태 불명")
+
+
+def _toss_api_drift_summary(
+    status: str,
+    missing_count: int,
+    extra_count: int,
+    age_hours: float | None,
+) -> str:
+    if status == "synchronized":
+        return "로컬 Toss GET 카탈로그가 최근 OpenAPI 스펙과 일치합니다."
+    if status == "drifted":
+        return f"OpenAPI 스펙과 로컬 카탈로그 차이가 있습니다. 누락 {missing_count}개, 로컬 전용 {extra_count}개를 확인하세요."
+    if status == "failed_to_fetch":
+        return "Toss OpenAPI 스펙을 조회하지 못했습니다. 네트워크 또는 Toss 문서 엔드포인트 상태를 확인하세요."
+    if status == "stale":
+        age_text = f"{age_hours:.1f}시간 전" if age_hours is not None else "시각 불명"
+        return f"마지막 Toss OpenAPI drift check가 오래되었습니다 ({age_text}). 최신 스펙으로 다시 확인하세요."
+    if status == "not_checked":
+        return "아직 Toss OpenAPI drift check 결과가 없습니다."
+    return "Toss OpenAPI drift check 상태를 해석하지 못했습니다."
 
 
 
@@ -1740,11 +2653,16 @@ def _dashboard_handler(
 ) -> type[BaseHTTPRequestHandler]:
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
+            global GLOBAL_EXPLANATION_LEVEL
             parsed = urlparse(self.path)
             try:
                 if parsed.path == "/api/v1/runs":
                     self._json(
-                        {"schema_version": SCHEMA_VERSION, "runs": list_dashboard_runs(paths)}
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "runs": list_dashboard_runs(paths),
+                            "failure_patterns": build_failure_patterns_report(paths.runs_dir),
+                        }
                     )
                     return
                 if parsed.path == "/api/v1/overview":
@@ -1769,6 +2687,24 @@ def _dashboard_handler(
                         return
                     if segments[4] == "trader-lens":
                         self._json(build_dashboard_trader_lens(paths, run_id=run_id))
+                        return
+                    if segments[4] == "log":
+                        run_dir = paths.runs_dir / run_id
+                        events_file = run_dir / "logs" / "events.jsonl"
+                        logs = []
+                        if events_file.exists():
+                            try:
+                                with open(events_file, "r", encoding="utf-8") as f:
+                                    for line in f:
+                                        line = line.strip()
+                                        if line:
+                                            try:
+                                                logs.append(json.loads(line))
+                                            except Exception:
+                                                pass
+                            except Exception as e:
+                                logs.append({"timestamp": "", "level": "ERROR", "message": f"로그 로드 오류: {e}"})
+                        self._json({"run_id": run_id, "logs": logs})
                         return
                 if parsed.path == "/api/v1/analysis":
                     query = parse_qs(parsed.query)
@@ -1816,16 +2752,58 @@ def _dashboard_handler(
                     self._json(build_portfolio_hub_data(paths, tickers=tickers_list))
                     return
                 if parsed.path == "/api/v1/portfolio-hub/meta":
-                    self._json(build_portfolio_hub_meta())
+                    self._json(build_portfolio_hub_meta(GLOBAL_EXPLANATION_LEVEL))
                     return
                 if parsed.path == "/api/v1/portfolio-hub/signals":
                     query = parse_qs(parsed.query)
                     ticker = query.get("ticker", ["SOXL"])[0].upper()
                     self._json(build_portfolio_hub_ticker_signals(ticker))
                     return
+                # ── 투자 판단 OS API ──────────────────────────────────────────
+                if parsed.path == "/api/v1/set-explanation-level":
+                    query = parse_qs(parsed.query)
+                    lvl = query.get("level", ["normal"])[0]
+                    if lvl in ("beginner", "normal", "expert"):
+                        GLOBAL_EXPLANATION_LEVEL = lvl
+                        try:
+                            from .settings import Settings
+                            # Pydantic 필드 기본값 갱신으로 환경설정 동기화
+                            Settings.model_fields['explanation_level'].default = lvl
+                        except Exception:
+                            pass
+                        self._json({"status": "success", "level": lvl})
+                    else:
+                        self._json({"status": "error", "message": "Invalid level"}, status_code=400)
+                    return
+                if parsed.path == "/api/v1/investment-decision-os":
+                    from .market_regime_router import determine_market_regime
+                    from .strategy_retirement_candidates import generate_retirement_report
+                    from .rule_violation_audit import get_violation_logs
+                    from .strategy_governance import get_strategy_governance_info
+                    
+                    regime_res = determine_market_regime()
+                    retirement_res = generate_retirement_report()
+                    violations_res = get_violation_logs(limit=20)
+                    gov_res = get_strategy_governance_info()
+                    
+                    self._json({
+                        "market_regime": regime_res,
+                        "strategy_retirement": retirement_res,
+                        "playbook_violations": violations_res,
+                        "strategy_governance": gov_res,
+                        "explanation_level": GLOBAL_EXPLANATION_LEVEL
+                    })
+                    return
                 # ── 자동매매 준비 상태 ────────────────────────────────────────
                 if parsed.path == "/api/v1/autotrading-status":
-                    self._json(build_autotrading_status_data())
+                    self._json(build_autotrading_status_data(paths))
+                    return
+                if parsed.path == "/api/v1/simulation/log":
+                    with SIMULATION_LOCK:
+                        self._json({
+                            "status": SIMULATION_STATUS,
+                            "logs": "".join(SIMULATION_BUFFER)
+                        })
                     return
                 if parsed.path == "/api/v1/promotion":
                     self._json(build_dashboard_promotion(paths))
@@ -1900,6 +2878,29 @@ def _dashboard_handler(
                     result = clear_provider_cache(paths, cache_type)
                     self._json(result)
                     return
+                if parsed.path == "/api/v1/simulation/run":
+                    global SIMULATION_THREAD, SIMULATION_STATUS
+                    with SIMULATION_LOCK:
+                        if SIMULATION_STATUS == "running":
+                            self._json({
+                                "status": "running",
+                                "message": "Simulation is already running."
+                            })
+                            return
+                        SIMULATION_BUFFER.clear()
+                        SIMULATION_STATUS = "running"
+                    tickers = payload.get("tickers")
+                    SIMULATION_THREAD = threading.Thread(
+                        target=_run_simulation_thread,
+                        args=(paths.project_root, tickers),
+                        daemon=True
+                    )
+                    SIMULATION_THREAD.start()
+                    self._json({
+                        "status": "started",
+                        "message": "Simulation started successfully."
+                    })
+                    return
                 if parsed.path == "/api/v1/toss/reconciliation/sync":
                     settings = _load_dashboard_settings(paths)
                     status = build_dashboard_toss_status(paths)
@@ -1961,7 +2962,7 @@ def _resolve_run_dir(paths: RuntimePaths, run_id: str) -> Path | None:
     runs = list_dashboard_runs(paths)
     if not runs:
         return None
-    selected = runs[0]["run_id"] if run_id == "latest" else run_id
+    selected = _select_latest_completed_run_id(runs) if run_id == "latest" else run_id
     candidate = (paths.runs_dir / selected).resolve()
     root = paths.runs_dir.resolve()
     if candidate.parent != root or not candidate.is_dir():
@@ -1994,6 +2995,24 @@ def _empty_overview(reference: datetime) -> dict[str, Any]:
         },
         "signals": {"buy": 0, "eligible": 0, "blocked": 0, "hold": 0, "rows": []},
         "today_board": _empty_today_board(),
+        "decision_timeline": [
+            _timeline_event(
+                "no_run",
+                "최근 실행 생성",
+                "not_evaluated",
+                "완료된 run이 없어 투자 판단 흐름을 만들 수 없습니다.",
+                "설정 검증 후 시뮬레이션 또는 신호 생성을 먼저 실행하세요.",
+                "runs/*/manifest.json",
+                action={"label": "설정 검증", "page": "settings"},
+                occurred_at=reference.isoformat(),
+                step=1,
+            )
+        ],
+        "data_lineage": empty_data_lineage(generated_at=reference.isoformat()),
+        "session_replay": empty_session_replay(generated_at=reference.isoformat()),
+        "failure_patterns": empty_failure_patterns(generated_at=reference.isoformat()),
+        "run_evidence": empty_run_evidence(generated_at=reference.isoformat()),
+        "recovery_guide": empty_recovery_guide(),
         "metric_dictionary": metric_dictionary_payload("overview"),
         "health": {"score": None, "threshold": None, "status": "not_evaluated"},
         "recommended_actions": [
@@ -2044,6 +3063,327 @@ def _empty_signal_summary() -> dict[str, Any]:
         "total_count": 0,
         "data_verified_rate": None,
     }
+
+
+def _decision_timeline(
+    *,
+    paths: RuntimePaths,
+    run_dir: Path,
+    manifest: Mapping[str, Any],
+    data_quality: Mapping[str, Any],
+    risk: Mapping[str, Any],
+    signals: Mapping[str, Any],
+    signal_rows: Sequence[Mapping[str, Any]],
+    today_board: Mapping[str, Sequence[Mapping[str, Any]]],
+    recommended_actions: Sequence[Mapping[str, Any]],
+    execution_status: str,
+    display_status: str,
+) -> list[dict[str, Any]]:
+    data_summary = _mapping(data_quality.get("summary"))
+    risk_summary = _mapping(risk.get("summary"))
+    started_at = manifest.get("started_at")
+    finished_at = manifest.get("finished_at")
+    data_source_path = run_dir / "data_sources.json"
+    signal_path = _first_existing_path(run_dir / "signals_risk.json", run_dir / "signals.json")
+    risk_path = run_dir / "risk_explanation.json"
+    reconciliation_path = paths.state_dir / "portfolio_reconciliation.json"
+    toss_snapshot_path = paths.state_dir / "toss_account_snapshot.json"
+    order_plan_path = paths.state_dir / "order_plan.json"
+    notification_failure_path = paths.state_dir / "notification_failures.jsonl"
+
+    return [
+        _timeline_event(
+            "data_collection",
+            "데이터 수집",
+            _timeline_data_collection_status(data_source_path, execution_status),
+            _timeline_data_collection_summary(data_summary, data_source_path),
+            "가격 원천이 비어 있거나 실패하면 이후 신호와 리스크 판단을 신뢰할 수 없습니다.",
+            _artifact_label(paths, data_source_path),
+            action={"label": "데이터 품질 보기", "page": "data-quality"},
+            failure_code=manifest.get("failure_code")
+            if execution_status in {"data_error", "failed"}
+            else None,
+            occurred_at=started_at,
+            step=1,
+        ),
+        _timeline_event(
+            "provider_validation",
+            "Provider 검증",
+            str(data_summary.get("status") or "not_evaluated"),
+            _timeline_provider_summary(data_summary),
+            "provider 간 날짜·가격·거래량 차이가 있으면 오늘 신호는 운영 검토가 필요합니다.",
+            "data_sources.json · provider_disagreement_report.json",
+            action={"label": "불일치 상세", "page": "data-quality"},
+            failure_code=FailureCode.DATA_DISAGREEMENT.value
+            if data_summary.get("disagreement_count")
+            else None,
+            occurred_at=finished_at,
+            step=2,
+        ),
+        _timeline_event(
+            "signal_generation",
+            "신호 생성",
+            "success" if signal_rows else "not_evaluated",
+            _timeline_signal_summary(signals, signal_rows),
+            "매수·매도·관망 후보가 만들어졌는지와 가격 검증 여부를 함께 봅니다.",
+            _artifact_label(paths, signal_path) if signal_path else "signals_risk.json · signals.json",
+            action={"label": "신호 보기", "page": "signals"},
+            occurred_at=finished_at,
+            step=3,
+        ),
+        _timeline_event(
+            "risk_review",
+            "리스크 심사",
+            str(risk_summary.get("status") or "not_evaluated"),
+            _timeline_risk_summary(risk_summary),
+            "포지션 한도, 유동성, 데이터 신뢰도 기준을 통과한 신호만 다음 검토로 보냅니다.",
+            _artifact_label(paths, risk_path),
+            action={"label": "리스크 상세", "page": "risk"},
+            failure_code=_timeline_top_failure_code(risk_summary),
+            occurred_at=finished_at,
+            step=4,
+        ),
+        _timeline_toss_event(paths, reconciliation_path, toss_snapshot_path, step=5),
+        _timeline_order_event(paths, order_plan_path, today_board, step=6),
+        _timeline_notification_event(
+            paths,
+            notification_failure_path,
+            recommended_actions,
+            display_status,
+            step=7,
+        ),
+    ]
+
+
+def _timeline_event(
+    event_id: str,
+    label: str,
+    status: str,
+    summary: str,
+    detail: str,
+    evidence: str,
+    *,
+    action: Mapping[str, Any] | None = None,
+    failure_code: Any = None,
+    occurred_at: Any = None,
+    step: int,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "id": event_id,
+        "step": step,
+        "label": label,
+        "status": status,
+        "summary": summary,
+        "detail": detail,
+        "evidence": evidence,
+        "source": evidence,
+        "occurred_at": occurred_at,
+    }
+    if failure_code:
+        event["failure_code"] = str(failure_code)
+    if action:
+        event["next_action"] = dict(action)
+    return event
+
+
+def _first_existing_path(*paths: Path) -> Path | None:
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+def _artifact_label(paths: RuntimePaths, path: Path | None) -> str:
+    if path is None:
+        return "artifact 없음"
+    try:
+        return str(path.relative_to(paths.project_root)).replace("\\", "/")
+    except ValueError:
+        return str(path)
+
+
+def _timeline_data_collection_status(path: Path, execution_status: str) -> str:
+    if path.exists():
+        return "success" if execution_status not in {"failed", "data_error"} else "warning"
+    if execution_status in {"failed", "data_error"}:
+        return "failed" if execution_status == "failed" else "data_error"
+    return "not_evaluated"
+
+
+def _timeline_data_collection_summary(summary: Mapping[str, Any], path: Path) -> str:
+    provider_count = summary.get("provider_count") or 0
+    failed_count = summary.get("failed_source_count") or 0
+    if path.exists():
+        return f"Provider {provider_count}개 수집 기록, 실패 source {failed_count}개"
+    return "data_sources.json이 없어 수집 완료 여부를 확인하지 못했습니다."
+
+
+def _timeline_provider_summary(summary: Mapping[str, Any]) -> str:
+    total = summary.get("total") or 0
+    verified = summary.get("verified") or 0
+    disagreements = summary.get("disagreement_count") or 0
+    blocked = summary.get("blocked_ticker_count") or 0
+    if total:
+        return f"{verified}/{total} ticker 검증, 불일치 {disagreements}건, 차단 {blocked}개"
+    return "검증할 provider 비교 결과가 없습니다."
+
+
+def _timeline_signal_summary(
+    signals: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+) -> str:
+    counts = _signal_counts(signals)
+    if not rows:
+        return "생성된 today signal artifact가 없습니다."
+    return (
+        f"신호 {len(rows)}개, 매수 {counts['buy']}개, "
+        f"검토 가능 {counts['eligible']}개, 차단 {counts['blocked']}개"
+    )
+
+
+def _timeline_risk_summary(summary: Mapping[str, Any]) -> str:
+    approved = summary.get("approved_count") or 0
+    blocked = summary.get("blocked_count") or 0
+    hold = summary.get("hold_count") or 0
+    if approved or blocked or hold:
+        return f"승인 {approved}개, 차단 {blocked}개, 대기 {hold}개"
+    return "리스크 심사 결과가 아직 없습니다."
+
+
+def _timeline_top_failure_code(summary: Mapping[str, Any]) -> str | None:
+    top_reasons = _sequence(summary.get("top_block_reasons"))
+    first = _mapping(top_reasons[0]) if top_reasons else {}
+    code = first.get("code")
+    return str(code) if code else None
+
+
+def _timeline_toss_event(
+    paths: RuntimePaths,
+    reconciliation_path: Path,
+    snapshot_path: Path,
+    *,
+    step: int,
+) -> dict[str, Any]:
+    reconciliation = _mapping(read_json(reconciliation_path, default={}))
+    status = str(reconciliation.get("status") or "")
+    differences = len(_sequence(reconciliation.get("differences")))
+    unmapped = len(_sequence(reconciliation.get("unmapped_tickers")))
+    if status == "synchronized":
+        event_status = "success"
+        summary = "로컬 포트폴리오와 Toss 보유 수량이 동기화 상태입니다."
+    elif reconciliation:
+        event_status = "warning" if status == "diverged" else "not_evaluated"
+        summary = f"Toss 대조 결과 {status or 'unknown'} · 차이 {differences}개 · 미매핑 {unmapped}개"
+    elif snapshot_path.exists():
+        event_status = "not_evaluated"
+        summary = "Toss 계좌 snapshot은 있으나 포트폴리오 대조 결과는 없습니다."
+    else:
+        event_status = "not_evaluated"
+        summary = "Toss 계좌 대조 산출물이 아직 없습니다."
+    evidence = (
+        _artifact_label(paths, reconciliation_path)
+        if reconciliation_path.exists()
+        else _artifact_label(paths, snapshot_path)
+        if snapshot_path.exists()
+        else "portfolio_reconciliation.json · toss_account_snapshot.json"
+    )
+    return _timeline_event(
+        "toss_reconciliation",
+        "Toss 계좌 대조",
+        event_status,
+        summary,
+        "실계좌와 로컬 포트폴리오가 다르면 오늘 주문 검토 전에 차이를 먼저 정리해야 합니다.",
+        evidence,
+        action={"label": "Toss Account", "page": "toss-account"},
+        failure_code="TOSS_RECONCILIATION_DIFF" if differences or unmapped else None,
+        occurred_at=reconciliation.get("generated_at"),
+        step=step,
+    )
+
+
+def _timeline_order_event(
+    paths: RuntimePaths,
+    order_plan_path: Path,
+    today_board: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    step: int,
+) -> dict[str, Any]:
+    order_plan = _mapping(read_json(order_plan_path, default={}))
+    orders = _sequence(order_plan.get("orders"))
+    pending = len(_sequence(today_board.get("order_prepares")))
+    if orders:
+        status = "success"
+        summary = f"OrderIntent 검토 후보 {len(orders)}건이 준비됐습니다."
+    elif pending:
+        status = "warning"
+        summary = f"매수 후보 {pending}건은 주문 전 수동 검토가 필요합니다."
+    else:
+        status = "not_evaluated"
+        summary = "주문 검토가 필요한 매수 후보가 없습니다."
+    return _timeline_event(
+        "order_review",
+        "주문 검토",
+        status,
+        summary,
+        "이 단계는 실제 주문이 아니라 OrderIntent와 수동 승인 전 검토 상태만 표시합니다.",
+        _artifact_label(paths, order_plan_path)
+        if order_plan_path.exists()
+        else "state/order_plan.json · today_signals.json",
+        action={"label": "주문 검토", "page": "toss-account"},
+        failure_code="ORDER_REVIEW_PENDING" if pending and not orders else None,
+        occurred_at=order_plan.get("generated_at"),
+        step=step,
+    )
+
+
+def _timeline_notification_event(
+    paths: RuntimePaths,
+    failure_path: Path,
+    recommended_actions: Sequence[Mapping[str, Any]],
+    display_status: str,
+    *,
+    step: int,
+) -> dict[str, Any]:
+    failure_count = _jsonl_line_count(failure_path)
+    if failure_count:
+        status = "warning"
+        summary = f"알림 실패 기록 {failure_count}건이 있습니다."
+        failure_code = "NOTIFICATION_FAILURE"
+    elif recommended_actions or display_status in {"blocked", "data_error", "failed", "warning"}:
+        status = "not_evaluated"
+        summary = "차단 사유와 다음 행동을 먼저 확인한 뒤 알림을 준비하세요."
+        failure_code = None
+    else:
+        status = "success"
+        summary = "차단 사유가 없어 알림 전 최종 리포트 확인 단계입니다."
+        failure_code = None
+    return _timeline_event(
+        "notification_ready",
+        "알림 준비",
+        status,
+        summary,
+        "카카오 알림은 실행 결과 요약 단계이며, 실패 기록이 있으면 API 모니터링에서 확인합니다.",
+        _artifact_label(paths, failure_path)
+        if failure_path.exists()
+        else "notification_failures.jsonl · recommended_actions",
+        action={"label": "API 모니터링", "page": "api-monitoring"},
+        failure_code=failure_code,
+        step=step,
+    )
+
+
+def _jsonl_line_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    count = 0
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    count += 1
+    except OSError:
+        return 0
+    return count
 
 
 def _load_dashboard_settings(paths: RuntimePaths) -> Settings:
@@ -2476,6 +3816,7 @@ def _normalize_toss_fx_rates(sections: Mapping[str, Any]) -> list[dict[str, Any]
             "quote_currency": "KRW",
             "rate": 1.0,
             "mid_rate": 1.0,
+            "fx_change_pct": 0.0,
             "status": "success",
             "valid_from": None,
             "valid_until": None,
@@ -2490,12 +3831,26 @@ def _normalize_toss_fx_rates(sections: Mapping[str, Any]) -> list[dict[str, Any]
         base = (_first_text(payload, "baseCurrency", "base_currency") or "").upper()
         quote = (_first_text(payload, "quoteCurrency", "quote_currency") or "KRW").upper()
         rate = _first_number(payload, "rate", "midRate", "mid_rate")
+        fx_change_pct = _normalize_ratio(
+            _first_number(
+                payload,
+                "changeRate",
+                "change_rate",
+                "rateChangeRate",
+                "rate_change_rate",
+                "fluctuationRate",
+                "fluctuation_rate",
+                "compareToPreviousCloseRate",
+                "compare_to_previous_close_rate",
+            )
+        )
         rates.append(
             {
                 "base_currency": base or name.replace("exchange_rate_", "").split("_")[0].upper(),
                 "quote_currency": quote,
                 "rate": _round_or_none(rate, 8),
                 "mid_rate": _round_or_none(_first_number(payload, "midRate", "mid_rate"), 8),
+                "fx_change_pct": _round_or_none(fx_change_pct, 6),
                 "basis_point": _round_or_none(_first_number(payload, "basisPoint", "basis_point"), 4),
                 "rate_change_type": _first_text(payload, "rateChangeType", "rate_change_type"),
                 "valid_from": _first_text(payload, "validFrom", "valid_from"),
@@ -2675,6 +4030,76 @@ def _apply_toss_enrichment(
         row["situation_tags"] = _toss_situation_tags(row)
         enriched.append(row)
     return enriched
+
+
+def _apply_toss_fx_impact(
+    holdings: Sequence[Mapping[str, Any]],
+    fx_rates: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    fx_change_map = {
+        str(rate.get("base_currency") or "").upper(): _float_or_none(rate.get("fx_change_pct"))
+        for rate in fx_rates
+        if str(rate.get("quote_currency") or "").upper() == "KRW"
+    }
+    enriched: list[dict[str, Any]] = []
+    for item in holdings:
+        row = dict(item)
+        row.update(_toss_fx_impact_row(row, fx_change_map))
+        enriched.append(row)
+    return enriched
+
+
+def _toss_fx_impact_row(
+    row: Mapping[str, Any],
+    fx_change_map: Mapping[str, float | None],
+) -> dict[str, Any]:
+    currency = str(row.get("currency") or "KRW").upper()
+    current_value = _float_or_none(row.get("market_value_krw"))
+    asset_return = _float_or_none(row.get("day_change_pct"))
+    fx_return = 0.0 if currency == "KRW" else fx_change_map.get(currency)
+    base = {
+        "asset_return_pct": _round_or_none(asset_return, 6),
+        "fx_return_pct": _round_or_none(fx_return, 6),
+        "previous_market_value_krw": None,
+        "asset_effect_krw": None,
+        "fx_effect_krw": None,
+        "cross_effect_krw": None,
+        "total_day_pnl_krw": None,
+        "day_return_krw": None,
+        "fx_sensitivity_krw": _round_or_none(current_value if currency != "KRW" else 0.0, 4),
+        "fx_impact_status": "not_evaluated",
+        "fx_impact_source": "Toss holdings GET · Toss prices GET · Toss exchange-rate GET",
+    }
+    if current_value is None or asset_return is None:
+        return base
+    asset_denominator = 1 + asset_return
+    if asset_denominator <= 0:
+        return {**base, "fx_impact_status": "not_evaluated"}
+    if fx_return is None:
+        asset_effect = current_value * asset_return / asset_denominator
+        return {
+            **base,
+            "asset_effect_krw": _round_or_none(asset_effect, 4),
+            "fx_impact_status": "partial",
+        }
+    denominator = asset_denominator * (1 + fx_return)
+    if denominator <= 0:
+        return {**base, "fx_impact_status": "not_evaluated"}
+    previous_value = current_value / denominator
+    asset_effect = previous_value * asset_return
+    fx_effect = previous_value * fx_return
+    cross_effect = previous_value * asset_return * fx_return
+    total_day_pnl = current_value - previous_value
+    return {
+        **base,
+        "previous_market_value_krw": _round_or_none(previous_value, 4),
+        "asset_effect_krw": _round_or_none(asset_effect, 4),
+        "fx_effect_krw": _round_or_none(fx_effect, 4),
+        "cross_effect_krw": _round_or_none(cross_effect, 4),
+        "total_day_pnl_krw": _round_or_none(total_day_pnl, 4),
+        "day_return_krw": _round_or_none(total_day_pnl / previous_value if previous_value else None, 6),
+        "fx_impact_status": "success",
+    }
 
 
 def _apply_portfolio_type_metadata(
@@ -3028,6 +4453,109 @@ def _toss_portfolio_summary(
     }
 
 
+def _toss_fx_impact_summary(holdings: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    rows = [
+        dict(item)
+        for item in holdings
+        if item.get("fx_impact_status") in {"success", "partial"}
+    ]
+    if not holdings:
+        return _empty_toss_fx_impact("not_evaluated")
+    success_rows = [row for row in rows if row.get("fx_impact_status") == "success"]
+    partial_rows = [row for row in rows if row.get("fx_impact_status") == "partial"]
+    total_value = sum(
+        value
+        for item in holdings
+        for value in [_float_or_none(item.get("market_value_krw"))]
+        if value is not None
+    )
+    evaluated_value = sum(
+        value
+        for item in success_rows
+        for value in [_float_or_none(item.get("market_value_krw"))]
+        if value is not None
+    )
+    asset_effect = _sum_numeric(rows, "asset_effect_krw")
+    fx_effect = _sum_numeric(success_rows, "fx_effect_krw")
+    cross_effect = _sum_numeric(success_rows, "cross_effect_krw")
+    total_day_pnl = _sum_numeric(success_rows, "total_day_pnl_krw")
+    status = (
+        "success"
+        if len(success_rows) == len(holdings)
+        else "partial"
+        if rows
+        else "not_evaluated"
+    )
+    top_rows = sorted(
+        rows,
+        key=lambda item: -abs(
+            _float_or_none(item.get("total_day_pnl_krw"))
+            if item.get("total_day_pnl_krw") is not None
+            else _float_or_none(item.get("asset_effect_krw"))
+            or 0.0
+        ),
+    )[:8]
+    return {
+        "status": status,
+        "summary": {
+            "status": status,
+            "holding_count": len(holdings),
+            "evaluated_count": len(success_rows),
+            "partial_count": len(partial_rows),
+            "total_market_value_krw": _round_or_none(total_value, 4),
+            "evaluated_market_value_krw": _round_or_none(evaluated_value, 4),
+            "evaluated_weight": _round_or_none(
+                evaluated_value / total_value if total_value else None,
+                6,
+            ),
+            "asset_effect_krw": _round_or_none(asset_effect, 4),
+            "fx_effect_krw": _round_or_none(fx_effect, 4),
+            "cross_effect_krw": _round_or_none(cross_effect, 4),
+            "total_day_pnl_krw": _round_or_none(total_day_pnl, 4),
+            "fx_effect_share": _round_or_none(
+                fx_effect / total_day_pnl if total_day_pnl else None,
+                6,
+            ),
+        },
+        "rows": [
+            {
+                "symbol": row.get("symbol"),
+                "name": row.get("name"),
+                "currency": row.get("currency"),
+                "market_value_krw": row.get("market_value_krw"),
+                "asset_return_pct": row.get("asset_return_pct"),
+                "fx_return_pct": row.get("fx_return_pct"),
+                "asset_effect_krw": row.get("asset_effect_krw"),
+                "fx_effect_krw": row.get("fx_effect_krw"),
+                "cross_effect_krw": row.get("cross_effect_krw"),
+                "total_day_pnl_krw": row.get("total_day_pnl_krw"),
+                "day_return_krw": row.get("day_return_krw"),
+                "fx_impact_status": row.get("fx_impact_status"),
+                "source": row.get("fx_impact_source"),
+            }
+            for row in top_rows
+        ],
+        "source": "Toss holdings GET · Toss prices GET · Toss exchange-rate GET",
+    }
+
+
+def _dashboard_account_attribution(paths: RuntimePaths) -> dict[str, Any]:
+    attribution_path = paths.state_dir / "account_attribution.json"
+    payload = read_json(attribution_path, default=None)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    return empty_account_attribution()
+
+
+def _sum_numeric(rows: Sequence[Mapping[str, Any]], key: str) -> float:
+    return sum(
+        value
+        for row in rows
+        for value in [_float_or_none(row.get(key))]
+        if value is not None
+    )
+
+
 def _toss_currency_totals(holdings: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
     for item in holdings:
@@ -3342,6 +4870,28 @@ def _empty_toss_portfolio_summary(status: str) -> dict[str, Any]:
         "cash_available": None,
         "failed_sections": [],
         "failed_section_count": 0,
+    }
+
+
+def _empty_toss_fx_impact(status: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "summary": {
+            "status": status,
+            "holding_count": 0,
+            "evaluated_count": 0,
+            "partial_count": 0,
+            "total_market_value_krw": None,
+            "evaluated_market_value_krw": None,
+            "evaluated_weight": None,
+            "asset_effect_krw": None,
+            "fx_effect_krw": None,
+            "cross_effect_krw": None,
+            "total_day_pnl_krw": None,
+            "fx_effect_share": None,
+        },
+        "rows": [],
+        "source": "Toss holdings GET · Toss prices GET · Toss exchange-rate GET",
     }
 
 
@@ -3936,11 +5486,13 @@ def _overview_reasons(
     for item in _sequence(verdict.get("reasons")):
         if isinstance(item, Mapping):
             code = str(item.get("code") or "UNKNOWN")
+            component = str(item.get("component") or "safety")
             reasons.append(
                 _reason(
                     code,
-                    component=str(item.get("component") or "safety"),
+                    component=component,
                     message=str(item.get("message") or "") or None,
+                    severity=_reason_severity(code, component, manifest),
                 )
             )
     failure_code = manifest.get("failure_code")
@@ -3988,6 +5540,14 @@ def _overview_reasons(
     return sorted(unique.values(), key=lambda item: priority.get(item["component"], 9))
 
 
+def _reason_severity(code: str, component: str, manifest: Mapping[str, Any]) -> str:
+    if component == "survivorship":
+        audit = _mapping(manifest.get("survivorship_audit"))
+        if audit.get("valid") is True and str(code).startswith("SURVIVORSHIP_BIAS_RISK"):
+            return "warning"
+    return "blocking"
+
+
 def _reason(
     code: str,
     *,
@@ -3995,6 +5555,7 @@ def _reason(
     message: str | None = None,
     affected_tickers: Any = None,
     count: Any = None,
+    severity: str = "blocking",
 ) -> dict[str, Any]:
     catalog_message, remediation = FAILURE_CATALOG.get(
         code,
@@ -4003,7 +5564,7 @@ def _reason(
     return {
         "code": code,
         "component": component,
-        "severity": "blocking",
+        "severity": severity,
         "message": message or catalog_message,
         "remediation": remediation,
         "affected_tickers": affected_tickers or [],
@@ -4012,9 +5573,16 @@ def _reason(
 
 
 def _headline(status: str, reasons: Sequence[Mapping[str, Any]], mode: str) -> str:
-    if reasons:
-        first = reasons[0]
+    blockers = [
+        reason
+        for reason in reasons
+        if str(reason.get("severity") or "blocking") in {"blocking", "blocked"}
+    ]
+    if blockers:
+        first = blockers[0]
         return f"{first.get('message')} 현재 {mode} 실행은 운영 검토가 필요합니다."
+    if status == "warning":
+        return "필수 게이트는 통과했지만 검토 경고가 있습니다."
     if status == "success":
         return "필수 검증을 통과했습니다. 알림 전 최종 리포트를 확인하세요."
     if status == "validating":
@@ -4140,6 +5708,407 @@ def _signal_rows(signals: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _empty_signal_history() -> dict[str, Any]:
+    return {
+        "status": "not_evaluated",
+        "summary": "종목별 판단 이력을 만들 실행 기록이 없습니다.",
+        "lookback_days": 30,
+        "cards": [],
+        "source": "runs/*/manifest.json · signals_risk.json",
+    }
+
+
+def _signal_history_cards(
+    paths: RuntimePaths,
+    current_run_dir: Path,
+    current_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    tickers = [
+        str(row.get("ticker") or "").upper()
+        for row in current_rows
+        if str(row.get("ticker") or "").strip()
+    ]
+    tickers = list(dict.fromkeys(tickers))
+    if not tickers:
+        return _empty_signal_history()
+
+    reference = _run_timestamp(current_run_dir) or datetime.now(UTC)
+    cutoff = reference - timedelta(days=30)
+    histories: dict[str, list[dict[str, Any]]] = {ticker: [] for ticker in tickers}
+    for run in list_dashboard_runs(paths, limit=240):
+        run_id = str(run.get("run_id") or "")
+        if not run_id or not _is_completed_run(run):
+            continue
+        occurred_at = _parse_timestamp(run.get("finished_at")) or _parse_timestamp(run.get("started_at"))
+        if occurred_at is not None and occurred_at < cutoff:
+            continue
+        run_dir = paths.runs_dir / run_id
+        if not run_dir.is_dir():
+            continue
+        signal_map = _signal_map(run_dir)
+        for row in _signal_rows(signal_map):
+            ticker = str(row.get("ticker") or "").upper()
+            if ticker not in histories:
+                continue
+            histories[ticker].append(_signal_history_snapshot(row, run, occurred_at))
+
+    current_by_ticker = {str(row.get("ticker") or "").upper(): row for row in current_rows}
+    cards = [
+        _signal_history_card(ticker, histories.get(ticker, []), current_by_ticker.get(ticker), reference)
+        for ticker in tickers
+    ]
+    cards.sort(key=lambda item: (_decision_rank(str(item.get("status") or "not_evaluated")), item["ticker"]))
+    populated = sum(1 for card in cards if card.get("run_count"))
+    status = "success" if populated else "not_evaluated"
+    return {
+        "status": status,
+        "summary": f"{populated}/{len(cards)}개 종목의 최근 판단 이력을 계산했습니다.",
+        "lookback_days": 30,
+        "cards": cards[:12],
+        "source": "runs/*/manifest.json · signals_risk.json",
+    }
+
+
+def _run_timestamp(run_dir: Path) -> datetime | None:
+    manifest = _mapping(read_json(run_dir / "manifest.json", default={}))
+    return _parse_timestamp(manifest.get("finished_at")) or _parse_timestamp(manifest.get("started_at"))
+
+
+def _signal_history_snapshot(
+    row: Mapping[str, Any],
+    run: Mapping[str, Any],
+    occurred_at: datetime | None,
+) -> dict[str, Any]:
+    failed = [item for item in _sequence(row.get("failed")) if isinstance(item, Mapping)]
+    reason_codes = [str(code) for code in _sequence(row.get("reason_codes")) if code]
+    failed_codes = [str(item.get("code")) for item in failed if item.get("code")]
+    status = str(row.get("status") or "not_evaluated")
+    action = str(row.get("action") or row.get("signal") or "hold")
+    return {
+        "run_id": str(run.get("run_id") or ""),
+        "occurred_at": occurred_at.isoformat() if occurred_at else run.get("finished_at") or run.get("started_at"),
+        "action": action,
+        "action_label": _signal_history_action_label(action),
+        "status": status,
+        "eligible": row.get("eligible") is True,
+        "blocked": row.get("blocked") is True,
+        "score": row.get("score"),
+        "reason_codes": reason_codes[:5],
+        "failed_codes": failed_codes[:5],
+        "risk_status": "blocked" if failed_codes or row.get("blocked") else "pass" if row.get("eligible") else "hold",
+    }
+
+
+def _signal_history_card(
+    ticker: str,
+    snapshots: Sequence[Mapping[str, Any]],
+    current_row: Mapping[str, Any] | None,
+    reference: datetime,
+) -> dict[str, Any]:
+    ordered = sorted(
+        [dict(item) for item in snapshots],
+        key=lambda item: str(item.get("occurred_at") or ""),
+    )
+    latest = ordered[-1] if ordered else _signal_history_snapshot(
+        current_row or {"ticker": ticker},
+        {"run_id": ""},
+        reference,
+    )
+    windows = {
+        "7d": _signal_history_window(ordered, reference, 7),
+        "30d": _signal_history_window(ordered, reference, 30),
+    }
+    changes = _signal_history_changes(ordered)
+    trend = _signal_history_trend(ordered)
+    summary = _signal_history_summary(ticker, windows["7d"], windows["30d"], trend)
+    return {
+        "ticker": ticker,
+        "status": latest.get("status") or "not_evaluated",
+        "latest_action": latest.get("action"),
+        "latest_action_label": latest.get("action_label"),
+        "latest_reason_codes": latest.get("reason_codes", []),
+        "latest_failed_codes": latest.get("failed_codes", []),
+        "run_count": len(ordered),
+        "trend": trend,
+        "summary": summary,
+        "windows": windows,
+        "changes": changes,
+        "recent": ordered[-5:],
+        "source": "runs/*/manifest.json · signals_risk.json",
+    }
+
+
+def _signal_history_window(
+    snapshots: Sequence[Mapping[str, Any]],
+    reference: datetime,
+    days: int,
+) -> dict[str, Any]:
+    cutoff = reference - timedelta(days=days)
+    rows = []
+    for item in snapshots:
+        occurred = _parse_timestamp(item.get("occurred_at"))
+        if occurred is None or occurred >= cutoff:
+            rows.append(item)
+    buy_count = sum(str(item.get("action")) == "buy" for item in rows)
+    sell_count = sum(str(item.get("action")) == "sell" for item in rows)
+    hold_count = sum(str(item.get("action")) not in {"buy", "sell"} for item in rows)
+    eligible_count = sum(item.get("eligible") is True for item in rows)
+    blocked_count = sum(item.get("blocked") is True or item.get("risk_status") == "blocked" for item in rows)
+    latest = rows[-1] if rows else {}
+    return {
+        "days": days,
+        "run_count": len(rows),
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "hold_count": hold_count,
+        "eligible_count": eligible_count,
+        "blocked_count": blocked_count,
+        "latest_action": latest.get("action"),
+        "latest_status": latest.get("status"),
+    }
+
+
+def _signal_history_changes(snapshots: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    previous: Mapping[str, Any] | None = None
+    for item in snapshots:
+        if previous is None:
+            previous = item
+            continue
+        changed: list[str] = []
+        if item.get("action") != previous.get("action"):
+            changed.append(
+                f"판단 {_signal_history_action_label(previous.get('action'))} → {_signal_history_action_label(item.get('action'))}"
+            )
+        if item.get("eligible") != previous.get("eligible"):
+            changed.append(
+                "운영 가능 → 차단"
+                if previous.get("eligible") is True
+                else "차단/대기 → 운영 가능"
+            )
+        if item.get("risk_status") != previous.get("risk_status"):
+            changed.append(f"리스크 {previous.get('risk_status') or '-'} → {item.get('risk_status') or '-'}")
+        if changed:
+            changes.append(
+                {
+                    "occurred_at": item.get("occurred_at"),
+                    "run_id": item.get("run_id"),
+                    "summary": " · ".join(changed),
+                    "reason_codes": item.get("reason_codes", []),
+                    "failed_codes": item.get("failed_codes", []),
+                }
+            )
+        previous = item
+    return changes[-4:]
+
+
+def _signal_history_trend(snapshots: Sequence[Mapping[str, Any]]) -> str:
+    if len(snapshots) < 2:
+        return "insufficient"
+    previous = snapshots[-2]
+    latest = snapshots[-1]
+    if previous.get("eligible") is not True and latest.get("eligible") is True:
+        return "improving"
+    if previous.get("eligible") is True and latest.get("eligible") is not True:
+        return "deteriorating"
+    if previous.get("action") != latest.get("action"):
+        return "changed"
+    return "stable"
+
+
+def _signal_history_summary(
+    ticker: str,
+    seven: Mapping[str, Any],
+    thirty: Mapping[str, Any],
+    trend: str,
+) -> str:
+    if not thirty.get("run_count"):
+        return f"{ticker}의 최근 30일 판단 이력이 없습니다."
+    trend_text = {
+        "improving": "최근 판단이 개선됐습니다.",
+        "deteriorating": "최근 판단이 보수적으로 바뀌었습니다.",
+        "changed": "최근 판단 방향이 바뀌었습니다.",
+        "stable": "최근 판단이 대체로 유지됐습니다.",
+        "insufficient": "판단 변화 추세를 보려면 실행 기록이 더 필요합니다.",
+    }.get(trend, "판단 흐름을 확인하세요.")
+    return (
+        f"최근 7일 {seven.get('run_count', 0)}회 중 매수 {seven.get('buy_count', 0)}회, "
+        f"차단 {seven.get('blocked_count', 0)}회. "
+        f"30일 기준 매수 {thirty.get('buy_count', 0)}회, 운영 가능 {thirty.get('eligible_count', 0)}회. "
+        f"{trend_text}"
+    )
+
+
+def _signal_history_action_label(action: Any) -> str:
+    return {
+        "buy": "매수",
+        "sell": "매도",
+        "hold": "관망",
+        "entry": "진입",
+        "exit": "청산",
+    }.get(str(action or "hold"), str(action or "관망"))
+
+
+def _empty_signal_outcome(source: str = "state/signal_outcome.json") -> dict[str, Any]:
+    return {
+        "status": "not_evaluated",
+        "summary": {
+            "status": "not_evaluated",
+            "signal_count": 0,
+            "evaluated_count": 0,
+            "pending_count": 0,
+            "buy_candidate_count": 0,
+            "blocked_buy_count": 0,
+            "hold_count": 0,
+            "sell_candidate_count": 0,
+        },
+        "aggregate": {},
+        "by_decision_group": [],
+        "by_strategy": [],
+        "blocked_avoidance": {},
+        "history_signal_count": 0,
+        "cumulative": {},
+        "rows": [],
+        "basis": "gross_close_to_close_no_fees_spread_slippage",
+        "source": source,
+    }
+
+
+def _dashboard_signal_outcome(paths: RuntimePaths, run_dir: Path) -> dict[str, Any]:
+    outcome_path = _first_existing_path(
+        run_dir / "signal_outcome.json",
+        paths.state_dir / "signal_outcome.json",
+    )
+    source = _artifact_label(paths, outcome_path or (paths.state_dir / "signal_outcome.json"))
+    if outcome_path is None:
+        return _empty_signal_outcome(source)
+    payload = read_json(outcome_path, default={})
+    if not isinstance(payload, Mapping):
+        empty = _empty_signal_outcome(source)
+        empty["status"] = "data_error"
+        empty["summary"]["status"] = "data_error"
+        return empty
+    report = dict(payload)
+    summary = dict(_mapping(report.get("summary")))
+    status = str(report.get("status") or summary.get("status") or "not_evaluated")
+    summary["status"] = status
+    calculation_source = str(report.get("source") or "signals JSON · price history JSON")
+    report["status"] = status
+    report["summary"] = summary
+    report["aggregate"] = dict(_mapping(report.get("aggregate")))
+    report["by_decision_group"] = [
+        dict(item) for item in _sequence(report.get("by_decision_group")) if isinstance(item, Mapping)
+    ]
+    report["by_strategy"] = [
+        dict(item) for item in _sequence(report.get("by_strategy")) if isinstance(item, Mapping)
+    ]
+    report["blocked_avoidance"] = dict(_mapping(report.get("blocked_avoidance")))
+    report["rows"] = [dict(item) for item in _sequence(report.get("rows")) if isinstance(item, Mapping)]
+    report["source"] = f"{source} · {calculation_source}"
+    return report
+
+
+def _empty_stock_lifecycle(source: str = "state/stock_lifecycle.json") -> dict[str, Any]:
+    return {
+        "status": "not_evaluated",
+        "updated_at": None,
+        "summary": {
+            "ticker_count": 0,
+            "transition_count": 0,
+            "status_counts": {
+                "watch": 0,
+                "candidate": 0,
+                "holding": 0,
+                "caution": 0,
+                "reduce": 0,
+                "excluded": 0,
+            },
+            "action_required_count": 0,
+        },
+        "items": [],
+        "history": [],
+        "states": {},
+        "source": source,
+    }
+
+
+def _dashboard_stock_lifecycle(
+    paths: RuntimePaths,
+    run_dir: Path,
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    lifecycle_path = _first_existing_path(
+        run_dir / "stock_lifecycle.json",
+        paths.state_dir / "stock_lifecycle.json",
+    )
+    previous = read_json(lifecycle_path, default={}) if lifecycle_path else {}
+    signal_map = {
+        str(row.get("ticker") or "").upper(): dict(row)
+        for row in rows
+        if str(row.get("ticker") or "").strip()
+    }
+    report = build_stock_lifecycle_report(
+        signal_map,
+        [],
+        previous=previous if isinstance(previous, Mapping) else {},
+        now=_run_timestamp(run_dir) or datetime.now(UTC),
+    )
+    source = _artifact_label(paths, lifecycle_path or (paths.state_dir / "stock_lifecycle.json"))
+    report["source"] = f"{source} · signals_risk.json"
+    return report
+
+
+def _empty_signal_stability(source: str = "state/signal_stability.json") -> dict[str, Any]:
+    return {
+        "status": "not_evaluated",
+        "updated_at": None,
+        "windows": [5, 10, 20],
+        "summary": {
+            "ticker_count": 0,
+            "unstable_count": 0,
+            "auto_candidate_excluded_count": 0,
+            "average_stability_score": None,
+        },
+        "items": [],
+        "source": source,
+    }
+
+
+def _dashboard_signal_stability(
+    paths: RuntimePaths,
+    run_dir: Path,
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    stability_path = _first_existing_path(
+        run_dir / "signal_stability.json",
+        paths.state_dir / "signal_stability.json",
+    )
+    if stability_path is not None:
+        payload = read_json(stability_path, default={})
+        if isinstance(payload, Mapping):
+            report = dict(payload)
+            report["summary"] = dict(_mapping(report.get("summary")))
+            report["items"] = [
+                dict(item)
+                for item in _sequence(report.get("items"))
+                if isinstance(item, Mapping)
+            ]
+            report["source"] = _artifact_label(paths, stability_path)
+            return report
+    signal_map = {
+        str(row.get("ticker") or "").upper(): dict(row)
+        for row in rows
+        if str(row.get("ticker") or "").strip()
+    }
+    report = build_signal_stability_from_runs(
+        paths.runs_dir,
+        current_signals=signal_map,
+        now=_run_timestamp(run_dir) or datetime.now(UTC),
+    )
+    report["source"] = "runs/*/manifest.json · signals_risk.json"
+    return report
+
+
 def _liquidity_status(
     failed: Sequence[Mapping[str, Any]],
     passed: Sequence[Mapping[str, Any]],
@@ -4228,19 +6197,25 @@ def _top_reason_counts(checks: Sequence[Mapping[str, Any]]) -> list[dict[str, An
 
 
 def _empty_today_board() -> dict[str, list[dict[str, Any]]]:
+    default_task = {
+        "label": "최근 실행 생성",
+        "detail": "완료된 run이 없어 오늘 확인할 운영 데이터가 없습니다.",
+        "status": "not_evaluated",
+        "page": "overview",
+        "source": "runs/*/manifest.json",
+        "action_type": "data_check",
+        "queue_status": "new",
+        "priority": 1,
+        "queue_id": "task-no-run",
+    }
     return {
-        "tasks": [
-            {
-                "label": "최근 실행 생성",
-                "detail": "완료된 run이 없어 오늘 확인할 운영 데이터가 없습니다.",
-                "status": "not_evaluated",
-                "source": "runs/*/manifest.json",
-            }
-        ],
+        "tasks": [default_task],
         "risky_stocks": [],
         "buy_candidates": [],
         "sell_candidates": [],
         "dividend_reviews": [],
+        "order_prepares": [],
+        "action_queue": [default_task],
     }
 
 
@@ -4249,13 +6224,24 @@ def _today_board(
     reasons: Sequence[Mapping[str, Any]],
     actions: Sequence[Mapping[str, Any]],
     paths: RuntimePaths,
+    stock_warning_gate: Mapping[str, Any] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     board = _empty_today_board()
+    warning_gate = stock_warning_gate or {}
     board["tasks"] = _today_task_items(actions, reasons)
-    board["risky_stocks"] = _today_risky_stock_items(signal_rows, reasons)
+    board["risky_stocks"] = _today_risky_stock_items(signal_rows, reasons, warning_gate)
     board["buy_candidates"] = _today_signal_items(
-        [row for row in signal_rows if row.get("action") == "buy" and row.get("eligible") is True],
+        [
+            row
+            for row in signal_rows
+            if row.get("action") == "buy"
+            and row.get("eligible") is True
+            and _stock_warning_for_ticker(warning_gate, str(row.get("ticker") or "")) is None
+        ],
         fallback_detail="리스크 게이트를 통과한 매수 후보입니다.",
+        action_type="buy_review",
+        queue_prefix="buy",
+        priority=2,
     )
     board["sell_candidates"] = _today_signal_items(
         [
@@ -4264,8 +6250,13 @@ def _today_board(
             if row.get("action") == "sell" or str(row.get("signal") or "").lower() == "sell"
         ],
         fallback_detail="매도 또는 축소 검토 신호입니다.",
+        action_type="sell_review",
+        queue_prefix="sell",
+        priority=2,
     )
     board["dividend_reviews"] = _today_dividend_review_items(paths)
+    board["order_prepares"] = _today_order_prepare_items(board["buy_candidates"])
+    board["action_queue"] = _today_action_queue(board)
     return board
 
 
@@ -4274,17 +6265,26 @@ def _today_task_items(
     reasons: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     if actions:
-        return [
-            {
-                "label": str(action.get("label") or "검토"),
-                "detail": "차단 사유를 먼저 확인하세요.",
-                "status": "blocked" if reasons else "success",
-                "page": action.get("page"),
-                "command": action.get("command"),
-                "source": "safety_verdict.json · recommended_actions",
-            }
-            for action in actions[:5]
-        ]
+        items = []
+        for index, action in enumerate(actions[:5], start=1):
+            page = action.get("page")
+            command = action.get("command")
+            priority = _queue_priority(action.get("priority"), index)
+            items.append(
+                {
+                    "label": str(action.get("label") or "검토"),
+                    "detail": "차단 사유를 먼저 확인하세요.",
+                    "status": "blocked" if reasons else "success",
+                    "page": page,
+                    "command": command,
+                    "source": "safety_verdict.json · recommended_actions",
+                    "action_type": _today_action_type_for_target(page, command),
+                    "queue_status": "new",
+                    "priority": priority,
+                    "queue_id": str(action.get("id") or _queue_id("task", page or command or index)),
+                }
+            )
+        return items
     return [
         {
             "label": "오늘 리포트 확인",
@@ -4292,6 +6292,10 @@ def _today_task_items(
             "status": "success",
             "page": "signals",
             "source": "latest run manifest · today_signals.json",
+            "action_type": "data_check",
+            "queue_status": "new",
+            "priority": 1,
+            "queue_id": "task-review-report",
         }
     ]
 
@@ -4299,9 +6303,32 @@ def _today_task_items(
 def _today_risky_stock_items(
     signal_rows: Sequence[Mapping[str, Any]],
     reasons: Sequence[Mapping[str, Any]],
+    stock_warning_gate: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
+    for ticker, raw_warning in sorted((stock_warning_gate or {}).items()):
+        warning = _mapping(raw_warning)
+        if not _has_stock_warning(warning):
+            continue
+        symbol = str(ticker or "").upper()
+        if not symbol:
+            continue
+        seen.add(symbol)
+        items.append(
+            {
+                "ticker": symbol,
+                "label": symbol,
+                "detail": _stock_warning_message(warning),
+                "status": "blocked",
+                "page": "toss-account",
+                "source": "stock_warning_gate.json · Toss /api/v1/stocks/{symbol}/warnings",
+                "action_type": "broker_warning",
+                "queue_status": "new",
+                "priority": 1,
+                "queue_id": _queue_id("broker-warning", symbol),
+            }
+        )
     for row in signal_rows:
         ticker = str(row.get("ticker") or "").upper()
         if not ticker or ticker in seen:
@@ -4319,6 +6346,10 @@ def _today_risky_stock_items(
                 "status": str(row.get("status") or "warning"),
                 "page": "risk",
                 "source": "today_signals.json · risk gate status",
+                "action_type": "risk_review",
+                "queue_status": "new",
+                "priority": 1,
+                "queue_id": _queue_id("risk", ticker),
             }
         )
     for reason in reasons:
@@ -4327,23 +6358,96 @@ def _today_risky_stock_items(
             if not ticker or ticker in seen:
                 continue
             seen.add(ticker)
+            component = str(reason.get("component"))
             items.append(
                 {
                     "ticker": ticker,
                     "label": ticker,
                     "detail": str(reason.get("message") or reason.get("code") or "검토 필요"),
                     "status": "blocked",
-                    "page": _action_for_component(str(reason.get("component"))).get("page"),
+                    "page": _action_for_component(component).get("page"),
                     "source": "safety_verdict.json · provider/risk summaries",
+                    "action_type": _today_action_type_for_component(component),
+                    "queue_status": "new",
+                    "priority": 1,
+                    "queue_id": _queue_id("reason", reason.get("code") or component, ticker),
                 }
             )
     return items[:8]
+
+
+def _stock_warning_for_ticker(
+    stock_warning_gate: Mapping[str, Any],
+    ticker: str,
+) -> Mapping[str, Any] | None:
+    symbol = str(ticker or "").strip().upper()
+    if not symbol:
+        return None
+    candidates = [symbol]
+    if "." in symbol:
+        candidates.append(symbol.split(".", 1)[0])
+    if symbol.isdigit() and len(symbol) == 6:
+        candidates.extend([f"{symbol}.KS", f"{symbol}.KQ"])
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        warning = _mapping(stock_warning_gate.get(candidate))
+        if _has_stock_warning(warning):
+            return warning
+    return None
+
+
+def _has_stock_warning(warning: Mapping[str, Any]) -> bool:
+    if warning.get("has_warning") is True:
+        return True
+    payload = warning.get("warnings")
+    if isinstance(payload, Mapping):
+        result = payload.get("result")
+        if isinstance(result, Sequence) and not isinstance(result, str):
+            return bool(result)
+        if isinstance(result, Mapping):
+            warning_type = str(result.get("warningType") or result.get("warning") or "").upper()
+            suspended = (
+                result.get("suspended")
+                or result.get("isSuspended")
+                or result.get("tradeSuspended")
+            )
+            return bool(suspended) or warning_type not in {"", "NONE", "NORMAL"}
+    return False
+
+
+def _stock_warning_message(warning: Mapping[str, Any]) -> str:
+    message = str(warning.get("message") or "").strip()
+    if message:
+        return message
+    payload = warning.get("warnings")
+    if isinstance(payload, Mapping):
+        result = payload.get("result")
+        if isinstance(result, Sequence) and not isinstance(result, str):
+            warning_types = [
+                str(item.get("warningType") or item.get("warning") or item.get("type") or "")
+                for item in result
+                if isinstance(item, Mapping)
+            ]
+            warning_types = [item for item in warning_types if item]
+            if warning_types:
+                return " · ".join(warning_types[:3])
+        if isinstance(result, Mapping):
+            warning_type = str(result.get("warningType") or result.get("warning") or "").strip()
+            if warning_type:
+                return f"Broker warning flag: {warning_type}"
+    return "Toss 매수 유의사항이 있는 종목입니다."
 
 
 def _today_signal_items(
     rows: Sequence[Mapping[str, Any]],
     *,
     fallback_detail: str,
+    action_type: str,
+    queue_prefix: str,
+    priority: int,
 ) -> list[dict[str, Any]]:
     items = []
     for row in rows[:8]:
@@ -4361,6 +6465,10 @@ def _today_signal_items(
                 "target_price": row.get("target_price"),
                 "page": "signals",
                 "source": "today_signals.json · signal publication sidecar",
+                "action_type": action_type,
+                "queue_status": "new",
+                "priority": priority,
+                "queue_id": _queue_id(queue_prefix, ticker),
             }
         )
     return items
@@ -4399,9 +6507,96 @@ def _today_dividend_review_items(paths: RuntimePaths) -> list[dict[str, Any]]:
                 "status": "watch",
                 "page": "toss-account",
                 "source": f"{mapping.source} · portfolio_types",
+                "action_type": "dividend_review",
+                "queue_status": "new",
+                "priority": 4,
+                "queue_id": _queue_id("dividend", ticker),
             }
         )
     return rows[:8]
+
+
+def _today_order_prepare_items(
+    buy_candidates: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    if not buy_candidates:
+        return []
+    return [
+        {
+            "label": "매수 후보 주문 검증",
+            "detail": f"매수 후보 {len(buy_candidates)}건을 OrderIntent로 넘기기 전 현금·수량·Toss 유의사항을 확인하세요.",
+            "status": "not_evaluated",
+            "page": "toss-account",
+            "source": "today_signals.json · OrderIntent validation queue",
+            "action_type": "order_prepare",
+            "queue_status": "new",
+            "priority": 3,
+            "queue_id": "order-prepare-buy-candidates",
+        }
+    ]
+
+
+def _today_action_queue(board: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[dict[str, Any]]:
+    queue: list[dict[str, Any]] = []
+    sections = [
+        "tasks",
+        "risky_stocks",
+        "buy_candidates",
+        "sell_candidates",
+        "order_prepares",
+        "dividend_reviews",
+    ]
+    for section in sections:
+        for index, item in enumerate(_sequence(board.get(section)), start=1):
+            if not isinstance(item, Mapping):
+                continue
+            queued = dict(item)
+            queued.setdefault("queue_status", "new")
+            queued.setdefault("priority", index)
+            queued.setdefault(
+                "queue_id",
+                _queue_id(section, item.get("ticker") or item.get("label") or index),
+            )
+            queued["queue_section"] = section
+            queue.append(queued)
+    return sorted(queue, key=lambda item: (_queue_priority(item.get("priority"), 99), str(item.get("queue_id"))))[
+        :20
+    ]
+
+
+def _today_action_type_for_target(page: Any, command: Any = None) -> str:
+    page_name = str(page or "")
+    command_name = str(command or "")
+    if page_name == "data-quality":
+        return "data_check"
+    if page_name == "risk":
+        return "risk_review"
+    if "promotion" in command_name or "validate-config" in command_name:
+        return "data_check"
+    return "data_check"
+
+
+def _today_action_type_for_component(component: str) -> str:
+    return {
+        "data": "data_check",
+        "risk": "risk_review",
+        "promotion": "data_check",
+        "survivorship": "data_check",
+        "run": "data_check",
+    }.get(str(component or ""), "risk_review")
+
+
+def _queue_priority(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _queue_id(*parts: Any) -> str:
+    raw = "-".join(str(part or "").strip().lower() for part in parts if str(part or "").strip())
+    safe = "".join(char if char.isalnum() else "-" for char in raw)
+    return "-".join(part for part in safe.split("-") if part) or "action"
 
 
 def _recommended_actions(
@@ -4809,6 +7004,7 @@ def build_dashboard_analysis(
         "news": news_data,
         "toss": toss_portfolio,
         "tradingview_details": build_tradingview_symbol_details(ticker),
+        "tradingview_news": build_tradingview_news_flow(ticker),
     }
 
 
@@ -4995,10 +7191,15 @@ TRADINGVIEW_TECHNICAL_FIELDS = (
 )
 
 TRADINGVIEW_TIMEFRAMES = (
+    ("1M", "1개월", "1M"),
+    ("1W", "1주", "1W"),
     ("1D", "1일", ""),
     ("240", "4시간", "240"),
     ("120", "2시간", "120"),
     ("60", "1시간", "60"),
+    ("30", "30분", "30"),
+    ("15", "15분", "15"),
+    ("5", "5분", "5"),
     ("1", "1분", "1"),
 )
 
@@ -5466,6 +7667,419 @@ def build_tradingview_symbol_details(ticker: str = "SOXL") -> dict[str, Any]:
     }
 
 
+def _tradingview_news_url(story_path: Any) -> str | None:
+    if not story_path:
+        return None
+    path = str(story_path)
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+    if path.startswith("/"):
+        return f"https://www.tradingview.com{path}"
+    return f"https://www.tradingview.com/news/{path.lstrip('/')}"
+
+
+def _timestamp_to_iso(value: Any) -> str | None:
+    try:
+        return datetime.fromtimestamp(float(value), UTC).isoformat()
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+TRADINGVIEW_RELATED_SYMBOL_ROLES: dict[str, dict[str, Any]] = {
+    "semiconductor": {
+        "label": "반도체 직접 테마",
+        "tone": "buy",
+        "priority": 10,
+        "description": "SOXL의 기초 섹터와 직접 맞물리는 반도체/AI/DRAM 심볼입니다.",
+        "symbols": {
+            "CBOE:DRAM",
+            "NASDAQ:SMH",
+            "NASDAQ:SOXX",
+            "NASDAQ:NVDA",
+            "NASDAQ:AMD",
+            "NASDAQ:AVGO",
+        },
+    },
+    "broad_market": {
+        "label": "미국 주식 베타",
+        "tone": "neutral",
+        "priority": 30,
+        "description": "S&P 500, Nasdaq, Russell 등 시장 전체 자금 흐름을 반영합니다.",
+        "symbols": {
+            "AMEX:SPY",
+            "AMEX:VOO",
+            "AMEX:IVV",
+            "AMEX:SPYM",
+            "NASDAQ:QQQ",
+            "NASDAQ:QQQM",
+            "AMEX:IWM",
+        },
+    },
+    "leveraged_peer": {
+        "label": "레버리지/고베타 동조",
+        "tone": "warning",
+        "priority": 20,
+        "description": "레버리지 ETF나 고베타 상품과 함께 언급되어 변동성 민감도가 큽니다.",
+        "symbols": {
+            "AMEX:SOXL",
+            "NASDAQ:TQQQ",
+            "NASDAQ:NVDL",
+            "NASDAQ:TSLL",
+            "AMEX:SPXL",
+        },
+    },
+    "defensive_rotation": {
+        "label": "방어/금리 회전",
+        "tone": "sell",
+        "priority": 25,
+        "description": "채권, 현금성 ETF, 금 등 방어적 자산으로의 회전을 시사할 수 있습니다.",
+        "symbols": {
+            "AMEX:BIL",
+            "AMEX:LQD",
+            "AMEX:SGOV",
+            "NASDAQ:BND",
+            "NASDAQ:TLT",
+            "CBOE:JMUB",
+            "AMEX:GLD",
+            "AMEX:SLV",
+        },
+    },
+    "crypto_alternative": {
+        "label": "대체 위험자산",
+        "tone": "warning",
+        "priority": 50,
+        "description": "비트코인/대체자산 ETF가 함께 언급된 위험선호 맥락입니다.",
+        "symbols": {
+            "NASDAQ:IBIT",
+            "AMEX:BITO",
+            "NASDAQ:BITB",
+        },
+    },
+    "international_flow": {
+        "label": "해외/신흥국 자금",
+        "tone": "neutral",
+        "priority": 60,
+        "description": "미국 외 지역 ETF와 함께 언급되어 글로벌 자금 이동을 보여줍니다.",
+        "symbols": {
+            "AMEX:EWZ",
+            "AMEX:IEMG",
+            "AMEX:SCHF",
+            "AMEX:VEA",
+            "NASDAQ:VXUS",
+            "CBOE:BBEU",
+        },
+    },
+    "thematic_growth": {
+        "label": "성장/테마 자금",
+        "tone": "buy",
+        "priority": 40,
+        "description": "테마형 성장 ETF와 동반 언급된 위험선호 흐름입니다.",
+        "symbols": {
+            "CBOE:ARKK",
+            "CBOE:COWZ",
+        },
+    },
+}
+
+
+def _tradingview_related_symbol_role(
+    related_symbol: str,
+    *,
+    primary_symbol: str,
+) -> dict[str, Any]:
+    if related_symbol == primary_symbol:
+        return {
+            "id": "primary",
+            "label": "조회 종목",
+            "tone": "neutral",
+            "priority": 0,
+            "description": "현재 분석 중인 기본 심볼입니다.",
+        }
+
+    for role_id, role in TRADINGVIEW_RELATED_SYMBOL_ROLES.items():
+        if related_symbol in role["symbols"]:
+            return {
+                "id": role_id,
+                "label": str(role["label"]),
+                "tone": str(role["tone"]),
+                "priority": int(role["priority"]),
+                "description": str(role["description"]),
+            }
+
+    return {
+        "id": "other",
+        "label": "기타 동반 심볼",
+        "tone": "neutral",
+        "priority": 99,
+        "description": "뉴스 기사에서 함께 언급된 기타 심볼입니다.",
+    }
+
+
+def _tradingview_news_context(
+    *,
+    primary_symbol: str,
+    primary_mentions: Mapping[str, Any] | None,
+    related_symbols: Sequence[Mapping[str, Any]],
+    item_count: int,
+) -> dict[str, Any]:
+    theme_by_id: dict[str, dict[str, Any]] = {}
+    for related in related_symbols:
+        role = _mapping(related.get("role"))
+        role_id = str(role.get("id") or "other")
+        theme = theme_by_id.setdefault(
+            role_id,
+            {
+                "id": role_id,
+                "label": role.get("label") or "기타 동반 심볼",
+                "tone": role.get("tone") or "neutral",
+                "priority": int(role.get("priority") or 99),
+                "description": role.get("description") or "",
+                "mention_count": 0,
+                "symbol_count": 0,
+                "symbols": [],
+            },
+        )
+        count = int(related.get("count") or 0)
+        theme["mention_count"] = int(theme["mention_count"]) + count
+        theme["symbol_count"] = int(theme["symbol_count"]) + 1
+        symbols = theme["symbols"]
+        if isinstance(symbols, list) and len(symbols) < 6:
+            symbols.append(related.get("symbol"))
+
+    theme_counts = sorted(
+        theme_by_id.values(),
+        key=lambda item: (
+            -int(item.get("mention_count") or 0),
+            int(item.get("priority") or 99),
+            str(item.get("label") or ""),
+        ),
+    )
+    theme_lookup = {str(item.get("id")): item for item in theme_counts}
+    dominant = theme_counts[0] if theme_counts else None
+    primary_count = int(primary_mentions.get("count") or 0) if primary_mentions else 0
+
+    notes: list[dict[str, str]] = []
+    if dominant:
+        notes.append(
+            {
+                "tone": str(dominant.get("tone") or "neutral"),
+                "text": (
+                    f"{dominant.get('label')} 심볼이 {dominant.get('mention_count')}회로 "
+                    "가장 자주 동반 언급됩니다."
+                ),
+            }
+        )
+
+    if "semiconductor" in theme_lookup:
+        notes.append(
+            {
+                "tone": "buy",
+                "text": "SMH/DRAM/NVDA 계열 동반 언급은 SOXL의 직접 섹터 뉴스 민감도를 높입니다.",
+            }
+        )
+
+    if "broad_market" in theme_lookup and "semiconductor" in theme_lookup:
+        notes.append(
+            {
+                "tone": "neutral",
+                "text": "시장 대표 ETF와 반도체 심볼이 함께 잡혀 시장 베타와 섹터 모멘텀을 같이 봐야 합니다.",
+            }
+        )
+    elif "broad_market" in theme_lookup:
+        notes.append(
+            {
+                "tone": "neutral",
+                "text": "SPY/QQQ/VOO 계열 동반 언급은 개별 섹터보다 ETF 자금 흐름 뉴스 성격이 강합니다.",
+            }
+        )
+
+    if "leveraged_peer" in theme_lookup:
+        notes.append(
+            {
+                "tone": "warning",
+                "text": "TQQQ/TSLL/NVDL 같은 고베타 상품 동반 언급은 변동성 확대 구간일 수 있습니다.",
+            }
+        )
+
+    if "defensive_rotation" in theme_lookup:
+        notes.append(
+            {
+                "tone": "sell",
+                "text": "채권·현금성·금 ETF가 함께 나오면 위험자산 선호 약화 가능성을 같이 점검하세요.",
+            }
+        )
+
+    if item_count and primary_count >= item_count:
+        notes.append(
+            {
+                "tone": "neutral",
+                "text": f"{primary_symbol}가 반환 뉴스 {item_count}건 모두에 직접 포함되어 관련성은 높습니다.",
+            }
+        )
+
+    return {
+        "dominant_theme": dominant,
+        "theme_counts": theme_counts,
+        "context_notes": notes[:6],
+        "related_symbol_count": len(related_symbols),
+        "primary_mention_rate": round(primary_count / item_count, 4) if item_count else None,
+        "source": "TradingView news-mediator relatedSymbols · derived role map",
+    }
+
+
+def build_tradingview_news_flow(ticker: str = "SOXL", limit: int = 12) -> dict[str, Any]:
+    """Return TradingView news-flow items plus related symbol frequency."""
+    import requests
+
+    symbol = _tradingview_symbol(ticker)
+    try:
+        response = requests.get(
+            "https://news-mediator.tradingview.com/public/news-flow/v2/news",
+            params=[
+                ("filter", "lang:en"),
+                ("filter", f"symbol:{symbol}"),
+                ("client", "landing"),
+                ("streaming", "false"),
+                ("user_prostatus", "non_pro"),
+            ],
+            headers=_tradingview_headers(),
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "source": "TradingView news-mediator",
+            "symbol": symbol,
+            "error": str(exc),
+            "items": [],
+            "related_symbols": [],
+            "news_context": {
+                "dominant_theme": None,
+                "theme_counts": [],
+                "context_notes": [],
+                "related_symbol_count": 0,
+                "primary_mention_rate": None,
+                "source": "TradingView news-mediator relatedSymbols · derived role map",
+            },
+        }
+
+    raw_items = payload.get("items") if isinstance(payload, Mapping) else None
+    items: list[dict[str, Any]] = []
+    related_by_symbol: dict[str, dict[str, Any]] = {}
+    provider_counts: dict[str, int] = {}
+    urgency_counts: dict[str, int] = {}
+
+    raw_news_items = list(_sequence(raw_items))[: max(0, limit)]
+    for raw in raw_news_items:
+        if not isinstance(raw, Mapping):
+            continue
+        provider = raw.get("provider") if isinstance(raw.get("provider"), Mapping) else {}
+        provider_name = str(provider.get("name") or provider.get("id") or "").strip() or None
+        if provider_name:
+            provider_counts[provider_name] = provider_counts.get(provider_name, 0) + 1
+
+        urgency = raw.get("urgency")
+        urgency_key = str(urgency) if urgency is not None else "unknown"
+        urgency_counts[urgency_key] = urgency_counts.get(urgency_key, 0) + 1
+
+        related_symbols: list[dict[str, Any]] = []
+        published_at = _timestamp_to_iso(raw.get("published"))
+        for related in _sequence(raw.get("relatedSymbols")):
+            if not isinstance(related, Mapping):
+                continue
+            related_symbol = str(related.get("symbol") or "").strip().upper()
+            if not related_symbol:
+                continue
+            role = _tradingview_related_symbol_role(
+                related_symbol,
+                primary_symbol=symbol,
+            )
+            related_item = {
+                "symbol": related_symbol,
+                "logoid": related.get("logoid"),
+                "is_primary": related_symbol == symbol,
+                "role": role,
+            }
+            related_symbols.append(related_item)
+
+            bucket = related_by_symbol.setdefault(
+                related_symbol,
+                {
+                    "symbol": related_symbol,
+                    "logoid": related.get("logoid"),
+                    "count": 0,
+                    "is_primary": related_symbol == symbol,
+                    "role": role,
+                    "latest_title": None,
+                    "latest_published_at": None,
+                },
+            )
+            bucket["count"] = int(bucket.get("count") or 0) + 1
+            if not bucket.get("latest_published_at") or (
+                published_at and published_at > str(bucket.get("latest_published_at"))
+            ):
+                bucket["latest_title"] = raw.get("title")
+                bucket["latest_published_at"] = published_at
+                if related.get("logoid"):
+                    bucket["logoid"] = related.get("logoid")
+
+        items.append(
+            {
+                "id": raw.get("id"),
+                "title": raw.get("title"),
+                "published": raw.get("published"),
+                "published_at": published_at,
+                "urgency": urgency,
+                "provider": {
+                    "id": provider.get("id"),
+                    "name": provider_name,
+                    "url": provider.get("url"),
+                    "logo_id": provider.get("logo_id"),
+                },
+                "url": _tradingview_news_url(raw.get("storyPath")),
+                "story_path": raw.get("storyPath"),
+                "related_symbols": related_symbols,
+            }
+        )
+
+    related_symbols = [
+        item
+        for item in related_by_symbol.values()
+        if not bool(item.get("is_primary"))
+    ]
+    related_symbols.sort(
+        key=lambda item: (-int(item.get("count") or 0), str(item.get("symbol") or ""))
+    )
+    primary_mentions = related_by_symbol.get(symbol)
+    latest_published_at = max(
+        (item["published_at"] for item in items if item.get("published_at")),
+        default=None,
+    )
+    news_context = _tradingview_news_context(
+        primary_symbol=symbol,
+        primary_mentions=primary_mentions,
+        related_symbols=related_symbols,
+        item_count=len(items),
+    )
+
+    return {
+        "status": "ok" if items else "empty",
+        "source": "TradingView news-mediator",
+        "symbol": symbol,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "latest_published_at": latest_published_at,
+        "item_count": len(items),
+        "primary_mentions": primary_mentions,
+        "provider_counts": provider_counts,
+        "urgency_counts": urgency_counts,
+        "news_context": news_context,
+        "related_symbols": related_symbols[:16],
+        "items": items,
+    }
+
+
 def build_analysis_technical(
     ticker: str = "SOXL",
     period: str = "1y",
@@ -5561,6 +8175,7 @@ def build_analysis_technical(
             "period": period,
             "tradingview": build_tradingview_technical_summary(ticker),
             "tradingview_details": build_tradingview_symbol_details(ticker),
+            "tradingview_news": build_tradingview_news_flow(ticker),
             "latest_price": round(latest_price, 2),
             "change_pct": round(change_pct, 2),
             "latest_rsi": rsi14[latest],
@@ -6044,7 +8659,7 @@ def build_portfolio_hub_data(
     tickers: list[str] | None = None,
 ) -> dict[str, Any]:
     """포트폴리오 허브 전체 데이터. 종목 목록이 없으면 포트폴리오 매핑에서 자동 추출."""
-    from .portfolio_hub import build_portfolio_hub, PORTFOLIO_TYPE_META, PORTFOLIO_TYPE_ORDER
+    from .portfolio_hub import build_portfolio_hub
 
     # 포트폴리오 매핑에서 종목 + 타입 정보 로드
     mapping = load_portfolio_mapping()
@@ -6079,10 +8694,22 @@ def build_portfolio_hub_data(
     return result
 
 
-def build_portfolio_hub_meta() -> dict[str, Any]:
+def build_portfolio_hub_meta(level: str = "normal") -> dict[str, Any]:
     """포트폴리오 허브 메타데이터 (타입 정의, 신호 레이블, 지표 설명)."""
     from .portfolio_hub import get_portfolio_type_meta
-    return get_portfolio_type_meta()
+    meta = get_portfolio_type_meta()
+    from .metric_dictionary import metric_dictionary_payload
+    payload = metric_dictionary_payload(level=level)
+    for group_name, metrics in payload.items():
+        for item in metrics:
+            key = item["key"]
+            meta["indicator_explanations"][key] = {
+                "name": item["label"],
+                "description": item["short_description"],
+                "good": item["good_value"],
+                "caution": item["watch_out"]
+            }
+    return meta
 
 
 def build_portfolio_hub_ticker_signals(ticker: str) -> dict[str, Any]:
@@ -6102,7 +8729,7 @@ def build_portfolio_hub_ticker_signals(ticker: str) -> dict[str, Any]:
 
 # ─── 자동매매 준비 상태 빌더 ──────────────────────────────────────────────────
 
-def build_autotrading_status_data() -> dict[str, Any]:
+def build_autotrading_status_data(paths: RuntimePaths | None = None) -> dict[str, Any]:
     """자동매매 준비 상태 데이터. 항상 비활성 상태를 반환."""
     from .autotrading_prep import build_autotrading_status_payload
-    return build_autotrading_status_payload()
+    return build_autotrading_status_payload(paths)

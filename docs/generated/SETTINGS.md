@@ -130,3 +130,4 @@ Generated from `jayu.settings.Settings`. Do not edit manually.
 | `risk.min_dollar_volume` | `number` | `10000000` | `{"minimum": 0}` |
 | `risk.block_unmapped_tickers` | `boolean` | `true` | `{}` |
 | `risk.enforcement` | `string` | `"block"` | `{"enum": ["block", "resize", "warn"]}` |
+| `risk.portfolio_policy` | `object` | `null` | `{}` |
