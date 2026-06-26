@@ -644,3 +644,45 @@ function renderOverviewPortfolioHub(hubData) {
     </section>
   `;
 }
+
+function bindPortfolioHubActions() {
+  // 탭 전환
+  document.querySelectorAll("[data-hub-tab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.portfolioHubTab = btn.dataset.hubTab;
+      localStorage.setItem("jayu.hub.tab", state.portfolioHubTab);
+      renderPortfolioHub();
+      bindPageActions();
+    });
+  });
+
+  // 데이터 조회
+  const btnLoad = document.querySelector("#btn-hub-load");
+  if (btnLoad) {
+    btnLoad.addEventListener("click", async () => {
+      const tickersInput = document.querySelector("#hub-tickers-input");
+      const tickersVal = (tickersInput?.value || "").trim();
+      state.portfolioHubTickers = tickersVal;
+      localStorage.setItem("jayu.hub.tickers", tickersVal);
+
+      btnLoad.disabled = true;
+      btnLoad.textContent = "⏳ 조회 중...";
+      try {
+        const q = tickersVal ? `?tickers=${encodeURIComponent(tickersVal)}` : "";
+        state.portfolioHub = await api(`/api/v1/portfolio-hub${q}`);
+        renderPortfolioHub();
+        bindPageActions();
+      } catch (err) {
+        alert("포트폴리오 허브 조회 실패: " + (err.message || "오류"));
+      } finally {
+        btnLoad.disabled = false;
+        btnLoad.textContent = "📊 데이터 조회";
+      }
+    });
+
+    // 자동 로드 (처음 진입 시)
+    if (!state.portfolioHub) {
+      btnLoad.click();
+    }
+  }
+}

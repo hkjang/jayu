@@ -161,55 +161,64 @@ async function loadProviderTrend() {
   const container = document.querySelector("#provider-trend-container");
   if (!container) return;
   try {
-    const trend = await api("/api/v1/provider-trend?limit=10");
-    container.innerHTML = renderProviderTrendTable(trend);
+    const [trend, sla] = await Promise.all([
+      api("/api/v1/provider-trend?limit=10"),
+      api("/api/v1/provider-sla")
+    ]);
+    container.innerHTML = renderProviderTrendTable(trend, sla);
   } catch (err) {
     container.innerHTML = `
       <section class="panel">
-        <div class="panel-header"><h2>제공자 신뢰도 추세 분석 (최근 10회)</h2></div>
+        <div class="panel-header"><h2>제공자 신뢰도 및 SLA 분석 (최근 10회)</h2></div>
         <div style="color:#ef4444; font-size:12px; padding: 20px;">추세 데이터를 불러올 수 없습니다: ${err.message}</div>
       </section>
     `;
   }
 }
 
-function renderProviderTrendTable(trend) {
+function renderProviderTrendTable(trend, sla) {
   const providers = Object.values(trend.providers || {});
+  const slaData = sla || { providers: {} };
   
   let rowsHtml = "";
   if (!providers.length) {
     rowsHtml = `
       <tr>
-        <td colspan="7" style="text-align:center; padding: 20px; color:#64748b;">
+        <td colspan="9" style="text-align:center; padding: 20px; color:#64748b;">
           누적된 데이터 제공자 추세 기록이 없습니다.
         </td>
       </tr>
     `;
   } else {
     rowsHtml = providers.map(p => {
+      const nameKey = p.provider;
+      const pSla = slaData.providers[nameKey] || slaData.providers[nameKey.toLowerCase()] || {};
+      const slaCompliant = pSla.sla_compliant !== false;
+      const latencyVal = pSla.latency_avg_sec != null ? `${pSla.latency_avg_sec.toFixed(1)}초` : "-";
+      const priorityVal = pSla.priority != null ? `${pSla.priority}순위` : "-";
+      
       const isExcellent = p.success_rate === 100;
       const isGood = p.success_rate >= 95;
       
       let statusBadge = "";
-      if (isExcellent) {
+      if (isExcellent && slaCompliant) {
         statusBadge = `<span style="background:#d1fae5; color:#065f46; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">우수</span>`;
-      } else if (isGood) {
+      } else if (isGood && slaCompliant) {
         statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">안정</span>`;
       } else {
         statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">주의</span>`;
       }
       
-      // 성공률 프로그레스 바 배경색 결정
       const barColor = isExcellent ? "#10b981" : isGood ? "#3b82f6" : "#f59e0b";
-      
       const blockedList = p.blocked_tickers.join(", ") || "없음";
 
       return `
         <tr>
           <td style="font-weight:bold; color:#1e293b;">${escapeHtml(String(p.provider).toUpperCase())}</td>
+          <td style="text-align:center;">${priorityVal}</td>
+          <td style="text-align:center;">${latencyVal}</td>
           <td style="text-align:center;">${p.total_attempts}회</td>
           <td style="text-align:center;">${p.success_count}회</td>
-          <td style="text-align:center;">${p.failure_count}회</td>
           <td style="vertical-align:middle;">
             <div style="display:flex; align-items:center; gap:8px;">
               <div style="flex:1; background:#e2e8f0; height:8px; border-radius:4px; overflow:hidden; min-width:80px;">
@@ -221,8 +230,10 @@ function renderProviderTrendTable(trend) {
           <td style="text-align:center; color:${p.disagreement_count > 0 ? '#ef4444' : '#64748b'}; font-weight:${p.disagreement_count > 0 ? 'bold' : 'normal'};">
             ${p.disagreement_count}회
           </td>
-          <td style="color:${p.blocked_ticker_count > 0 ? '#ef4444' : '#64748b'}; font-weight:${p.blocked_ticker_count > 0 ? 'bold' : 'normal'};" title="${escapeHtml(blockedList)}">
-            ${p.blocked_ticker_count}개 (${blockedList})
+          <td style="text-align:center;">
+            <span style="color: ${slaCompliant ? '#10b981' : '#ef4444'}; font-weight: bold;">
+              ${slaCompliant ? '✓ 충족' : '✗ 위반'}
+            </span>
           </td>
           <td style="text-align:center;">${statusBadge}</td>
         </tr>
@@ -230,32 +241,52 @@ function renderProviderTrendTable(trend) {
     }).join("");
   }
 
+  const allViolations = [];
+  Object.values(slaData.providers).forEach(p => {
+    if (p.violations && p.violations.length) {
+      p.violations.forEach(v => allViolations.push(`[${p.provider}] ${v}`));
+    }
+  });
+
+  const alertHtml = allViolations.length ? `
+    <div class="alert alert-error" style="background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); border-radius: 8px; padding: 12px; margin-bottom: 15px; color: #f87171; font-size: 13px;">
+      <strong style="display:block; margin-bottom: 4px;">⚠️ 제공자 서비스 수준 계약(SLA) 위반 경고</strong>
+      <ul style="margin-left: 18px;">
+        ${allViolations.map(v => `<li>${escapeHtml(v)}</li>`).join("")}
+      </ul>
+    </div>
+  ` : "";
+
   return `
     <section class="panel">
       <div class="panel-header" style="background:#f8fafc; border-bottom:1px solid #e2e8f0;">
         <div>
-          <h2 style="font-size:14px; margin:0;">제공자 신뢰도 추세 분석 (최근 ${trend.runs_analyzed || 0}회 실행 기준)</h2>
-          <p style="margin:2px 0 0 0; font-size:11px; color:#64748b;">각 가격 제공사(Yahoo, Tiingo, Massive)의 역사적 수집 성공률, 불일치율 및 실제 매매 차단 영향 추세를 추적합니다.</p>
+          <h2 style="font-size:14px; margin:0;">제공자 신뢰도 및 SLA 분석 (최근 ${trend.runs_analyzed || 0}회 실행 기준)</h2>
+          <p style="margin:2px 0 0 0; font-size:11px; color:#64748b;">각 가격 제공사(Yahoo, Tiingo, Massive)의 우선순위, 지연 시간, 수집 성공률, SLA 준수 여부 및 추세를 추적합니다.</p>
         </div>
       </div>
-      <div class="table-wrap">
-        <table class="table" style="width:100%; border-collapse: collapse; font-size:13px; margin:0;">
-          <thead>
-            <tr style="background:#f8fafc; border-bottom:1px solid #cbd5e1;">
-              <th style="padding: 8px; text-align:left; color:#475569;">제공사 (Provider)</th>
-              <th style="padding: 8px; text-align:center; color:#475569; width:10%;">수집 시도</th>
-              <th style="padding: 8px; text-align:center; color:#475569; width:10%;">수집 성공</th>
-              <th style="padding: 8px; text-align:center; color:#475569; width:10%;">수집 실패</th>
-              <th style="padding: 8px; text-align:left; color:#475569; width:25%;">수집 성공률</th>
-              <th style="padding: 8px; text-align:center; color:#475569; width:10%;">교차 불일치</th>
-              <th style="padding: 8px; text-align:left; color:#475569; width:20%;">차단 영향 종목</th>
-              <th style="padding: 8px; text-align:center; color:#475569; width:10%;">종합 상태</th>
-            </tr>
-          </thead>
-          <tbody style="color:#334155;">
-            ${rowsHtml}
-          </tbody>
-        </table>
+      <div class="panel-body" style="padding: 15px;">
+        ${alertHtml}
+        <div class="table-wrap">
+          <table class="table" style="width:100%; border-collapse: collapse; font-size:13px; margin:0;">
+            <thead>
+              <tr style="background:#f8fafc; border-bottom:1px solid #cbd5e1;">
+                <th style="padding: 8px; text-align:left; color:#475569;">제공사 (Provider)</th>
+                <th style="padding: 8px; text-align:center; color:#475569; width:10%;">우선순위</th>
+                <th style="padding: 8px; text-align:center; color:#475569; width:10%;">평균 지연</th>
+                <th style="padding: 8px; text-align:center; color:#475569; width:10%;">수집 시도</th>
+                <th style="padding: 8px; text-align:center; color:#475569; width:10%;">수집 성공</th>
+                <th style="padding: 8px; text-align:left; color:#475569; width:20%;">수집 성공률</th>
+                <th style="padding: 8px; text-align:center; color:#475569; width:10%;">교차 불일치</th>
+                <th style="padding: 8px; text-align:center; color:#475569; width:10%;">SLA 상태</th>
+                <th style="padding: 8px; text-align:center; color:#475569; width:10%;">종합 상태</th>
+              </tr>
+            </thead>
+            <tbody style="color:#334155;">
+              ${rowsHtml}
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   `;

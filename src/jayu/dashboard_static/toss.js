@@ -274,6 +274,123 @@ function renderReconciliation(reconciliation) {
       ${renderSourceCaption("portfolio.csv · Toss holdings GET")}
     </section>
     ${unmappedHtml}
+    ${renderTaxLotLedgerSection()}
+  `;
+}
+
+function renderTaxLotLedgerSection() {
+  const lots = state.taxLots || [];
+  const recon = state.taxLotsReconcile || {};
+  const discrepancies = recon.discrepancies || [];
+  
+  let alertHtml = "";
+  if (recon.reconciled === false && discrepancies.length > 0) {
+    alertHtml = `
+      <div class="at-warning-box" style="margin-bottom: 14px; border-left: 4px solid var(--status-blocked); background: rgba(239,68,68,0.05); padding: 12px; display: flex; gap: 12px; border-radius: 6px;">
+        <div class="at-warning-icon" style="font-size: 20px;">⚠️</div>
+        <div style="flex: 1;">
+          <strong style="color: var(--status-blocked); font-size: 14px; display: block; margin-bottom: 4px;">세금 Lot 원장 수량 불일치 감지</strong>
+          <p style="margin: 0 0 10px 0; font-size: 12.5px; color: var(--text-muted);">로컬 세금 Lot 원장(tax_lot_ledger.json)의 잔고 합계와 Toss 실계좌 포트폴리오(portfolio.csv) 간에 불일치가 있습니다.</p>
+          <div class="table-wrap" style="border: 1px solid rgba(239,68,68,0.15); border-radius: 4px;">
+            <table style="font-size: 12px; width: 100%;">
+              <thead>
+                <tr>
+                  <th>종목</th>
+                  <th class="numeric">세금 Lot 원장 잔고</th>
+                  <th class="numeric">토스 실계좌 잔고</th>
+                  <th class="numeric">차이 수량</th>
+                  <th>심각도</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${discrepancies.map(d => `
+                  <tr>
+                    <td class="ticker-cell"><strong>${renderTicker(d.ticker)}</strong></td>
+                    <td class="numeric">${formatNumber(d.ledger_qty, 4)}</td>
+                    <td class="numeric">${formatNumber(d.toss_qty, 4)}</td>
+                    <td class="numeric" style="color: var(--status-blocked); font-weight: bold;">${d.qty_diff > 0 ? '+' : ''}${formatNumber(d.qty_diff, 4)}</td>
+                    <td>${statusBadge(d.severity === 'blocked' ? 'blocked' : 'warning', d.severity === 'blocked' ? '심각' : '경고')}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+  } else if (recon.reconciled === true) {
+    alertHtml = `
+      <div class="status-banner status-success" style="margin-bottom: 14px; padding: 10px 14px; border-radius: 6px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          ${statusBadge("success")}
+          <strong style="color: var(--status-success); font-size: 13px;">세금 Lot 원장 일치 (Synchronized)</strong>
+        </div>
+        <p style="margin: 4px 0 0 0; font-size: 12px; color: var(--text-muted);">로컬 세금 Lot 원장의 잔고 합계가 Toss Securities 실계좌 잔고와 완벽히 일치합니다.</p>
+      </div>
+    `;
+  }
+
+  let lotsTableHtml = "";
+  if (!lots.length) {
+    lotsTableHtml = `<div class="empty-state">원장에 등록된 세금 Lot(매수 이력)이 없습니다.</div>`;
+  } else {
+    lotsTableHtml = `
+      <div class="table-wrap"><table>
+        <thead>
+          <tr>
+            <th>Lot ID</th>
+            <th>종목</th>
+            <th>매수일자</th>
+            <th class="numeric">남은 수량 / 최초 수량</th>
+            <th class="numeric">매수가 (단가)</th>
+            <th class="numeric">적용 환율</th>
+            <th class="numeric">매수 금액 (원화 환산)</th>
+            <th class="numeric">수수료</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${lots.map(lot => {
+            const totalCostKrw = lot.remaining_quantity * lot.unit_price * lot.fx_rate;
+            const isFullySold = lot.remaining_quantity <= 0;
+            return `
+              <tr style="${isFullySold ? 'opacity: 0.4; background: rgba(0,0,0,0.08); text-decoration: line-through;' : ''}">
+                <td class="code" style="font-size: 11px;">${escapeHtml(lot.lot_id)}</td>
+                <td class="ticker-cell"><strong>${renderTicker(lot.ticker)}</strong></td>
+                <td>${escapeHtml(lot.buy_date)}</td>
+                <td class="numeric">
+                  <strong>${formatNumber(lot.remaining_quantity, 4)}</strong> 
+                  <span style="color: var(--text-muted); font-size: 10px;">/ ${formatNumber(lot.quantity, 4)}</span>
+                </td>
+                <td class="numeric">$${formatNumber(lot.unit_price, 2)}</td>
+                <td class="numeric">${formatNumber(lot.fx_rate, 2)}원</td>
+                <td class="numeric"><strong>${formatCurrency(totalCostKrw, "KRW")}</strong></td>
+                <td class="numeric">$${formatNumber(lot.commission, 2)}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table></div>
+    `;
+  }
+
+  return `
+    <section class="panel" style="margin-top: 14px;">
+      <div class="panel-header" style="align-items: center; justify-content: space-between;">
+        <div>
+          <h2>세금 Lot 매수 원장 & 잔고 대조 (Tax Lot Ledger)</h2>
+          <p>FIFO 손익 계산을 위해 매수 시점별 수량, 단가, 환율을 개별 세금 Lot으로 관리하고 실계좌와 실시간 대조합니다.</p>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button id="btn-add-tax-lot" class="button button-secondary" type="button">+ 신규 매수 Lot 기록</button>
+          <button id="btn-sell-tax-lot" class="button button-secondary" type="button">- 매도 처리 (FIFO)</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        ${alertHtml}
+        ${lotsTableHtml}
+        ${renderSourceCaption("state/tax_lot_ledger.json · portfolio.csv")}
+      </div>
+    </section>
   `;
 }
 

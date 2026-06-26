@@ -1,3 +1,50 @@
+function findLastDecision(runId, ticker, action) {
+  if (!state.approvalHistory?.history) return null;
+  return state.approvalHistory.history.find(
+    (item) =>
+      item.run_id === runId &&
+      item.ticker.toUpperCase() === ticker.toUpperCase() &&
+      item.action.toLowerCase() === action.toLowerCase()
+  );
+}
+
+function renderApprovalAuditHistoryPanel(history) {
+  const rows = history || [];
+  if (!rows.length) {
+    return `
+      <section class="panel">
+        <div class="panel-header">
+          <div><h2>의사결정 감사 장부 (Approval Audit Ledger)</h2><p>사용자가 승인, 보류, 무시 처리한 감사 로그 이력입니다.</p></div>
+        </div>
+        <div class="panel-body">
+          <div class="empty-state">감사 로그 기록이 없습니다. 신호에 대해 의사결정을 내려주세요.</div>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>의사결정 감사 장부 (Approval Audit Ledger)</h2><p>사용자가 승인, 보류, 무시 처리한 감사 로그 이력입니다.</p></div>
+        <span class="muted">${rows.length}건</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>일시</th><th>실행 ID</th><th>종목</th><th>행동</th><th>추천 상태</th><th>결정</th><th>의사결정 사유</th></tr></thead>
+        <tbody>${rows.map((row) => `
+          <tr>
+            <td>${formatDate(row.timestamp)}</td>
+            <td class="code">${escapeHtml(row.run_id)}</td>
+            <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+            <td>${escapeHtml(row.action)}</td>
+            <td>${statusBadge(row.recommendation_verdict)}</td>
+            <td>${statusBadge(row.user_decision === "approve" ? "success" : row.user_decision === "hold" ? "warning" : "not_evaluated", row.user_decision === "approve" ? "승인" : row.user_decision === "hold" ? "보류" : "무시")}</td>
+            <td>${escapeHtml(row.rationale || "-")}</td>
+          </tr>`).join("")}</tbody>
+      </table></div>
+    </section>
+  `;
+}
+
 function renderSignals() {
   const data = state.signals;
   
@@ -18,6 +65,7 @@ function renderSignals() {
       ${renderSignalDetailTable(data.rows)}
       ${renderSourceCaption("today_signals.json of the selected run")}
     </section>
+    ${renderApprovalAuditHistoryPanel(state.approvalHistory?.history)}
     ${renderSignalHistoryCards(data.history)}
     ${renderStockLifecycle(data.lifecycle)}
     ${renderSignalStabilityPanel(data.stability)}
@@ -92,10 +140,33 @@ function renderTraderLens() {
 
 function renderSignalDetailTable(rows) {
   if (!rows?.length) return emptyTable("선택한 run의 신호가 없습니다.", "run-local signal artifact가 없습니다. 전역 today_signals.json은 run 검토에 섞지 않습니다.");
+  const runId = state.signals?.run_id || state.runId;
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>종목</th><th>상태</th><th>행동</th><th>전략</th><th class="numeric">점수</th><th class="numeric">진입가</th><th class="numeric">손절가</th><th class="numeric">목표가</th><th class="numeric">승인 비중</th><th>유동성</th><th>데이터</th><th>Reason code</th></tr></thead>
-      <tbody>${rows.map((row) => `
+      <thead><tr><th>종목</th><th>상태</th><th>행동</th><th>전략</th><th class="numeric">점수</th><th class="numeric">진입가</th><th class="numeric">손절가</th><th class="numeric">목표가</th><th class="numeric">승인 비중</th><th>유동성</th><th>데이터</th><th>Reason code</th><th>의사결정</th></tr></thead>
+      <tbody>${rows.map((row) => {
+        const decision = findLastDecision(runId, row.ticker, row.action);
+        let decisionHtml = "";
+        if (decision) {
+          const badgeType = decision.user_decision === "approve" ? "success" : decision.user_decision === "hold" ? "warning" : "not_evaluated";
+          const label = decision.user_decision === "approve" ? "승인됨" : decision.user_decision === "hold" ? "보류됨" : "무시됨";
+          decisionHtml = `
+            <div class="decision-status-cell">
+              ${statusBadge(badgeType, label)}
+              ${decision.rationale ? `<small class="decision-rationale" title="${escapeHtml(decision.rationale)}">${escapeHtml(decision.rationale)}</small>` : ""}
+              <button class="btn-change-decision" data-ticker="${escapeHtml(row.ticker)}" data-action="${escapeHtml(row.action)}" data-run-id="${escapeHtml(runId)}" data-rec-verdict="${escapeHtml(row.status)}">변경</button>
+            </div>
+          `;
+        } else {
+          decisionHtml = `
+            <div class="decision-buttons-cell">
+              <button class="btn-decide btn-decide-approve" data-decision="approve" data-ticker="${escapeHtml(row.ticker)}" data-action="${escapeHtml(row.action)}" data-run-id="${escapeHtml(runId)}" data-rec-verdict="${escapeHtml(row.status)}">승인</button>
+              <button class="btn-decide btn-decide-hold" data-decision="hold" data-ticker="${escapeHtml(row.ticker)}" data-action="${escapeHtml(row.action)}" data-run-id="${escapeHtml(runId)}" data-rec-verdict="${escapeHtml(row.status)}">보류</button>
+              <button class="btn-decide btn-decide-ignore" data-decision="ignore" data-ticker="${escapeHtml(row.ticker)}" data-action="${escapeHtml(row.action)}" data-run-id="${escapeHtml(runId)}" data-rec-verdict="${escapeHtml(row.status)}">무시</button>
+            </div>
+          `;
+        }
+        return `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
           <td>${statusBadge(row.status)}</td>
@@ -109,7 +180,9 @@ function renderSignalDetailTable(rows) {
           <td>${statusBadge(row.liquidity_status || "not_evaluated")}</td>
           <td>${row.data_verified === true ? statusBadge("success") : row.data_verified === false ? statusBadge("data_error") : statusBadge("not_evaluated")}</td>
           <td class="code">${escapeHtml((row.reason_codes || []).join(", ") || "-")}</td>
-        </tr>`).join("")}</tbody>
+          <td>${decisionHtml}</td>
+        </tr>`;
+      }).join("")}</tbody>
     </table></div>`;
 }
 

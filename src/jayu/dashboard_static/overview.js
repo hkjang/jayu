@@ -58,7 +58,12 @@ function renderOverview() {
       ${metricCard("증거 완성도", data.evidence_completeness?.score == null ? "미검증" : `${data.evidence_completeness.score}%`,
         data.evidence_completeness?.score >= 90 ? "success" : data.evidence_completeness?.score >= 70 ? "warning" : "blocked",
         `필수 ${7 - (data.evidence_completeness?.missing?.length || 0)}/7 개 존재`)}
+      ${metricCard("운영 품질 (SLO)", data.ops_slo?.score == null ? "미검증" : `${data.ops_slo.score}점`,
+        data.ops_slo?.score >= 90 ? "success" : data.ops_slo?.score >= 70 ? "warning" : "blocked",
+        `최근 30일 건강도: ${data.ops_slo?.status === 'success' ? '정상' : (data.ops_slo?.status === 'warning' ? '우려' : '위험')}`,
+        data.ops_slo?.score == null ? null : data.ops_slo.score / 100)}
     </section>
+    ${renderRoutineScheduler(data.routines)}
     ${renderMetricDictionaryStrip(data.metric_dictionary?.overview, "운영 지표 쉬운 설명")}
     <div class="section-grid">
       <section class="panel">
@@ -701,6 +706,50 @@ function renderDecisionDiffCard(diff) {
             <strong>💡 대응 권장 조치:</strong> <span style="color: #f1f5f9;">${escapeHtml(diff.recommended_action?.text || "")}</span>
           </p>
         </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderRoutineScheduler(routines) {
+  if (!routines || !routines.routines) return "";
+  const list = Object.values(routines.routines);
+  return `
+    <section class="panel routine-scheduler-section" style="margin-top: 1.5rem;">
+      <div class="panel-header">
+        <div>
+          <h2 style="font-size: 1.2rem; margin: 0; color: #818cf8;">⏳ 오늘의 투자 루틴 스케줄러</h2>
+          <p style="margin: 4px 0 0 0; font-size: 0.9rem; color: #94a3b8;">개인 투자 운영 OS로서 매일 확인해야 할 장전, 장중, 장후 필수 점검 사항과 실행 명령 가이드입니다.</p>
+        </div>
+      </div>
+      <div class="panel-body" style="padding: 1rem 0 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem;">
+        ${list.map(r => `
+          <article class="routine-card" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px; border: 1px solid var(--border); display: flex; flex-direction: column; justify-content: space-between;">
+            <div>
+              <strong style="font-size: 1rem; color: #a5b4fc; display: block; margin-bottom: 0.5rem;">${escapeHtml(r.title)}</strong>
+              <p style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.8rem; line-height: 1.4;">${escapeHtml(r.description)}</p>
+              
+              <div class="routine-tasks" style="margin-bottom: 0.8rem;">
+                ${r.tasks.map(t => `
+                  <div style="display: flex; align-items: flex-start; gap: 6px; font-size: 0.75rem; margin-bottom: 6px; line-height: 1.3;">
+                    <span style="color: ${t.completed ? '#10b981' : '#f59e0b'}; font-weight: bold; font-size: 0.85rem;">${t.completed ? '✓' : '⏳'}</span>
+                    <span style="color: var(--text);">${escapeHtml(t.label)}</span>
+                  </div>
+                `).join("")}
+              </div>
+            </div>
+            
+            ${r.commands && r.commands.length ? `
+              <div class="routine-commands" style="display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 0.5rem; margin-top: auto;">
+                ${r.commands.map(cmd => `
+                  <button class="button button-secondary" type="button" data-command="${escapeHtml(cmd.command)}" style="padding: 4px 8px; font-size: 0.7rem; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%;">
+                    📋 ${escapeHtml(cmd.label)}
+                  </button>
+                `).join("")}
+              </div>
+            ` : ""}
+          </article>
+        `).join("")}
       </div>
     </section>
   `;

@@ -455,3 +455,18 @@ function tossAccountHeadline(data, summary) {
 
   document.addEventListener("scroll", hideTooltip, { capture: true, passive: true });
 })();
+
+function metricCard(label, value, status, detail, ratio = null, source = null) {
+  const width = ratio == null ? 0 : Math.max(0, Math.min(100, Number(ratio) * 100));
+  const resolvedSource = source === null ? metricSourceFor(label) : source;
+  return `
+    <article class="metric-card">
+      <div class="metric-label"><span>${escapeHtml(label)}</span>${statusBadge(status)}</div>
+      <strong class="metric-value">${escapeHtml(value)}</strong>
+      <span class="metric-detail">${escapeHtml(detail || "")}</span>
+      ${renderSourceLabel(resolvedSource)}
+      ${ratio == null ? "" : `<div class="metric-bar" aria-hidden="true"><span style="width:${width}%"></span></div>`}
+    </article>
+  `;
+}
+

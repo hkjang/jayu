@@ -187,6 +187,12 @@ async function loadPage() {
     }
     if (state.page === "signals") {
       state.signals = await api(`/api/v1/runs/${run}/signals`);
+      try {
+        state.approvalHistory = await api("/api/v1/approvals");
+      } catch (err) {
+        console.warn("Failed to load approval history", err);
+        state.approvalHistory = { history: [] };
+      }
       if (!state.portfolioHub) {
         try {
           state.portfolioHub = await api("/api/v1/portfolio-hub");
@@ -231,15 +237,19 @@ async function loadPage() {
       const params = new URLSearchParams();
       if (state.selectedTossAccount) params.set("account", state.selectedTossAccount);
       
-      const [portfolio, reconciliation, orderPlan] = await Promise.all([
+      const [portfolio, reconciliation, orderPlan, taxLots, taxLotsReconcile] = await Promise.all([
         api(`/api/v1/toss/portfolio${params.toString() ? `?${params.toString()}` : ""}`),
         api(`/api/v1/toss/reconciliation${params.toString() ? `?${params.toString()}` : ""}`),
-        api("/api/v1/toss/order-plan")
+        api("/api/v1/toss/order-plan"),
+        api("/api/v1/tax-lots"),
+        api("/api/v1/tax-lots/reconcile")
       ]);
 
       state.tossPortfolio = portfolio;
       state.tossReconciliation = reconciliation;
       state.tossOrderPlan = orderPlan;
+      state.taxLots = taxLots.lots || [];
+      state.taxLotsReconcile = taxLotsReconcile || {};
 
       state.tossAccounts = {
         status: state.tossPortfolio.status,
@@ -771,14 +781,212 @@ function bindPageActions() {
     bindSimulationLogActions();
   }
 
-  // ── Signal Tab Actions ─────────────────────────────────────────────────────
-  document.querySelectorAll("[data-signal-tab]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      state.signalHubTab = btn.dataset.signalTab;
-      renderSignals();
-      bindPageActions();
+  // ── User Approval Actions (Signals Page) ───────────────────────────────────
+  if (state.page === "signals") {
+    document.querySelectorAll(".btn-decide").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const decision = btn.dataset.decision;
+        const ticker = btn.dataset.ticker;
+        const action = btn.dataset.action;
+        const runId = btn.dataset.runId;
+        const recVerdict = btn.dataset.recVerdict;
+        
+        const decisionLabel = { approve: "승인", hold: "보류", ignore: "무시" }[decision];
+        const rationale = prompt(`[${ticker}] 신호 ${action.toUpperCase()}에 대한 ${decisionLabel} 사유를 입력하세요 (선택 사항):`, "");
+        if (rationale === null) return; // User cancelled the prompt
+        
+        btn.disabled = true;
+        try {
+          const res = await fetch("/api/v1/approvals", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              run_id: runId,
+              ticker: ticker,
+              action: action,
+              rec_verdict: recVerdict,
+              user_decision: decision,
+              rationale: rationale
+            })
+          });
+          const data = await res.json();
+          if (data.status === "success") {
+            const run = encodeURIComponent(state.runId);
+            state.signals = await api(`/api/v1/runs/${run}/signals`);
+            state.approvalHistory = await api("/api/v1/approvals");
+            renderSignals();
+            bindPageActions();
+          } else {
+            alert(`의사결정 등록 실패: ${data.message || "오류가 발생했습니다."}`);
+          }
+        } catch (err) {
+          alert(`에러: ${err.message}`);
+        } finally {
+          btn.disabled = false;
+        }
+      });
     });
-  });
+
+    document.querySelectorAll(".btn-change-decision").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const ticker = btn.dataset.ticker;
+        const action = btn.dataset.action;
+        const runId = btn.dataset.runId;
+        const recVerdict = btn.dataset.recVerdict;
+        
+        const decision = prompt(`[${ticker}] 신호를 어떻게 변경하시겠습니까?\n(approve = 승인, hold = 보류, ignore = 무시):`, "approve");
+        if (!decision) return;
+        const decisionLower = decision.toLowerCase().trim();
+        if (!["approve", "hold", "ignore"].includes(decisionLower)) {
+          alert("올바르지 않은 결정 코드입니다. (approve, hold, ignore 중 하나 입력)");
+          return;
+        }
+        
+        const rationale = prompt(`변경 사유를 입력하세요 (선택 사항):`, "");
+        if (rationale === null) return;
+        
+        (async () => {
+          btn.disabled = true;
+          try {
+            const res = await fetch("/api/v1/approvals", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                run_id: runId,
+                ticker: ticker,
+                action: action,
+                rec_verdict: recVerdict,
+                user_decision: decisionLower,
+                rationale: rationale
+              })
+            });
+            const data = await res.json();
+            if (data.status === "success") {
+              const run = encodeURIComponent(state.runId);
+              state.signals = await api(`/api/v1/runs/${run}/signals`);
+              state.approvalHistory = await api("/api/v1/approvals");
+              renderSignals();
+              bindPageActions();
+            } else {
+              alert(`의사결정 변경 실패: ${data.message || "오류가 발생했습니다."}`);
+            }
+          } catch (err) {
+            alert(`에러: ${err.message}`);
+          } finally {
+            btn.disabled = false;
+          }
+        })();
+      });
+    });
+  }
+
+  // ── Tax Lot Actions (Toss Account Page) ────────────────────────────────────
+  if (state.page === "toss-account" && state.tossSubTab === "reconciliation") {
+    const btnAddTaxLot = document.querySelector("#btn-add-tax-lot");
+    if (btnAddTaxLot) {
+      btnAddTaxLot.addEventListener("click", async () => {
+        const ticker = prompt("종목 코드를 입력하세요 (예: SOXL):");
+        if (!ticker) return;
+        const quantityStr = prompt("매수 수량을 입력하세요:");
+        if (!quantityStr) return;
+        const priceStr = prompt("매수 단가 (USD)를 입력하세요:");
+        if (!priceStr) return;
+        const fxStr = prompt("적용 환율 (KRW, 기본값 1350)을 입력하세요:", "1350");
+        if (!fxStr) return;
+        const commStr = prompt("수수료 (USD, 기본값 0)를 입력하세요:", "0");
+        
+        const quantity = parseFloat(quantityStr);
+        const unit_price = parseFloat(priceStr);
+        const fx_rate = parseFloat(fxStr);
+        const commission = parseFloat(commStr || "0");
+        
+        if (isNaN(quantity) || quantity <= 0 || isNaN(unit_price) || unit_price <= 0 || isNaN(fx_rate) || fx_rate <= 0) {
+          alert("올바르지 않은 입력값입니다.");
+          return;
+        }
+        
+        btnAddTaxLot.disabled = true;
+        try {
+          const res = await fetch("/api/v1/tax-lots/buy", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ticker: ticker.toUpperCase(),
+              quantity,
+              unit_price,
+              fx_rate,
+              currency: "USD",
+              commission
+            })
+          });
+          const data = await res.json();
+          if (data.status === "success") {
+            alert(`신규 세금 Lot이 성공적으로 기록되었습니다:\nID: ${data.lot.lot_id}`);
+            state.tossPortfolio = null;
+            loadPage();
+          } else {
+            alert(`기록 실패: ${data.message || "오류가 발생했습니다."}`);
+          }
+        } catch (err) {
+          alert(`에러: ${err.message}`);
+        } finally {
+          btnAddTaxLot.disabled = false;
+        }
+      });
+    }
+
+    const btnSellTaxLot = document.querySelector("#btn-sell-tax-lot");
+    if (btnSellTaxLot) {
+      btnSellTaxLot.addEventListener("click", async () => {
+        const ticker = prompt("매도할 종목 코드를 입력하세요 (예: SOXL):");
+        if (!ticker) return;
+        const quantityStr = prompt("매도 수량을 입력하세요:");
+        if (!quantityStr) return;
+        const priceStr = prompt("매도 단가 (USD)를 입력하세요:");
+        if (!priceStr) return;
+        const fxStr = prompt("적용 환율 (KRW, 기본값 1350)을 입력하세요:", "1350");
+        if (!fxStr) return;
+        const commStr = prompt("수수료 (USD, 기본값 0)를 입력하세요:", "0");
+        
+        const quantity = parseFloat(quantityStr);
+        const sell_price = parseFloat(priceStr);
+        const sell_fx_rate = parseFloat(fxStr);
+        const commission = parseFloat(commStr || "0");
+        
+        if (isNaN(quantity) || quantity <= 0 || isNaN(sell_price) || sell_price <= 0 || isNaN(sell_fx_rate) || sell_fx_rate <= 0) {
+          alert("올바르지 않은 입력값입니다.");
+          return;
+        }
+        
+        btnSellTaxLot.disabled = true;
+        try {
+          const res = await fetch("/api/v1/tax-lots/sell", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ticker: ticker.toUpperCase(),
+              quantity,
+              sell_price,
+              sell_fx_rate,
+              commission
+            })
+          });
+          const data = await res.json();
+          if (data.status === "success") {
+            alert(`FIFO 매도 처리가 완료되었습니다.\n실현 손익: ${formatCurrency(data.realized_pnl, "KRW")}`);
+            state.tossPortfolio = null;
+            loadPage();
+          } else {
+            alert(`매도 처리 실패: ${data.message || "오류가 발생했습니다."}`);
+          }
+        } catch (err) {
+          alert(`에러: ${err.message}`);
+        } finally {
+          btnSellTaxLot.disabled = false;
+        }
+      });
+    }
+  }
 }
 
 function clearApiMonitoringRefreshTimer() {

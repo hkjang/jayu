@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Jayu Mobile OS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --panel-bg: #111827;
+      --border: #1f2937;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --primary: #6366f1;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --font: 'Outfit', 'Noto Sans KR', sans-serif;
+    }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: var(--font);
+      -webkit-tap-highlight-color: transparent;
+    }
+    
+    body {
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px;
+      padding-bottom: 80px; /* Space for bottom nav */
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    
+    h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    
+    .badge-success { background: rgba(16,185,129,0.15); color: var(--success); }
+    .badge-warning { background: rgba(245,158,11,0.15); color: var(--warning); }
+    .badge-error { background: rgba(239,68,68,0.15); color: var(--error); }
+    
+    .card {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      font-weight: 600;
+      font-size: 15px;
+    }
+    
+    .decision-banner {
+      background: linear-gradient(135deg, #111827, #1f2937);
+      border-left: 4px solid var(--primary);
+    }
+    
+    .decision-banner.status-success { border-left-color: var(--success); }
+    .decision-banner.status-warning { border-left-color: var(--warning); }
+    .decision-banner.status-blocked { border-left-color: var(--error); }
+    
+    .decision-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    
+    .decision-desc {
+      color: var(--text-muted);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-top: 12px;
+    }
+    
+    .metric-box {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+    }
+    
+    .metric-val {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text);
+      margin-top: 4px;
+    }
+    
+    .metric-lbl {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    
+    .checklist-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    
+    .checklist-item:last-child {
+      border-bottom: none;
+    }
+    
+    .checkbox {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    
+    .checkbox.checked {
+      background: var(--success);
+      border-color: var(--success);
+      color: #fff;
+    }
+    
+    .signal-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    
+    .signal-item:last-child {
+      border-bottom: none;
+    }
+    
+    .ticker {
+      font-weight: 600;
+      color: var(--primary);
+    }
+    
+    .footer-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 60px;
+      background: var(--panel-bg);
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      z-index: 100;
+    }
+    
+    .nav-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 11px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      width: 20%;
+    }
+    
+    .nav-btn.active {
+      color: var(--primary);
+      font-weight: 600;
+    }
+    
+    .nav-icon {
+      font-size: 18px;
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⚖️ JAYU MOBILE</h1>
+    <span class="badge badge-success" id="overall-status-badge">ONLINE</span>
+  </header>
+
+  <!-- TAB 1: OVERVIEW -->
+  <main id="content-overview" class="tab-content active">
+    <!-- 1. Decision Banner -->
+    <div class="card decision-banner" id="mobile-decision-card">
+      <div class="decision-title" id="mobile-decision-title">결론 로딩 중...</div>
+      <div class="decision-desc" id="mobile-decision-desc">데이터를 불러오고 있습니다.</div>
+      <div class="metric-row">
+        <div class="metric-box">
+          <div class="metric-lbl">오늘의 건강도</div>
+          <div class="metric-val" id="mobile-health-val">-</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-lbl">SLO 품질 점수</div>
+          <div class="metric-val" id="mobile-slo-val">-</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Pre-market Routine -->
+    <div class="card">
+      <div class="card-header">
+        <span>⏰ 오늘의 투자 루틴</span>
+      </div>
+      <div id="mobile-routine-checklist">
+        <!-- Will be populated by JS -->
+      </div>
+    </div>
+  </main>
+
+  <!-- TAB 2: SIGNALS -->
+  <main id="content-signals" class="tab-content">
+    <div class="card">
+      <div class="card-header">
+        <span>📈 오늘 생성된 신호</span>
+      </div>
+      <div id="mobile-signals-list">
+        <!-- Will be populated by JS -->
+      </div>
+    </div>
+  </main>
+
+  <!-- TAB 3: ACCOUNT -->
+  <main id="content-account" class="tab-content">
+    <div class="card">
+      <div class="card-header">
+        <span>💵 계좌 기여도 분석</span>
+      </div>
+      <div class="metric-row">
+        <div class="metric-box">
+          <div class="metric-lbl">가격 효과 (Price)</div>
+          <div class="metric-val" id="mobile-price-effect">-</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-lbl">환율 효과 (FX)</div>
+          <div class="metric-val" id="mobile-fx-effect">-</div>
+        </div>
+      </div>
+      <div class="metric-row" style="margin-top: 10px;">
+        <div class="metric-box">
+          <div class="metric-lbl">보유 자산 변동</div>
+          <div class="metric-val" id="mobile-holdings-effect">-</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-lbl">예수금 변동</div>
+          <div class="metric-val" id="mobile-cash-effect">-</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Navigation Bar -->
+  <nav class="footer-nav">
+    <button class="nav-btn active" onclick="switchTab('overview')">
+      <span class="nav-icon">⚖️</span>
+      <span>개요</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('signals')">
+      <span class="nav-icon">📈</span>
+      <span>신호</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('account')">
+      <span class="nav-icon">💵</span>
+      <span>계좌</span>
+    </button>
+  </nav>
+
+  <script src="/mobile.js"></script>
+</body>
+</html>
