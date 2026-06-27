@@ -45,6 +45,23 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+const TOSS_TICKER_NAMES = {
+  "AAPL": "애플",
+  "TSLA": "테슬라",
+  "MSFT": "마이크로소프트",
+  "005930": "삼성전자",
+  "SCHD": "SCHD (배당성장 ETF)",
+  "O": "리얼티 인컴 (월배당 리츠)",
+  "JEPI": "JEPI (고배당 커버드콜)",
+  "TQQQ": "TQQQ (나스닥 3배 레버리지)",
+  "SOXL": "SOXL (반도체 3배 레버리지)",
+  "AMZN": "아마존",
+  "GOOGL": "구글",
+  "META": "메타",
+  "NVDA": "엔비디아",
+  "IONQ": "아이온큐"
+};
+
 const TICKER_DESCRIPTIONS = {
   "SOXL": "Direxion Daily Semiconductor Bull 3X ETF (필라델피아 반도체 지수 일간 변동성의 3배 추종 레버리지 ETF)",
   "TQQQ": "ProShares UltraPro QQQ ETF (나스닥 100 지수 일간 변동성의 3배 추종 레버리지 ETF)",
@@ -53,6 +70,7 @@ const TICKER_DESCRIPTIONS = {
   "NVDL": "GraniteShares 2x Long NVIDIA Daily ETF (엔비디아 단일 주식 일간 수익률의 2배를 추종하는 레버리지 ETF)",
   "QBTS": "D-Wave Quantum Inc. (상용화된 양자 아닐링 컴퓨터 시스템 및 하드웨어, 클라우드 소프트웨어 솔루션 공급 기업)",
   "005930.KS": "삼성전자 (글로벌 메모리 반도체 1위 및 파운드리, 스마트폰, 디스플레이 선도 한국 대표 기업)",
+  "005930": "삼성전자 (글로벌 메모리 반도체 1위 및 파운드리, 스마트폰, 디스플레이 선도 한국 대표 기업)",
   "DFEN": "Direxion Daily Aerospace & Defense Bull 3X ETF (미국 항공우주 및 방위산업 지수의 3배를 추종하는 레버리지 ETF)",
   "FAS": "Direxion Daily Financial Bull 3X ETF (미국 대형 금융기관 및 은행주 지수의 3배를 추종하는 레버리지 ETF)",
   "MSTU": "Direxion Daily MicroStrategy Bull 2X ETF (마이크로스트레티지 주식 일간 변동성의 2배를 추종하는 고레버리지 ETF)",
@@ -65,17 +83,21 @@ const TICKER_DESCRIPTIONS = {
   "MSFT": "Microsoft Corporation (글로벌 소프트웨어 1위 및 Azure 클라우드, OpenAI 협력 기반 생성형 AI 시장 리더)",
   "AMZN": "Amazon.com, Inc. (글로벌 최대 이커머스 쇼핑 플랫폼 및 AWS 클라우드 인프라 시장 점유율 1위 기업)",
   "GOOGL": "Alphabet Inc. (구글 검색 엔진, 유튜브, 안드로이드 운영체제 및 AI Gemini 모델을 보유한 테크 거인)",
-  "META": "Meta Platforms, Inc. (페이스북, 인스타그램, 왓츠앱 등 글로벌 SNS 채널 및 메타버스, AI 인프라 선도 기업)"
+  "META": "Meta Platforms, Inc. (페이스북, 인스타그램, 왓츠앱 등 글로벌 SNS 채널 및 메타버스, AI 인프라 선도 기업)",
+  "SCHD": "Schwab U.S. Dividend Equity ETF (미국 배당성장 대표 ETF, 다우존스 US 배당 100 지수를 추종하는 장기 배당 자산)",
+  "O": "Realty Income Corporation (대표 상업용 부동산 리츠, 매월 안정적인 월배당을 지급하는 글로벌 배당 성장주)",
+  "JEPI": "JPMorgan Equity Premium Income ETF (주식 연계 채권 ELN을 결합해 안정적인 고배당/월배당을 추종하는 커버드콜 ETF)"
 };
 
 function renderTicker(ticker) {
   if (!ticker) return "-";
   const cleanTicker = String(ticker).trim().toUpperCase();
-  const desc = TICKER_DESCRIPTIONS[cleanTicker];
-  if (desc) {
-    return `<span class="ticker-tooltip-trigger" data-ticker="${escapeHtml(cleanTicker)}" data-desc="${escapeHtml(desc)}">${escapeHtml(ticker)}</span>`;
-  }
-  return escapeHtml(ticker);
+  const baseTicker = cleanTicker.split(".")[0];
+  const desc = TICKER_DESCRIPTIONS[cleanTicker] || TICKER_DESCRIPTIONS[baseTicker] || 
+               (TOSS_TICKER_NAMES[baseTicker]
+                ? `${TOSS_TICKER_NAMES[baseTicker]} (Toss 연동 종목)`
+                : `${cleanTicker} 주식 종목`);
+  return `<span class="ticker-tooltip-trigger" data-ticker="${escapeHtml(cleanTicker)}" data-desc="${escapeHtml(desc)}">${escapeHtml(ticker)}</span>`;
 }
 
 function statusClass(status) {
