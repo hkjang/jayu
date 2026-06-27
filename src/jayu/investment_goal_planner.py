@@ -13,21 +13,48 @@ class InvestmentGoalPlanner:
         self.project_root = project_root
         self.goals_file = project_root / "state" / "investment_goals.json"
 
+    def _get_latest_account_value(self) -> float:
+        snapshots_file = self.project_root / "state" / "portfolio_snapshots.jsonl"
+        if snapshots_file.exists():
+            try:
+                with open(snapshots_file, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                    if lines:
+                        for line in reversed(lines):
+                            data = json.loads(line)
+                            val = float(data.get("account_value_krw", 0))
+                            if val > 0:
+                                return val
+            except Exception:
+                pass
+        return 256331879.0
+
     def load_goals(self) -> list[dict[str, Any]]:
+        default_val = self._get_latest_account_value()
         if not self.goals_file.exists():
             return [{
                 "goal_id": "default_retirement",
                 "name": "10억 은퇴 자금",
                 "target_amount": 1000000000.0,
                 "target_date": "2046-06-27",
-                "current_amount": 50000000.0,
+                "current_amount": default_val,
                 "monthly_deposit": 1000000.0,
                 "expected_return": 0.08,
                 "updated_at": datetime.now().isoformat()
             }]
         try:
             with open(self.goals_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                goals = json.load(f)
+            # Update the default goal's current_amount if it's still at 50,000,000
+            updated = False
+            for g in goals:
+                if g.get("goal_id") == "default_retirement" and g.get("current_amount") == 50000000.0:
+                    g["current_amount"] = default_val
+                    g["updated_at"] = datetime.now().isoformat()
+                    updated = True
+            if updated:
+                self.save_goals(goals)
+            return goals
         except Exception:
             return []
 
