@@ -6,6 +6,7 @@ const state = {
   decision: null,
   overview: null,
   dataQuality: null,
+  dataTrust: null,
   risk: null,
   signals: null,
   traderLens: null,
@@ -20,8 +21,12 @@ const state = {
   tossOrderPlan: null,
   tossSubTab: localStorage.getItem("jayu.toss.subTab") || "overview",
   orderHistoryQuality: null,
+  tossOrderIntegrity: null,
   tradeHistoryAnalytics: null,
+  realizedPnlReconciliation: null,
+  stockTradeLifecycle: null,
   tradeBehaviorReview: null,
+  orderHistorySummary: null,
   apiMonitoring: null,
   tossAccountRegion: localStorage.getItem("jayu.toss.accountRegion") || "ALL",
   selectedTossAccount: localStorage.getItem("jayu.toss.selectedAccount") || "",
@@ -130,6 +135,7 @@ async function api(path) {
 }
 
 const RUN_CONTEXT_OPTIONAL_PAGES = new Set(["analysis", "portfolio-hub", "autotrading", "goal-planner", "cashflow", "dividend-sim", "investor-coach", "invest-calendar"]);
+const ORDER_HISTORY_CONTEXT_PAGES = new Set(["overview", "signals", "risk", "portfolio-hub", "investor-coach", "autotrading", "goal-planner"]);
 const TERMINAL_RUN_STATUSES = new Set(["success", "failed", "error", "cancelled", "canceled"]);
 
 function isCompletedRun(run) {
@@ -221,8 +227,26 @@ async function loadPage() {
         console.warn("Failed to auto-load portfolio hub data", err);
       }
     }
+    if (ORDER_HISTORY_CONTEXT_PAGES.has(state.page)) {
+      try {
+        const orderHistoryParams = new URLSearchParams();
+        orderHistoryParams.set("run_id", state.runId || "latest");
+        if (state.selectedTossAccount) orderHistoryParams.set("account", state.selectedTossAccount);
+        state.orderHistorySummary = await api(`/api/v1/order-history-summary?${orderHistoryParams.toString()}`);
+      } catch (err) {
+        console.warn("Failed to load order history summary", err);
+        state.orderHistorySummary = null;
+      }
+    } else if (state.page !== "toss-account") {
+      state.orderHistorySummary = null;
+    }
     if (state.page === "data-quality") {
-      state.dataQuality = await api(`/api/v1/runs/${run}/data-quality`);
+      const [dataQuality, dataTrust] = await Promise.all([
+        api(`/api/v1/runs/${run}/data-quality`),
+        api(`/api/v1/data-trust-score?run_id=${run}`)
+      ]);
+      state.dataQuality = dataQuality;
+      state.dataTrust = dataTrust;
     }
     if (state.page === "risk") {
       state.risk = await api(`/api/v1/runs/${run}/risk`);
@@ -287,6 +311,12 @@ async function loadPage() {
       } catch (err) {
         console.warn("Failed to load order history quality", err);
         state.orderHistoryQuality = null;
+      }
+      try {
+        state.tossOrderIntegrity = await api("/api/v1/toss/order-integrity");
+      } catch (err) {
+        console.warn("Failed to load Toss order integrity", err);
+        state.tossOrderIntegrity = null;
       }
     }
     if (state.page === "toss") {
@@ -361,14 +391,30 @@ async function loadPage() {
       const params = new URLSearchParams();
       if (state.selectedTossAccount) params.set("account", state.selectedTossAccount);
       
-      const [portfolio, reconciliation, orderPlan, taxLots, taxLotsReconcile, tradeHistoryAnalytics, orderHistoryQuality] = await Promise.all([
+      const [
+        portfolio,
+        reconciliation,
+        orderPlan,
+        taxLots,
+        taxLotsReconcile,
+        tradeHistoryAnalytics,
+        orderHistoryQuality,
+        tossOrderIntegrity,
+        realizedPnlReconciliation,
+        stockTradeLifecycle,
+        orderHistorySummary
+      ] = await Promise.all([
         api(`/api/v1/toss/portfolio${params.toString() ? `?${params.toString()}` : ""}`),
         api(`/api/v1/toss/reconciliation${params.toString() ? `?${params.toString()}` : ""}`),
         api("/api/v1/toss/order-plan"),
         api("/api/v1/tax-lots"),
         api("/api/v1/tax-lots/reconcile"),
         api("/api/v1/toss/trade-history-analytics"),
-        api("/api/v1/toss/order-quality")
+        api("/api/v1/toss/order-quality"),
+        api("/api/v1/toss/order-integrity"),
+        api(`/api/v1/toss/realized-pnl-reconciliation${params.toString() ? `?${params.toString()}` : ""}`),
+        api(`/api/v1/toss/stock-trade-lifecycle${params.toString() ? `?${params.toString()}` : ""}`),
+        api(`/api/v1/order-history-summary${params.toString() ? `?${params.toString()}` : ""}`)
       ]);
 
       state.tossPortfolio = portfolio;
@@ -378,6 +424,10 @@ async function loadPage() {
       state.taxLotsReconcile = taxLotsReconcile || {};
       state.tradeHistoryAnalytics = tradeHistoryAnalytics || null;
       state.orderHistoryQuality = orderHistoryQuality || null;
+      state.tossOrderIntegrity = tossOrderIntegrity || null;
+      state.realizedPnlReconciliation = realizedPnlReconciliation || null;
+      state.stockTradeLifecycle = stockTradeLifecycle || null;
+      state.orderHistorySummary = orderHistorySummary || null;
 
       state.tossAccounts = {
         status: state.tossPortfolio.status,
@@ -499,6 +549,8 @@ function bindPageActions() {
       setSelectedTossAccount(button.dataset.tossAccount || "");
       if (state.page === "toss-account") {
         state.tossPortfolio = null;
+        state.realizedPnlReconciliation = null;
+        state.stockTradeLifecycle = null;
         loadPage();
         return;
       }
@@ -769,6 +821,8 @@ function bindPageActions() {
           // Clear cached portfolio and reconciliation data so they are re-fetched
           state.tossPortfolio = null;
           state.tossReconciliation = null;
+          state.realizedPnlReconciliation = null;
+          state.stockTradeLifecycle = null;
           loadPage();
         } else {
           alert(`동기화 실패: ${data.message || "오류가 발생했습니다."}`);
@@ -1088,6 +1142,7 @@ function bindPageActions() {
           if (data.status === "success") {
             alert(`신규 세금 Lot이 성공적으로 기록되었습니다:\nID: ${data.lot.lot_id}`);
             state.tossPortfolio = null;
+            state.realizedPnlReconciliation = null;
             loadPage();
           } else {
             alert(`기록 실패: ${data.message || "오류가 발생했습니다."}`);
@@ -1140,6 +1195,7 @@ function bindPageActions() {
           if (data.status === "success") {
             alert(`FIFO 매도 처리가 완료되었습니다.\n실현 손익: ${formatCurrency(data.realized_pnl, "KRW")}`);
             state.tossPortfolio = null;
+            state.realizedPnlReconciliation = null;
             loadPage();
           } else {
             alert(`매도 처리 실패: ${data.message || "오류가 발생했습니다."}`);
@@ -1228,6 +1284,7 @@ els.runSelector.addEventListener("change", () => {
   state.decision = null;
   state.overview = null;
   state.dataQuality = null;
+  state.dataTrust = null;
   state.risk = null;
   state.signals = null;
   state.traderLens = null;
@@ -1237,6 +1294,8 @@ els.runSelector.addEventListener("change", () => {
   state.tossAccounts = null;
   state.tossMarket = null;
   state.tossPortfolio = null;
+  state.realizedPnlReconciliation = null;
+  state.stockTradeLifecycle = null;
   state.apiMonitoring = null;
   loadPage();
 });
@@ -1245,11 +1304,14 @@ document.querySelector("#refresh-button").addEventListener("click", async () => 
   state.runs = [];
   state.decision = null;
   state.overview = null;
+  state.dataTrust = null;
   state.traderLens = null;
   state.tossStatus = null;
   state.tossAccounts = null;
   state.tossMarket = null;
   state.tossPortfolio = null;
+  state.realizedPnlReconciliation = null;
+  state.stockTradeLifecycle = null;
   state.apiMonitoring = null;
   await loadPage();
 });

@@ -36,7 +36,10 @@ function renderTossAccountDashboard() {
         ${renderTossAccountCards(accounts, selected)}
         ${renderSourceCaption("Toss Open API accounts GET")}
       </section>
+      ${renderTossOrderIntegrityPanel(state.tossOrderIntegrity)}
       ${renderTradeHistoryAnalyticsPanel(state.tradeHistoryAnalytics)}
+      ${renderRealizedPnlReconciliationPanel(state.realizedPnlReconciliation)}
+      ${renderStockTradeLifecyclePanel(state.stockTradeLifecycle)}
       <div class="visual-grid">
         <section class="panel">
           <div class="panel-header"><div><h2>Market split</h2><p>KRW 환산 기준 한국/미국/기타 비중입니다.</p></div></div>
@@ -105,6 +108,7 @@ function renderTossAccountDashboard() {
       ${statusBadge(summary.status || data.status)}
     </div>
     ${renderDataSourceNote("toss-account", ["Toss warnings endpoint", "today_signals broker readiness"])}
+    ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "toss")}
 
     <div class="segmented-tabs" role="tablist" style="margin-bottom:14px">
       <button class="${state.tossSubTab === 'overview' ? 'is-active' : ''}" type="button" data-toss-subtab="overview">
@@ -210,6 +214,213 @@ function renderTradeHistoryMiniTable(rows, fields) {
       </table>
     </div>
   `;
+}
+
+function renderTossOrderIntegrityPanel(data) {
+  if (!data) {
+    return `
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header"><div><h2>Toss 주문 무결성</h2><p>주문 계약/체결 금액/중복 검증 데이터를 불러오지 못했습니다.</p></div></div>
+        ${renderSourceCaption("GET /api/v1/toss/order-integrity")}
+      </section>
+    `;
+  }
+  const summary = data.summary || {};
+  const issues = data.issues || [];
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>Toss 주문 무결성</h2>
+          <p>6개월 주문 이력의 API 계약, 중복 주문, 체결 수량/금액, 수수료와 계좌 섞임 여부를 확인합니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <section class="metric-grid" style="margin-top:12px">
+        ${metricCard("무결성 점수", `${data.integrity_score ?? "-"}점`, data.status || "not_evaluated", "100점 기준", null, "toss_order_integrity_check.py")}
+        ${metricCard("주문 수", summary.order_count || 0, summary.order_count ? "success" : "not_evaluated", `고유 ${summary.unique_order_count || 0}`, null, "state/toss_orders.json")}
+        ${metricCard("중복 주문", summary.duplicate_order_count || 0, summary.duplicate_order_count ? "failed" : "success", "orderId 기준", null, "Toss Order History getOrders")}
+        ${metricCard("문제", `${summary.failed_issue_count || 0}/${summary.warning_issue_count || 0}`, summary.failed_issue_count ? "failed" : summary.warning_issue_count ? "warning" : "success", "실패/경고", null, "API contract + execution integrity")}
+      </section>
+      ${renderTossOrderIntegrityIssues(issues)}
+      ${renderSourceCaption(data.source || "state/toss_orders.json - Toss Order History getOrders")}
+    </section>
+  `;
+}
+
+function renderTossOrderIntegrityIssues(rows) {
+  if (!rows.length) {
+    return emptyTable("주요 주문 무결성 문제가 없습니다.", "계약 검증, 체결 수량/금액, 중복 주문 검사를 통과했습니다.");
+  }
+  return `
+    <div class="table-wrap" style="margin-top:12px"><table>
+      <thead><tr><th>Severity</th><th>Code</th><th>Ref</th><th>Message</th></tr></thead>
+      <tbody>
+        ${rows.slice(0, 12).map((issue) => `
+          <tr>
+            <td>${statusBadge(issue.severity === "failed" ? "failed" : "warning", issue.severity || "-")}</td>
+            <td class="code">${escapeHtml(issue.code || "-")}</td>
+            <td class="code">${escapeHtml(issue.ref || "-")}</td>
+            <td>${escapeHtml(issue.message || "-")}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table></div>
+  `;
+}
+
+function renderRealizedPnlReconciliationPanel(data) {
+  if (!data) {
+    return `
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header"><div><h2>실현손익 대조</h2><p>주문 이력, 세금 Lot, 보유 수량 대조 데이터를 불러오지 못했습니다.</p></div></div>
+        ${renderSourceCaption("GET /api/v1/toss/realized-pnl-reconciliation")}
+      </section>
+    `;
+  }
+  const summary = data.summary || {};
+  const discrepancies = data.position_discrepancies || [];
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>실현손익 대조</h2>
+          <p>Toss 주문 이력의 FIFO 실현손익과 로컬 세금 Lot, 현재 보유 수량의 연결성을 점검합니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <section class="metric-grid" style="margin-top:12px">
+        ${metricCard("주문 기준 실현손익", formatCurrency(summary.order_realized_pnl_krw, "KRW"), Number(summary.order_realized_pnl_krw || 0) < 0 ? "warning" : "success", "Toss 주문 FIFO 근사", null, "state/toss_orders.json · FIFO approximation")}
+        ${metricCard("Tax Lot 실현손익", summary.tax_lot_realized_pnl_krw == null ? "기록 없음" : formatCurrency(summary.tax_lot_realized_pnl_krw, "KRW"), summary.tax_lot_realized_pnl_krw == null ? "not_evaluated" : "success", "원장에 realized_pnl 필드가 있을 때만 직접 대조", null, "state/tax_lot_ledger.json")}
+        ${metricCard("잔여 포지션 차이", summary.position_discrepancy_count || 0, summary.position_discrepancy_count ? "warning" : "success", `심각 ${summary.failed_discrepancy_count || 0}건`, null, "orders · tax lots · holdings quantity")}
+        ${metricCard("주문 잔여 원가", formatCurrency(summary.order_open_cost_basis_krw, "KRW"), "not_evaluated", `${summary.order_open_symbol_count || 0}종목`, null, "state/toss_orders.json")}
+      </section>
+      ${renderPnlReconciliationDiscrepancies(discrepancies)}
+      ${renderSourceCaption(data.source || "state/toss_orders.json · state/tax_lot_ledger.json · Toss holdings")}
+    </section>
+  `;
+}
+
+function renderPnlReconciliationDiscrepancies(rows) {
+  if (!rows.length) {
+    return emptyTable("실현손익/잔여 수량 대조에서 큰 차이가 없습니다.", "주문 이력, Tax Lot, 보유 수량이 현재 기준으로 맞물려 있습니다.");
+  }
+  return `
+    <div class="table-wrap" style="margin-top:12px"><table>
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Status</th>
+          <th class="numeric">주문 수량</th>
+          <th class="numeric">Tax Lot 수량</th>
+          <th class="numeric">보유 수량</th>
+          <th class="numeric">주문-Tax</th>
+          <th class="numeric">Tax-보유</th>
+          <th>사유</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.slice(0, 10).map((row) => `
+          <tr>
+            <td class="ticker-cell">${renderTicker(row.symbol)}</td>
+            <td>${statusBadge(row.severity || "warning")}</td>
+            <td class="numeric">${formatNumber(row.order_quantity, 4)}</td>
+            <td class="numeric">${formatNumber(row.tax_lot_quantity, 4)}</td>
+            <td class="numeric">${formatNumber(row.holding_quantity, 4)}</td>
+            <td class="numeric ${numericClass(row.quantity_diff_order_vs_tax_lot)}">${formatNumber(row.quantity_diff_order_vs_tax_lot, 4)}</td>
+            <td class="numeric ${numericClass(row.quantity_diff_tax_lot_vs_holding)}">${formatNumber(row.quantity_diff_tax_lot_vs_holding, 4)}</td>
+            <td>${(row.issue_codes || []).map((code) => statusBadge("not_evaluated", code)).join(" ")}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table></div>
+  `;
+}
+
+function renderStockTradeLifecyclePanel(data) {
+  if (!data) {
+    return `
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header"><div><h2>종목별 매매 생애주기</h2><p>종목별 매수, 매도, 청산 흐름을 불러오지 못했습니다.</p></div></div>
+        ${renderSourceCaption("GET /api/v1/toss/stock-trade-lifecycle")}
+      </section>
+    `;
+  }
+  const summary = data.summary || {};
+  const rows = data.symbols || [];
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>종목별 매매 생애주기</h2>
+          <p>각 종목이 신규 매집, 보유 중 매매, 청산 완료, 관망 중인지 주문 타임라인으로 분류합니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <section class="metric-grid" style="margin-top:12px">
+        ${metricCard("분석 종목", summary.symbol_count || 0, summary.symbol_count ? "success" : "not_evaluated", "주문 이력 기준", null, "state/toss_orders.json")}
+        ${metricCard("현재 보유", summary.currently_holding_count || 0, summary.currently_holding_count ? "success" : "not_evaluated", "Toss holdings 또는 주문 순수량", null, "Toss holdings · order net quantity")}
+        ${metricCard("매집 중", summary.accumulating_count || 0, summary.accumulating_count ? "success" : "not_evaluated", "매도 없는 보유 종목", null, "Toss Order History getOrders")}
+        ${metricCard("청산 완료", summary.exited_count || 0, summary.exited_count ? "warning" : "not_evaluated", "매수 후 순수량 0 이하", null, "Toss Order History getOrders")}
+      </section>
+      ${renderStockTradeLifecycleTable(rows)}
+      ${renderSourceCaption(data.source || "state/toss_orders.json · Toss Order History getOrders · Toss holdings")}
+    </section>
+  `;
+}
+
+function renderStockTradeLifecycleTable(rows) {
+  if (!rows.length) {
+    return emptyTable("종목별 매매 생애주기 데이터가 없습니다.", "Toss 주문 이력 캐시가 생기면 종목별로 자동 분류합니다.");
+  }
+  return `
+    <div class="table-wrap" style="margin-top:12px"><table>
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Stage</th>
+          <th class="numeric">Buy</th>
+          <th class="numeric">Sell</th>
+          <th class="numeric">Cancel</th>
+          <th class="numeric">Net Qty</th>
+          <th class="numeric">Buy KRW</th>
+          <th class="numeric">Sell KRW</th>
+          <th>Last activity</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.slice(0, 12).map((row) => `
+          <tr>
+            <td class="ticker-cell">${renderTicker(row.symbol)}</td>
+            <td>${statusBadge(lifecycleStageStatus(row.lifecycle_stage), lifecycleStageLabel(row.lifecycle_stage))}</td>
+            <td class="numeric">${formatNumber(row.buy_count, 0)}</td>
+            <td class="numeric">${formatNumber(row.sell_count, 0)}</td>
+            <td class="numeric">${formatNumber(row.canceled_count, 0)}</td>
+            <td class="numeric ${numericClass(row.net_quantity)}">${formatNumber(row.net_quantity, 4)}</td>
+            <td class="numeric">${formatCurrency(row.total_buy_krw, "KRW")}</td>
+            <td class="numeric">${formatCurrency(row.total_sell_krw, "KRW")}</td>
+            <td>${formatDate(row.last_activity_at || row.last_buy_at || row.last_sell_at)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table></div>
+  `;
+}
+
+function lifecycleStageLabel(stage) {
+  return {
+    accumulating: "매집 중",
+    trading_around: "보유 중 매매",
+    exited: "청산 완료",
+    zero_position: "순수량 0",
+    watch_only: "관망/취소",
+  }[stage] || stage || "-";
+}
+
+function lifecycleStageStatus(stage) {
+  if (stage === "accumulating" || stage === "trading_around") return "success";
+  if (stage === "exited" || stage === "zero_position") return "warning";
+  return "not_evaluated";
 }
 
 function renderReconciliation(reconciliation) {

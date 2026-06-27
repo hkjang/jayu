@@ -83,6 +83,7 @@ function renderOverview() {
       ${statusBadge(run.execution_status, "실행")} 
     </div>
     ${renderDataSourceNote("overview")}
+    ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "overview")}
     <section class="decision-grid" aria-label="오늘 결론">
       <article class="decision-card status-${statusClass(decision.overall)}" aria-labelledby="status-title">
         <div class="decision-eyebrow">${statusBadge(decision.overall)} <span>${escapeHtml(String(run.mode || "unknown").toUpperCase())}</span></div>

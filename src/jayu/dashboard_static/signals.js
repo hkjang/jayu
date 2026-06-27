@@ -57,6 +57,7 @@ function renderSignals() {
       ${statusBadge(data.rows?.length ? "success" : "not_evaluated")}
     </div>
     ${renderDataSourceNote("signals")}
+    ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "signals")}
     <section class="panel">
       <div class="panel-header">
         <div><h2>전체 투자 신호 상세 (All Signals)</h2><p>선택한 실행(Run)에서 생성된 전체 매수/매도/관망 신호 목록입니다.</p></div>

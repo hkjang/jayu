@@ -382,6 +382,7 @@ function renderGoalPlanner() {
       ${statusBadge(goals.length > 0 ? "success" : "not_evaluated")}
     </div>
     ${renderDataSourceNote("goal-planner")}
+    ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "goal-planner")}
     
     <section class="metric-grid">
       ${metricCard("목표 수", `${goalCount}개`, goalCount ? "success" : "not_evaluated", "등록된 투자 목표")}
@@ -1502,6 +1503,7 @@ function renderInvestorCoach() {
       ${statusBadge(scoreStatus, "습관 점수")}
     </div>
     ${renderDataSourceNote("investor-coach")}
+    ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "investor-coach")}
 
     <section class="metric-grid">
       ${metricCard("코칭 점수", `${score}점`, scoreStatus, "거래 감사 내역 기반 정량 습관 평가")}
@@ -1547,6 +1549,7 @@ function renderInvestorCoach() {
     </div>
 
     ${journalPanelHtml}
+    ${renderOrderHistoryJournalPanel(state.orderHistorySummary)}
   `;
 
   // Bind delete journal events

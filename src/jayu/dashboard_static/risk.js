@@ -11,6 +11,7 @@ function renderRisk() {
       ${statusBadge(summary.status)}
     </div>
     ${renderDataSourceNote("risk")}
+    ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "risk")}
     <section class="decision-grid" aria-label="오늘 결론">
       <article class="decision-card status-${statusClass(summary.status)}">
         <div class="decision-eyebrow">${statusBadge(summary.status)} <span>리스크 및 안전 통제</span></div>

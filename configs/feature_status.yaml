@@ -31,14 +31,90 @@ features:
     status: beta
     owner: broker
     notes: Toss order history schema and completeness audit.
+  api_response_contracts:
+    status: beta
+    owner: data
+    notes: Pydantic API response contract validation for Toss and provider payloads.
+  toss_order_integrity_check:
+    status: beta
+    owner: broker
+    notes: Toss order contract, execution amount, duplicate, and account integrity checks.
+  data_trust_score:
+    status: beta
+    owner: data
+    notes: Dataset trust scoring for schema, completeness, provider agreement, reconciliation, and freshness.
+  data_decision_gate:
+    status: beta
+    owner: risk
+    notes: Blocks or flags downstream decisions when data trust is below thresholds.
+  holdings_reconciliation:
+    status: beta
+    owner: broker
+    notes: Compares holdings against order-reconstructed positions and tax lots.
+  price_consensus_validator:
+    status: beta
+    owner: data
+    notes: Compares price and volume across providers before signal use.
+  fx_consistency_validator:
+    status: beta
+    owner: data
+    notes: Compares USD/KRW exchange-rate providers before KRW valuation.
+  outlier_quarantine:
+    status: beta
+    owner: data
+    notes: Separates verified rows from quarantined price, amount, and jump outliers.
   trade_history_analytics:
     status: beta
     owner: personal
     notes: Historical trade analytics and FIFO realized P/L approximation.
+  realized_pnl_reconciliation:
+    status: beta
+    owner: personal
+    notes: Reconciles Toss order-derived realized P/L with tax lots and holdings.
+  stock_trade_lifecycle:
+    status: beta
+    owner: personal
+    notes: Per-symbol lifecycle from Toss order history and current holdings.
   trade_behavior_review:
     status: beta
     owner: personal
     notes: Trade habit review from historical orders.
+  toss_order_feature_store:
+    status: beta
+    owner: personal
+    notes: Converts Toss order history into symbol, period, portfolio type, cost, P/L, and holding-period features.
+  trade_pattern_miner:
+    status: beta
+    owner: personal
+    notes: Detects repeated losses, quick re-entry, averaging down, early exits, and leveraged-loss patterns from orders.
+  trade_memory_score:
+    status: beta
+    owner: personal
+    notes: Scores symbol-level historical trade memory for signal and order-candidate review.
+  historical_trade_risk_gate:
+    status: beta
+    owner: risk
+    notes: Blocks or flags current signals when they match historical loss-prone order patterns.
+  autotrade_guard_from_history:
+    status: beta
+    owner: risk
+    notes: Converts historical loss patterns into read-only autotrading block, cooldown, and sizing guard candidates.
+  execution_quality_from_orders:
+    status: beta
+    owner: broker
+    notes: Estimates execution quality, fee burden, and available slippage evidence from Toss orders.
+  trade_journal_from_orders:
+    status: beta
+    owner: personal
+    notes: Generates automatic trade-journal entries from matched order-history rounds.
+  order_history_reconciliation:
+    status: beta
+    owner: data
+    notes: Reconciles Toss orders, holdings, tax lots, and realized P/L through a common report.
+  order_history_summary:
+    status: beta
+    owner: personal
+    notes: Shared dashboard and CLI rollup for order memory, patterns, risk gate, guard rules, and journal.
   broker_interface:
     status: beta
     owner: broker

@@ -532,6 +532,175 @@ function metricCard(label, value, status, detail, ratio = null, source = null) {
   `;
 }
 
+function renderOrderHistorySummaryPanel(data, context = "general") {
+  const source = data?.source || "GET /api/v1/order-history-summary";
+  if (!data) {
+    return `
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header">
+          <div><h2>주문 이력 기반 보정</h2><p>Toss 주문 이력 기반 매매 기억 데이터를 불러오지 못했습니다.</p></div>
+          ${statusBadge("not_evaluated")}
+        </div>
+        ${renderSourceCaption(source)}
+      </section>
+    `;
+  }
+  const summary = data.summary || {};
+  const memory = data.memory || {};
+  const patterns = data.patterns || {};
+  const riskGate = data.risk_gate || {};
+  const weakScores = (memory.symbol_scores || []).slice(0, 4);
+  const patternRows = (patterns.patterns || []).slice(0, 4);
+  const blockedRows = (riskGate.blocked_signals || []).slice(0, 4);
+  const titleByContext = {
+    overview: "오늘 신호와 과거 매매 습관",
+    signals: "신호별 과거 매매 기억",
+    risk: "과거 손실 패턴 Risk Gate",
+    "portfolio-hub": "포트폴리오 타입별 실거래 기억",
+    "investor-coach": "주문 이력 행동 패턴",
+    "goal-planner": "실거래 기반 목표 보정",
+    autotrading: "자동매매 금지 패턴",
+    toss: "Toss 주문 기억 요약",
+  };
+  const status = data.status || "not_evaluated";
+  const patternHtml = patternRows.length
+    ? patternRows.map((item) => `
+        <div class="status-banner status-${statusClass(item.severity || "warning")}" style="margin-bottom:8px; grid-template-columns:auto 1fr;">
+          <div>${statusBadge(item.severity || "warning")}</div>
+          <div>
+            <strong style="font-size:12.5px">${escapeHtml(item.symbol || "-")} · ${escapeHtml(item.code || "pattern")}</strong>
+            <p style="font-size:11.5px; margin:3px 0 0; color:var(--text);">${escapeHtml(item.message || "")}</p>
+            ${renderSourceCaption(item.source || source)}
+          </div>
+        </div>
+      `).join("")
+    : `<div class="empty-state"><strong>반복 손실 패턴 없음</strong><span>현재 주문 이력 기준으로 주요 손실 습관 패턴이 감지되지 않았습니다.</span></div>`;
+  const weakHtml = weakScores.length
+    ? weakScores.map((item) => `
+        <tr>
+          <td class="ticker-cell">${renderTicker(item.symbol)}</td>
+          <td>${statusBadge(item.score < 45 ? "blocked" : item.score < 65 ? "warning" : "success", item.grade || "-")}</td>
+          <td class="numeric">${formatNumber(item.score, 1)}</td>
+          <td class="numeric">${item.win_rate_pct == null ? "-" : `${formatNumber(item.win_rate_pct, 1)}%`}</td>
+          <td class="numeric">${formatCurrency(item.realized_pnl_krw, "KRW")}</td>
+        </tr>
+      `).join("")
+    : `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:14px;">종목별 매매 기억 점수가 아직 없습니다.</td></tr>`;
+  const blockedHtml = blockedRows.length
+    ? blockedRows.map((item) => `
+        <div class="status-banner status-blocked" style="margin-bottom:8px; grid-template-columns:auto 1fr;">
+          <div>${statusBadge("blocked")}</div>
+          <div>
+            <strong style="font-size:12.5px">${escapeHtml(item.ticker || "-")} ${escapeHtml(item.action || "")}</strong>
+            <p style="font-size:11.5px; margin:3px 0 0; color:var(--text);">${escapeHtml(item.message || "")}</p>
+            ${renderSourceCaption(item.source || source)}
+          </div>
+        </div>
+      `).join("")
+    : `<div class="empty-state"><strong>과거 이력 차단 없음</strong><span>현재 신호 중 과거 손실 패턴으로 강제 차단된 항목은 없습니다.</span></div>`;
+
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>${escapeHtml(titleByContext[context] || "주문 이력 기반 보정")}</h2>
+          <p>최근 캐시된 Toss 주문 이력으로 신호, 리스크, 자동매매 후보를 보정합니다. 주문 제출 기능은 포함하지 않습니다.</p>
+        </div>
+        ${statusBadge(status)}
+      </div>
+      <section class="metric-grid" style="margin-top:10px">
+        ${metricCard("주문 이력 라운드", summary.round_count ?? 0, summary.round_count ? "success" : "not_evaluated", "FIFO matched trades", null, source)}
+        ${metricCard("과거 승률", summary.win_rate_pct == null ? "-" : `${formatNumber(summary.win_rate_pct, 1)}%`, summary.win_rate_pct >= 50 ? "success" : "warning", "realized trade rounds", null, source)}
+        ${metricCard("매매 기억 점수", summary.avg_memory_score == null ? "-" : formatNumber(summary.avg_memory_score, 1), summary.avg_memory_score >= 70 ? "success" : summary.avg_memory_score >= 50 ? "warning" : "blocked", "symbol memory average", null, memory.source || source)}
+        ${metricCard("손실 패턴", summary.pattern_count ?? 0, summary.pattern_count ? "warning" : "success", "mined order patterns", null, patterns.source || source)}
+        ${metricCard("Risk 차단", summary.risk_block_count ?? 0, summary.risk_block_count ? "blocked" : "success", "current signals vs history", null, riskGate.source || source)}
+        ${metricCard("자동매매 차단 규칙", summary.autotrade_block_rule_count ?? 0, summary.autotrade_block_rule_count ? "blocked" : "success", "read-only guard candidates", null, data.autotrade_guard?.source || source)}
+      </section>
+      <div class="section-grid" style="margin-top:12px">
+        <div>
+          <h3 style="font-size:13px; margin:0 0 8px;">약한 매매 기억 종목</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>종목</th><th>등급</th><th class="numeric">점수</th><th class="numeric">승률</th><th class="numeric">실현손익</th></tr></thead>
+            <tbody>${weakHtml}</tbody>
+          </table></div>
+          ${renderSourceCaption(memory.source || source)}
+        </div>
+        <div>
+          <h3 style="font-size:13px; margin:0 0 8px;">손실 패턴 / 차단 후보</h3>
+          ${blockedRows.length ? blockedHtml : patternHtml}
+        </div>
+      </div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderAutotradeHistoryGuard(data) {
+  const guard = data?.autotrade_guard;
+  const source = guard?.source || data?.source || "GET /api/v1/order-history-summary";
+  if (!guard) return "";
+  const rules = guard.rules || [];
+  const rows = rules.length
+    ? rules.slice(0, 8).map((item) => `
+        <tr>
+          <td class="ticker-cell">${renderTicker(item.symbol)}</td>
+          <td>${statusBadge(item.action === "block_auto_order" ? "blocked" : "warning", item.action || "-")}</td>
+          <td class="code">${escapeHtml(item.rule || "-")}</td>
+          <td class="numeric">${formatNumber(item.order_size_multiplier, 2)}</td>
+          <td class="numeric">${item.cooldown_days ?? 0}d</td>
+          <td>${escapeHtml(item.message || "")}${renderSourceLabel(item.source || source)}</td>
+        </tr>
+      `).join("")
+    : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:14px;">과거 주문 이력 기반 자동매매 차단 규칙은 없습니다.</td></tr>`;
+  return `
+    <section class="at-section">
+      <div class="panel-header" style="padding:0 0 10px;">
+        <div>
+          <h2>과거 매매 기반 자동매매 가드</h2>
+          <p>손실 반복, 물타기 손실, 손절 후 빠른 재진입, 약한 매매 기억 점수를 자동매매 금지/축소 후보로 변환합니다.</p>
+        </div>
+        ${statusBadge(guard.status || "not_evaluated")}
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>종목</th><th>처리</th><th>규칙</th><th class="numeric">주문배율</th><th class="numeric">냉각</th><th>사유</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
+function renderOrderHistoryJournalPanel(data) {
+  const journal = data?.journal;
+  const source = journal?.source || data?.source || "GET /api/v1/order-history-summary";
+  if (!journal) return "";
+  const entries = journal.entries || [];
+  const rows = entries.length
+    ? entries.slice(0, 8).map((item) => `
+        <tr>
+          <td class="ticker-cell">${renderTicker(item.symbol)}</td>
+          <td>${statusBadge(item.label === "winner" ? "success" : item.label === "loser" ? "blocked" : "not_evaluated", item.label || "-")}</td>
+          <td class="numeric">${formatCurrency(item.realized_pnl_krw, "KRW")}</td>
+          <td class="numeric">${item.return_pct == null ? "-" : `${formatNumber(item.return_pct, 2)}%`}</td>
+          <td>${escapeHtml(item.note || "")}${renderSourceLabel(item.source || source)}</td>
+        </tr>
+      `).join("")
+    : `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:14px;">주문 이력 기반 자동 투자 일지가 아직 없습니다.</td></tr>`;
+  return `
+    <section class="panel" style="margin-top:14px">
+      <div class="panel-header">
+        <div><h2>주문 이력 자동 일지</h2><p>실현 손익이 큰 매매를 좋은 매매/나쁜 매매 후보로 요약합니다.</p></div>
+        ${statusBadge(journal.status || "not_evaluated")}
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>종목</th><th>라벨</th><th class="numeric">실현손익</th><th class="numeric">수익률</th><th>회고 메모</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${renderSourceCaption(source)}
+    </section>
+  `;
+}
+
 async function showStockKnowledgeCardModal(ticker) {
   let card;
   try {

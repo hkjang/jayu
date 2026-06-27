@@ -194,6 +194,7 @@ function renderAutotrading() {
     </div>
 
     ${renderAutotradingReadiness(data.readiness_score)}
+    ${renderAutotradeHistoryGuard(state.orderHistorySummary)}
     ${renderPaperPromotionReport(data.paper_promotion_report)}
 
     <section class="at-section">

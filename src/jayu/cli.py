@@ -1574,6 +1574,104 @@ def report_order_quality(
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+@report_app.command("toss-order-integrity")
+def report_toss_order_integrity(
+    orders_json: Annotated[Path | None, typer.Option("--orders-json", exists=True)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Validate Toss order history contracts, executions, amounts, and duplicates."""
+    _, paths = _load(config)
+    selected_orders = orders_json or (paths.state_dir / "toss_orders.json")
+    orders_data = read_json(selected_orders, default=[])
+    from .toss_order_integrity_check import check_toss_order_integrity
+
+    report = check_toss_order_integrity(orders_data)
+    atomic_write_json(output or (paths.state_dir / "toss_order_integrity.json"), report)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("order-history-summary")
+def report_order_history_summary(
+    orders_json: Annotated[Path | None, typer.Option("--orders-json", exists=True)] = None,
+    signals_json: Annotated[Path | None, typer.Option("--signals-json", exists=True)] = None,
+    tax_lots_json: Annotated[Path | None, typer.Option("--tax-lots-json", exists=True)] = None,
+    holdings_json: Annotated[Path | None, typer.Option("--holdings-json", exists=True)] = None,
+    full: Annotated[bool, typer.Option("--full", help="Include full raw order-derived lists.")] = False,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Build order-history memory, risk gate, autotrade guard, and trade journal summary."""
+    _, paths = _load(config)
+    selected_orders = orders_json or (paths.state_dir / "toss_orders.json")
+    selected_signals = signals_json or paths.signal_file
+    selected_tax_lots = tax_lots_json or (paths.state_dir / "tax_lot_ledger.json")
+    orders_data = read_json(selected_orders, default=[])
+    signals_data = read_json(selected_signals, default={})
+    tax_lots_data = read_json(selected_tax_lots, default=[])
+    holdings_data = read_json(holdings_json, default=[]) if holdings_json else []
+    portfolio_mapping = read_json(paths.project_root / "configs" / "portfolio_mapping.json", default={})
+
+    from .order_history_summary import build_order_history_summary
+
+    report = build_order_history_summary(
+        orders_data,
+        signals_payload=signals_data,
+        holdings_payload=holdings_data,
+        tax_lots_payload=tax_lots_data,
+        portfolio_mapping=portfolio_mapping if isinstance(portfolio_mapping, dict) else None,
+        compact=not full,
+    )
+    atomic_write_json(output or (paths.state_dir / "order_history_summary.json"), report)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("data-trust")
+def report_data_trust(
+    orders_json: Annotated[Path | None, typer.Option("--orders-json", exists=True)] = None,
+    tax_lots_json: Annotated[Path | None, typer.Option("--tax-lots-json", exists=True)] = None,
+    holdings_json: Annotated[Path | None, typer.Option("--holdings-json", exists=True)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Build the data trust score used before decisions."""
+    _, paths = _load(config)
+    selected_orders = orders_json or (paths.state_dir / "toss_orders.json")
+    selected_tax_lots = tax_lots_json or (paths.state_dir / "tax_lot_ledger.json")
+    default_holdings = paths.state_dir / "toss_account_snapshot.json"
+    selected_holdings = holdings_json or (default_holdings if default_holdings.exists() else None)
+    orders_data = read_json(selected_orders, default=[])
+    tax_lots_data = read_json(selected_tax_lots, default=[])
+    holdings_data = read_json(selected_holdings, default=[]) if selected_holdings else []
+    from .api_response_contracts import validate_api_response_contract
+    from .data_decision_gate import evaluate_data_decision_gate
+    from .data_trust_score import build_data_trust_report
+    from .realized_pnl_reconciliation import reconcile_realized_pnl
+    from .toss_order_integrity_check import check_toss_order_integrity
+
+    order_contract = validate_api_response_contract("orders", orders_data)
+    order_integrity = check_toss_order_integrity(orders_data)
+    reconciliation = reconcile_realized_pnl(orders_data, tax_lots_data, holdings_data)
+    trust = build_data_trust_report(
+        {
+            "toss_orders": {
+                "contract": order_contract,
+                "integrity": order_integrity,
+                "hard_block": order_integrity.get("status") == "failed",
+                "source": str(selected_orders),
+            },
+            "toss_holdings_reconciliation": {
+                "reconciliation": reconciliation,
+                "hard_block": reconciliation.get("status") == "failed",
+                "source": str(selected_holdings or selected_tax_lots),
+            },
+        }
+    )
+    report = {"trust": trust, "gate": evaluate_data_decision_gate(trust)}
+    atomic_write_json(output or (paths.state_dir / "data_trust_score.json"), report)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
 @report_app.command("trade-history")
 def report_trade_history(
     orders_json: Annotated[Path | None, typer.Option("--orders-json", exists=True)] = None,
@@ -1588,6 +1686,51 @@ def report_trade_history(
 
     report = build_trade_history_analytics(orders_data)
     atomic_write_json(output or (paths.state_dir / "trade_history_analytics.json"), report)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("realized-pnl-reconcile")
+def report_realized_pnl_reconcile(
+    orders_json: Annotated[Path | None, typer.Option("--orders-json", exists=True)] = None,
+    tax_lots_json: Annotated[Path | None, typer.Option("--tax-lots-json", exists=True)] = None,
+    holdings_json: Annotated[Path | None, typer.Option("--holdings-json", exists=True)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Reconcile Toss order-derived realized P/L with tax lots and holdings."""
+    _, paths = _load(config)
+    selected_orders = orders_json or (paths.state_dir / "toss_orders.json")
+    selected_tax_lots = tax_lots_json or (paths.state_dir / "tax_lot_ledger.json")
+    default_holdings = paths.state_dir / "toss_account_snapshot.json"
+    selected_holdings = holdings_json or (default_holdings if default_holdings.exists() else None)
+    orders_data = read_json(selected_orders, default=[])
+    tax_lots_data = read_json(selected_tax_lots, default=[])
+    holdings_data = read_json(selected_holdings, default=[]) if selected_holdings else []
+    from .realized_pnl_reconciliation import reconcile_realized_pnl
+
+    report = reconcile_realized_pnl(orders_data, tax_lots_data, holdings_data)
+    atomic_write_json(output or (paths.state_dir / "realized_pnl_reconciliation.json"), report)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("stock-trade-lifecycle")
+def report_stock_trade_lifecycle(
+    orders_json: Annotated[Path | None, typer.Option("--orders-json", exists=True)] = None,
+    holdings_json: Annotated[Path | None, typer.Option("--holdings-json", exists=True)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Build a per-symbol trade lifecycle from Toss order history."""
+    _, paths = _load(config)
+    selected_orders = orders_json or (paths.state_dir / "toss_orders.json")
+    default_holdings = paths.state_dir / "toss_account_snapshot.json"
+    selected_holdings = holdings_json or (default_holdings if default_holdings.exists() else None)
+    orders_data = read_json(selected_orders, default=[])
+    holdings_data = read_json(selected_holdings, default=[]) if selected_holdings else []
+    from .stock_trade_lifecycle import build_stock_trade_lifecycle
+
+    report = build_stock_trade_lifecycle(orders_data, holdings_data)
+    atomic_write_json(output or (paths.state_dir / "stock_trade_lifecycle.json"), report)
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 

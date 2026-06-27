@@ -23,6 +23,7 @@ function renderDataQuality() {
       ${statusBadge(summary.status)}
     </div>
     ${renderDataSourceNote("data-quality")}
+    ${renderDataTrustGate(state.dataTrust)}
     <section class="decision-grid" aria-label="오늘 결론">
       <article class="decision-card status-${statusClass(summary.status)}">
         <div class="decision-eyebrow">${statusBadge(summary.status)} <span>수집 및 정합성 검증</span></div>
@@ -64,6 +65,62 @@ function renderDataQuality() {
   `;
   
   setTimeout(loadProviderTrend, 50);
+}
+
+function renderDataTrustGate(data) {
+  if (!data) {
+    return `
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header"><div><h2>데이터 판단 게이트</h2><p>데이터 신뢰도 점수를 불러오지 못했습니다.</p></div></div>
+        ${renderSourceCaption("GET /api/v1/data-trust-score")}
+      </section>
+    `;
+  }
+  const trust = data.trust || {};
+  const gate = data.gate || {};
+  const datasets = trust.datasets || [];
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>데이터 판단 게이트</h2>
+          <p>가격, 주문, 보유 대조, API drift를 합산해 오늘 계산에 쓸 수 있는 데이터인지 먼저 판단합니다.</p>
+        </div>
+        ${statusBadge(gate.status || data.status || "not_evaluated", gate.decision || trust.decision || "-")}
+      </div>
+      <section class="metric-grid" style="margin-top:12px">
+        ${metricCard("Trust Score", `${formatNumber(trust.overall_score, 1)}점`, gate.status || data.status || "not_evaluated", trust.decision || "-", null, data.source || "data_trust_score.py")}
+        ${metricCard("계산 허용", gate.allowed ? "허용" : "차단", gate.allowed ? "success" : "blocked", `차단 ${gate.summary?.blocking_count || 0}건`, null, "data_decision_gate.py")}
+        ${metricCard("검토 필요", gate.summary?.review_count || 0, gate.summary?.review_count ? "warning" : "success", "60~80점 구간", null, "data_trust_score.py")}
+        ${metricCard("데이터셋", trust.summary?.dataset_count || 0, "not_evaluated", `pass ${trust.summary?.pass_count || 0}`, null, "data quality + Toss validation")}
+      </section>
+      ${renderDataTrustDatasetTable(datasets)}
+      ${renderSourceCaption(data.source || "GET /api/v1/data-trust-score")}
+    </section>
+  `;
+}
+
+function renderDataTrustDatasetTable(rows) {
+  if (!rows.length) {
+    return emptyTable("신뢰도 평가 대상 데이터셋이 없습니다.", "최신 실행 또는 Toss 주문 캐시가 생기면 자동 평가합니다.");
+  }
+  return `
+    <div class="table-wrap" style="margin-top:12px"><table>
+      <thead><tr><th>Dataset</th><th>Decision</th><th class="numeric">Score</th><th>Schema</th><th>Completeness</th><th>Agreement</th><th>Reconciliation</th><th>Reasons</th></tr></thead>
+      <tbody>${rows.map((row) => `
+        <tr>
+          <td><strong>${escapeHtml(row.name || "-")}</strong>${renderSourceLabel(row.source || "data_trust_score.py")}</td>
+          <td>${statusBadge(row.status || "not_evaluated", row.decision || "-")}</td>
+          <td class="numeric">${formatNumber(row.score, 1)}</td>
+          <td>${formatNumber(row.components?.schema_validity, 1)}</td>
+          <td>${formatNumber(row.components?.completeness, 1)}</td>
+          <td>${formatNumber(row.components?.provider_agreement, 1)}</td>
+          <td>${formatNumber(row.components?.reconciliation, 1)}</td>
+          <td>${(row.reasons || []).map((reason) => statusBadge("not_evaluated", reason)).join(" ") || "-"}</td>
+        </tr>
+      `).join("")}</tbody>
+    </table></div>
+  `;
 }
 
 function renderDataLineageGraph(lineage) {

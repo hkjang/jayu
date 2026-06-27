@@ -628,6 +628,90 @@ def build_dashboard_data_quality(
     }
 
 
+def build_dashboard_data_trust(
+    paths: RuntimePaths,
+    *,
+    run_id: str = "latest",
+) -> dict[str, Any]:
+    from .api_response_contracts import validate_api_response_contract
+    from .data_decision_gate import evaluate_data_decision_gate
+    from .data_trust_score import build_data_trust_report
+    from .realized_pnl_reconciliation import reconcile_realized_pnl
+    from .tax_lot_ledger import TaxLotLedger
+    from .toss_order_integrity_check import check_toss_order_integrity
+    from .toss_orders import TossOrdersManager
+
+    data_quality = build_dashboard_data_quality(paths, run_id=run_id)
+    orders_mgr = TossOrdersManager(paths.project_root)
+    orders = orders_mgr.load_orders()
+    order_contract = validate_api_response_contract(
+        "orders",
+        orders,
+        provider="toss",
+        source="state/toss_orders.json - Toss Order History getOrders",
+    )
+    order_integrity = check_toss_order_integrity(orders)
+    tax_lots = TaxLotLedger(paths.state_dir / "tax_lot_ledger.json").load_lots()
+    holdings: list[dict[str, Any]] = []
+    try:
+        portfolio = build_dashboard_toss_portfolio(paths)
+        holdings = list(portfolio.get("holdings") or [])
+    except Exception:
+        holdings = []
+    holdings_reconciliation = reconcile_realized_pnl(orders, tax_lots, holdings)
+    api_drift = _mapping(read_json(paths.state_dir / "toss_api_drift.json", default={}))
+    fallback_snapshot_used = bool(api_drift.get("fallback_snapshot_used"))
+    api_drift_hard_block = api_drift.get("status") == "drifted"
+
+    datasets = {
+        "market_price": {
+            "data_quality": data_quality,
+            "disagreements": data_quality.get("disagreements", []),
+            "hard_block": data_quality.get("summary", {}).get("status") == "data_error",
+            "source": "latest run data_sources.json - provider_disagreement_report.json",
+        },
+        "toss_orders": {
+            "contract": order_contract,
+            "integrity": order_integrity,
+            "hard_block": order_integrity.get("status") == "failed",
+            "source": "state/toss_orders.json - Toss Order History getOrders",
+        },
+        "toss_holdings_reconciliation": {
+            "reconciliation": holdings_reconciliation,
+            "hard_block": holdings_reconciliation.get("status") == "failed",
+            "source": "state/toss_orders.json - state/tax_lot_ledger.json - Toss holdings",
+        },
+        "toss_api_drift": {
+            "contract": {
+                "status": "failed" if api_drift_hard_block else "success",
+                "summary": {
+                    "row_count": 1 if api_drift else 0,
+                    "violation_count": 1 if api_drift_hard_block else 0,
+                },
+            },
+            "fallback_snapshot_used": fallback_snapshot_used,
+            "hard_block": api_drift_hard_block,
+            "source": "state/toss_api_drift.json - Toss OpenAPI endpoint catalog",
+        },
+    }
+    trust = build_data_trust_report(datasets)
+    gate = evaluate_data_decision_gate(trust)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": data_quality.get("run_id"),
+        "status": gate["status"],
+        "trust": trust,
+        "gate": gate,
+        "inputs": {
+            "order_contract": order_contract,
+            "order_integrity": order_integrity,
+            "holdings_reconciliation": holdings_reconciliation,
+            "api_drift": api_drift,
+        },
+        "source": "build_dashboard_data_trust - data_trust_score.py - data_decision_gate.py",
+    }
+
+
 def build_dashboard_risk(
     paths: RuntimePaths,
     *,
@@ -3055,6 +3139,10 @@ def _dashboard_handler(
 
                     self._json(build_feature_inventory(paths.project_root))
                     return
+                if parsed.path == "/api/v1/data-trust-score":
+                    query = parse_qs(parsed.query)
+                    self._json(build_dashboard_data_trust(paths, run_id=query.get("run_id", ["latest"])[0]))
+                    return
                 if parsed.path == "/api/v1/query":
                     query = parse_qs(parsed.query)
                     resource = query.get("resource", [""])[0]
@@ -3415,12 +3503,89 @@ def _dashboard_handler(
                     mgr = TossOrdersManager(paths.project_root)
                     self._json(check_order_history_quality(mgr.load_orders()))
                     return
+                if parsed.path == "/api/v1/toss/order-integrity":
+                    from .toss_order_integrity_check import check_toss_order_integrity
+                    from .toss_orders import TossOrdersManager
+
+                    mgr = TossOrdersManager(paths.project_root)
+                    self._json(check_toss_order_integrity(mgr.load_orders()))
+                    return
                 if parsed.path == "/api/v1/toss/trade-history-analytics":
                     from .toss_orders import TossOrdersManager
                     from .trade_history_analytics import build_trade_history_analytics
 
                     mgr = TossOrdersManager(paths.project_root)
                     self._json(build_trade_history_analytics(mgr.load_orders()))
+                    return
+                if parsed.path == "/api/v1/order-history-summary":
+                    from .order_history_summary import build_order_history_summary
+                    from .tax_lot_ledger import TaxLotLedger
+                    from .toss_orders import TossOrdersManager
+
+                    query = parse_qs(parsed.query)
+                    run_id = query.get("run_id", ["latest"])[0]
+                    account = query.get("account", [None])[0]
+                    mgr = TossOrdersManager(paths.project_root)
+                    orders = mgr.load_orders()
+                    try:
+                        run_dir = _resolve_run_dir(paths, run_id)
+                    except ValueError:
+                        run_dir = None
+                    signals_payload: list[dict[str, Any]] = []
+                    if run_dir is not None:
+                        signals_payload = _signal_rows(_signal_map(run_dir))
+                    portfolio_mapping = dict(
+                        _mapping(read_json(paths.project_root / "configs" / "portfolio_mapping.json", default={}))
+                    )
+                    tax_lots = TaxLotLedger(paths.state_dir / "tax_lot_ledger.json").load_lots()
+                    holdings: list[dict[str, Any]] = []
+                    if query.get("include_holdings", ["false"])[0].lower() == "true":
+                        try:
+                            portfolio = build_dashboard_toss_portfolio(paths, account=account)
+                            holdings = list(portfolio.get("holdings") or [])
+                        except Exception:
+                            holdings = []
+                    self._json(
+                        build_order_history_summary(
+                            orders,
+                            signals_payload=signals_payload,
+                            holdings_payload=holdings,
+                            tax_lots_payload=tax_lots,
+                            portfolio_mapping=portfolio_mapping,
+                        )
+                    )
+                    return
+                if parsed.path == "/api/v1/toss/realized-pnl-reconciliation":
+                    from .realized_pnl_reconciliation import reconcile_realized_pnl
+                    from .tax_lot_ledger import TaxLotLedger
+                    from .toss_orders import TossOrdersManager
+
+                    query = parse_qs(parsed.query)
+                    account = query.get("account", [None])[0]
+                    mgr = TossOrdersManager(paths.project_root)
+                    ledger = TaxLotLedger(paths.state_dir / "tax_lot_ledger.json")
+                    holdings: list[dict[str, Any]] = []
+                    try:
+                        portfolio = build_dashboard_toss_portfolio(paths, account=account)
+                        holdings = list(portfolio.get("holdings") or [])
+                    except Exception:
+                        holdings = []
+                    self._json(reconcile_realized_pnl(mgr.load_orders(), ledger.load_lots(), holdings))
+                    return
+                if parsed.path == "/api/v1/toss/stock-trade-lifecycle":
+                    from .stock_trade_lifecycle import build_stock_trade_lifecycle
+                    from .toss_orders import TossOrdersManager
+
+                    query = parse_qs(parsed.query)
+                    account = query.get("account", [None])[0]
+                    mgr = TossOrdersManager(paths.project_root)
+                    holdings = []
+                    try:
+                        portfolio = build_dashboard_toss_portfolio(paths, account=account)
+                        holdings = list(portfolio.get("holdings") or [])
+                    except Exception:
+                        holdings = []
+                    self._json(build_stock_trade_lifecycle(mgr.load_orders(), holdings))
                     return
                 if parsed.path == "/api/v1/toss/accounts":
                     self._json(build_dashboard_toss_accounts(paths))

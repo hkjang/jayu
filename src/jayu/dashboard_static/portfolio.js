@@ -179,6 +179,7 @@ function renderPortfolioHub() {
       <button id="btn-hub-load" class="button button-primary">📊 데이터 조회</button>
     </div>
 
+    ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "portfolio-hub")}
     ${renderMarketRegimeBanner(data?.market_regime)}
     ${renderHubTodayChecklist(checklist)}
     ${renderHubSignalConflictPanel(data?.signal_conflicts)}
