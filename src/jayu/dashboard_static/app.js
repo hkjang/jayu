@@ -196,6 +196,13 @@ async function loadPage() {
       console.warn("Failed to load stock name mappings", e);
     }
 
+    try {
+      state.tossSecurityMaster = await api("/api/v1/toss/security-master");
+    } catch (e) {
+      console.warn("Failed to load security master", e);
+      state.tossSecurityMaster = {};
+    }
+
     const run = encodeURIComponent(state.runId);
     if (RUN_CONTEXT_OPTIONAL_PAGES.has(state.page)) {
       try {
@@ -305,6 +312,12 @@ async function loadPage() {
         state.events = null;
       }
       try {
+        state.securityQuality = await api("/api/v1/toss/security-quality");
+      } catch (err) {
+        console.warn("Failed to load security quality & reconciliation", err);
+        state.securityQuality = null;
+      }
+      try {
         state.experiments = await api("/api/v1/experiments");
       } catch (err) {
         console.warn("Failed to load experiments list", err);
@@ -346,6 +359,12 @@ async function loadPage() {
       } catch (err) {
         console.warn("Failed to load purpose tags", err);
         state.portfolioPurposeTags = {};
+      }
+      try {
+        state.securityExposure = await api("/api/v1/toss/security-exposure");
+      } catch (err) {
+        console.warn("Failed to load security exposure", err);
+        state.securityExposure = null;
       }
     }
     if (state.page === "autotrading") {

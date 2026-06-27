@@ -198,6 +198,7 @@ function renderPortfolioHub() {
     <div id="hub-tab-content">${tabContent}</div>
 
     ${renderDecisionOsMonitoring(data)}
+    ${renderSecurityExposure(state.securityExposure)}
 
     <div class="hub-disclaimer">
       ⚠️ 이 화면의 신호와 지표는 <strong>투자 보조 분석 결과</strong>이며 투자 추천이 아닙니다.
@@ -217,7 +218,7 @@ function renderHubTodayChecklist(checklist) {
   const renderItems = (items) => items.map(item => `
     <div class="hub-checklist-item">
       <span class="hub-checklist-signal">${hubSignalBadge(item.signal)}</span>
-      <span class="hub-checklist-ticker">${renderTicker(item.ticker)}</span>
+      <span class="hub-checklist-ticker">${renderTicker(item.ticker)} <span style="font-size:11px;color:var(--muted);">(${escapeHtml(getStockName(item.ticker))})</span></span>
       <span class="hub-checklist-type">${escapeHtml(item.portfolio_type_label || "")}</span>
       <span class="hub-checklist-reason">${escapeHtml(checklistReason(item))}</span>
     </div>`).join("");
@@ -274,7 +275,7 @@ function renderHubSignalConflictPanel(conflicts) {
       ${items.slice(0, 8).map((item) => `
         <article class="hub-conflict-card level-${escapeHtml(item.level || "watch")}">
           <div class="hub-conflict-head">
-            <strong>${renderTicker(item.ticker)}</strong>
+            <strong>${renderTicker(item.ticker)} <span style="font-size:11.5px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(item.ticker))})</span></strong>
             ${statusBadge(item.level === "high" ? "blocked" : "warning", levelLabel[item.level] || item.level || "주의")}
           </div>
           <p>${escapeHtml(item.summary || "")}</p>
@@ -396,7 +397,7 @@ function renderHubTickerCard(tab, item) {
     <div class="hub-ticker-card" style="border-top:3px solid ${d.color}">
       <div class="hub-ticker-header">
         <div class="hub-ticker-name">
-          <strong>${renderTicker(item.ticker)}</strong>
+          <strong>${renderTicker(item.ticker)} <span style="font-size:11.5px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(item.ticker))})</span></strong>
           <span class="hub-data-quality" style="color:${dqColor}" title="데이터 품질">●</span>
         </div>
         <div class="hub-ticker-price">
@@ -476,7 +477,7 @@ function renderHubDividendCashflow(cashflow) {
   const rowHtml = rows.length ? rows.map((row) => `
     <article class="hub-dividend-row status-${statusClass(row.status || "not_evaluated")}">
       <div class="hub-dividend-row-main">
-        <strong>${renderTicker(row.ticker)}</strong>
+        <strong>${renderTicker(row.ticker)} <span style="font-size:12px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(row.ticker))})</span></strong>
         ${statusBadge(row.status || "not_evaluated")}
       </div>
       <div class="hub-dividend-row-metrics">
@@ -777,4 +778,52 @@ function bindPortfolioHubActions() {
       btnLoad.click();
     }
   }
+}
+
+
+function renderSecurityExposure(exp) {
+  if (!exp || !exp.total_value_krw) return "";
+  
+  const renderList = (items) => {
+    return items.map(item => `
+      <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:6px; border-bottom:1px dashed var(--border); padding-bottom:4px;">
+        <span style="font-weight:600;">${escapeHtml(item.name)}</span>
+        <span class="muted">${formatCurrency(item.value_krw, "KRW")} (${item.percentage}%)</span>
+      </div>
+    `).join("");
+  };
+
+  return `
+    <section class="panel" style="margin-top:20px;">
+      <div class="panel-header">
+        <div>
+          <h2>📊 자산 노출도 및 레버리지 분석 (Asset Exposure & Leverage Analysis)</h2>
+          <p>토스 계좌 자산의 상품유형, 시장, 통화, 레버리지 배율, 섹터별 실시간 비중 분석 결과입니다.</p>
+        </div>
+        <span class="muted" style="font-weight:700;">총 평가금액: ${formatCurrency(exp.total_value_krw, "KRW")}</span>
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:16px; margin-top:12px;">
+        <div class="card" style="padding:12px; background:var(--surface-subtle); border-radius:8px;">
+          <h3 style="font-size:13px; margin-bottom:10px; border-bottom:2px solid var(--accent); padding-bottom:4px; color:var(--text);">📦 상품 유형</h3>
+          ${renderList(exp.by_type)}
+        </div>
+        <div class="card" style="padding:12px; background:var(--surface-subtle); border-radius:8px;">
+          <h3 style="font-size:13px; margin-bottom:10px; border-bottom:2px solid #4dabf7; padding-bottom:4px; color:var(--text);">🏛️ 거래 시장</h3>
+          ${renderList(exp.by_market)}
+        </div>
+        <div class="card" style="padding:12px; background:var(--surface-subtle); border-radius:8px;">
+          <h3 style="font-size:13px; margin-bottom:10px; border-bottom:2px solid #bd72f2; padding-bottom:4px; color:var(--text);">💵 통화 비중</h3>
+          ${renderList(exp.by_currency)}
+        </div>
+        <div class="card" style="padding:12px; background:var(--surface-subtle); border-radius:8px;">
+          <h3 style="font-size:13px; margin-bottom:10px; border-bottom:2px solid #ff6b6b; padding-bottom:4px; color:var(--text);">⚡ 레버리지 분포</h3>
+          ${renderList(exp.by_leverage)}
+        </div>
+        <div class="card" style="padding:12px; background:var(--surface-subtle); border-radius:8px;">
+          <h3 style="font-size:13px; margin-bottom:10px; border-bottom:2px solid #51cf66; padding-bottom:4px; color:var(--text);">🗂️ 섹터 비중</h3>
+          ${renderList(exp.by_sector)}
+        </div>
+      </div>
+    </section>
+  `;
 }

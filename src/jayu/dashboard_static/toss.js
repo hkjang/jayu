@@ -205,7 +205,7 @@ function renderTradeHistoryMiniTable(rows, fields) {
             <tr>
               ${fields.map(field => {
                 const value = row[field];
-                const formatted = field === "symbol" ? `${renderTicker(value)} <span style="font-size:11px;color:var(--muted);margin-left:4px;">(${escapeHtml(getStockName(value))})</span>` : (field.endsWith("_krw") ? formatCurrency(value, "KRW") : escapeHtml(value ?? "-"));
+                const formatted = field === "symbol" ? `${renderTicker(value)} <span style="font-size:11px;color:var(--muted);margin-left:4px;">(${escapeHtml(getStockName(value))}${renderSecurityBadge(value)})</span>` : (field.endsWith("_krw") ? formatCurrency(value, "KRW") : escapeHtml(value ?? "-"));
                 return `<td class="${field.endsWith("_krw") ? "numeric" : (field === "symbol" ? "ticker-cell" : "")}">${formatted}</td>`;
               }).join("")}
             </tr>
@@ -323,6 +323,7 @@ function renderPnlReconciliationDiscrepancies(rows) {
         ${rows.slice(0, 10).map((row) => `
           <tr>
             <td class="ticker-cell">${renderTicker(row.symbol)}</td>
+            <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.symbol))}</span>${renderSecurityBadge(row.symbol)}</td>
             <td>${statusBadge(row.severity || "warning")}</td>
             <td class="numeric">${formatNumber(row.order_quantity, 4)}</td>
             <td class="numeric">${formatNumber(row.tax_lot_quantity, 4)}</td>
@@ -392,6 +393,7 @@ function renderStockTradeLifecycleTable(rows) {
         ${rows.slice(0, 12).map((row) => `
           <tr>
             <td class="ticker-cell">${renderTicker(row.symbol)}</td>
+            <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.symbol))}</span>${renderSecurityBadge(row.symbol)}</td>
             <td>${statusBadge(lifecycleStageStatus(row.lifecycle_stage), lifecycleStageLabel(row.lifecycle_stage))}</td>
             <td class="numeric">${formatNumber(row.buy_count, 0)}</td>
             <td class="numeric">${formatNumber(row.sell_count, 0)}</td>
@@ -508,6 +510,7 @@ function renderReconciliation(reconciliation) {
             return `
               <tr>
                 <td class="ticker-cell">${renderTicker(d.ticker)}</td>
+                <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(d.ticker))}</span>${renderSecurityBadge(d.ticker)}</td>
                 <td class="numeric">${formatNumber(d.local_quantity, 4)}</td>
                 <td class="numeric">${formatNumber(d.toss_quantity, 4)}</td>
                 <td class="numeric ${diffClass}">${formatNumber(d.difference, 4)}</td>
@@ -532,7 +535,7 @@ function renderReconciliation(reconciliation) {
           <div class="tag-cloud">
             ${unmapped.map(ticker => `
               <div class="tag-pill" style="border-color:var(--status-blocked)">
-                <strong style="color:var(--status-blocked)">${renderTicker(ticker)}</strong>
+                <strong style="color:var(--status-blocked)">${renderTicker(ticker)} <span style="font-size:11px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(ticker))})</span></strong>
                 <span>매핑 미등록</span>
               </div>
             `).join("")}
@@ -590,6 +593,7 @@ function renderTaxLotLedgerSection() {
                 ${discrepancies.map(d => `
                   <tr>
                     <td class="ticker-cell"><strong>${renderTicker(d.ticker)}</strong></td>
+                    <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(d.ticker))}</span>${renderSecurityBadge(d.ticker)}</td>
                     <td class="numeric">${formatNumber(d.ledger_qty, 4)}</td>
                     <td class="numeric">${formatNumber(d.toss_qty, 4)}</td>
                     <td class="numeric" style="color: var(--status-blocked); font-weight: bold;">${d.qty_diff > 0 ? '+' : ''}${formatNumber(d.qty_diff, 4)}</td>
@@ -640,6 +644,7 @@ function renderTaxLotLedgerSection() {
               <tr style="${isFullySold ? 'opacity: 0.4; background: rgba(0,0,0,0.08); text-decoration: line-through;' : ''}">
                 <td class="code" style="font-size: 11px;">${escapeHtml(lot.lot_id)}</td>
                 <td class="ticker-cell"><strong>${renderTicker(lot.ticker)}</strong></td>
+                <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(lot.ticker))}</span>${renderSecurityBadge(lot.ticker)}</td>
                 <td>${escapeHtml(lot.buy_date)}</td>
                 <td class="numeric">
                   <strong>${formatNumber(lot.remaining_quantity, 4)}</strong> 
@@ -703,6 +708,7 @@ function renderReconciliationReview(recon) {
           return `
             <tr>
               <td class="ticker-cell">${renderTicker(issue.ticker)}</td>
+              <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(issue.ticker))}</span>${renderSecurityBadge(issue.ticker)}</td>
               <td>${statusBadge(issue.severity === "blocked" ? "blocked" : "warning", issue.label || RECONCILIATION_ISSUE_LABELS[issue.issue_type] || issue.issue_type || "점검")}</td>
               <td>${escapeHtml(issue.portfolio_type_label || issue.portfolio_type || "-")}</td>
               <td>${escapeHtml(issue.detail || "")}</td>
@@ -830,6 +836,7 @@ function renderOrderPlan(orderPlanData) {
             return `
               <tr>
                 <td class="ticker-cell">${renderTicker(ticker)}</td>
+                <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(ticker))}</span>${renderSecurityBadge(ticker)}</td>
                 <td><strong>${escapeHtml(sig.action || sig.signal || "-")}</strong></td>
                 <td>${statusBadge(sig.eligible ? "success" : "blocked", sig.eligible ? "Eligible" : "Blocked")}</td>
                 <td>${statusBadge(isHeld ? "warning" : "not_evaluated", isHeld ? "보유 중" : "미보유")}</td>
@@ -870,6 +877,7 @@ function renderOrderPlan(orderPlanData) {
           ${orders.map(o => `
             <tr>
               <td class="ticker-cell"><strong>${renderTicker(o.ticker)}</strong></td>
+              <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(o.ticker))}</span>${renderSecurityBadge(o.ticker)}</td>
               <td><span style="color:var(--status-success);font-weight:bold">${escapeHtml(o.action)}</span></td>
               <td class="numeric">${formatPercent(o.approved_pct, 1)}</td>
               <td class="numeric"><strong>${formatNumber(o.estimated_cash, 2)} ${escapeHtml(o.currency)}</strong></td>
@@ -998,6 +1006,7 @@ function renderAllocationPreview(data) {
         ${holdings.map(row => `
           <tr>
             <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+            <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span>${renderSecurityBadge(row.ticker)}</td>
             <td>${escapeHtml(row.sector || "UNKNOWN")}</td>
             <td class="numeric">${formatPercent(row.before_weight, 1)}</td>
             <td class="numeric">${formatPercent(row.after_weight, 1)}</td>
@@ -1072,6 +1081,7 @@ function renderPaperOrderContract(contract) {
             ${intents.map((intent) => `
               <tr>
                 <td class="ticker-cell"><strong>${renderTicker(intent.ticker)}</strong></td>
+                <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(intent.ticker))}</span>${renderSecurityBadge(intent.ticker)}</td>
                 <td>${escapeHtml(intent.side)}</td>
                 <td>${statusBadge(intent.quality?.status || "not_evaluated", intent.quality?.score != null ? `${formatNumber(intent.quality.score, 1)}점` : "")}</td>
                 <td class="numeric">${formatNumber(intent.quantity, 4)}</td>
@@ -1102,7 +1112,7 @@ function renderOrderIntentQuality(contract) {
     return `
       <div class="order-quality-row status-${statusClass(quality.status)}">
         <div class="order-quality-main">
-          <strong>${renderTicker(intent.ticker)} · ${escapeHtml(intent.side || "-")}</strong>
+          <strong>${renderTicker(intent.ticker)} <span style="font-size:12px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(intent.ticker))})</span> · ${escapeHtml(intent.side || "-")}</strong>
           <span>${escapeHtml(quality.summary || "품질 점수 미검증")}</span>
           ${renderSourceCaption(quality.source || contract.source || "OrderIntent validation")}
         </div>
@@ -1417,7 +1427,7 @@ function renderAccountAttributionPanel(attribution) {
         ${rows.slice(0, 6).map((row) => `
           <div class="account-attribution-row status-${statusClass(row.status || "not_evaluated")}">
             <div>
-              <strong>${renderTicker(row.symbol)}</strong>
+              <strong>${renderTicker(row.symbol)} <span style="font-size:12px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(row.symbol))})</span></strong>
               <span>${escapeHtml(accountAttributionEffectLabel(row.dominant_effect))} · ${escapeHtml(row.position_status || "-")}</span>
               ${renderSourceLabel(row.source || data.source || "account_attribution.json")}
             </div>
@@ -1592,6 +1602,7 @@ function renderTossHoldingsTable(rows) {
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.symbol)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.symbol))}</span>${renderSecurityBadge(row.symbol)}</td>
           <td>${statusBadge(row.market_region === "US" ? "warning" : row.market_region === "KR" ? "success" : "not_evaluated", row.market_region || "-")}</td>
           <td class="tag-cell portfolio-type-cell">${renderPortfolioTypeBadges(row)}<small>${escapeHtml(row.portfolio_type_focus || "-")}</small>${renderSourceLabel(row.portfolio_type_source || "portfolio_mapping.json · Toss holdings/stocks metadata")}</td>
           <td>${escapeHtml(row.category || row.asset_type || "-")}</td>

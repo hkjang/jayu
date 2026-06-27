@@ -197,6 +197,7 @@ function renderSourcesTable(rows) {
         <tr>
           <td>${escapeHtml(row.provider || "-")}</td>
           <td class="ticker-cell">${renderTicker(row.ticker || row.symbol)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker || row.symbol))}</span>${renderSecurityBadge(row.ticker || row.symbol)}</td>
           <td>${statusBadge(row.status === "success" ? "success" : "failed")}</td>
           <td class="numeric">${formatNumber(row.rows, 0)}</td>
           <td class="nowrap">${escapeHtml(row.first_date || "-")}</td>
@@ -215,6 +216,7 @@ function renderMismatchTable(rows) {
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span>${renderSecurityBadge(row.ticker)}</td>
           <td class="nowrap">${escapeHtml(row.date || "-")}</td>
           <td>${escapeHtml(row.field || "-")}</td>
           <td>${escapeHtml([row.baseline, row.candidate].filter(Boolean).join(" / ") || "-")}</td>

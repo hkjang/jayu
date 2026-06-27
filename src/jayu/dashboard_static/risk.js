@@ -67,6 +67,7 @@ function renderRiskChecks(rows) {
         <tr>
           <td>${statusBadge(row.status)}</td>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span>${renderSecurityBadge(row.ticker)}</td>
           <td class="threshold-cell">${escapeHtml(row.metric || row.message || "-")}
             ${Number.isFinite(ratio) && ratio > 0 ? `<div class="threshold-track ${row.status === "blocked" ? "is-blocked" : ""}"><span style="width:${Math.min(100, ratio * 100)}%"></span></div>` : ""}
           </td>
@@ -87,6 +88,7 @@ function renderRiskSignals(rows) {
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span>${renderSecurityBadge(row.ticker)}</td>
           <td>${escapeHtml(row.action || "-")}</td>
           <td>${statusBadge(row.eligible ? "success" : row.reviewed === false ? "not_evaluated" : "blocked")}</td>
           <td class="numeric">${row.approved_position_pct == null ? "미계산" : formatPercent(row.approved_position_pct)}</td>

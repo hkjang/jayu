@@ -35,7 +35,7 @@ function renderApprovalAuditHistoryPanel(history) {
             <td>${formatDate(row.timestamp)}</td>
             <td class="code">${escapeHtml(row.run_id)}</td>
             <td class="ticker-cell">${renderTicker(row.ticker)}</td>
-            <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
+            <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}${renderSecurityBadge(row.ticker)}</span></td>
             <td>${escapeHtml(row.action)}</td>
             <td>${statusBadge(row.recommendation_verdict)}</td>
             <td>${statusBadge(row.user_decision === "approve" ? "success" : row.user_decision === "hold" ? "warning" : "not_evaluated", row.user_decision === "approve" ? "승인" : row.user_decision === "hold" ? "보류" : "무시")}</td>
@@ -171,7 +171,7 @@ function renderSignalDetailTable(rows) {
         return `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
-          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}${renderSecurityBadge(row.ticker)}</span></td>
           <td>${statusBadge(row.status)}</td>
           <td>${escapeHtml(row.action || "-")}</td>
           <td>${escapeHtml(row.strategy || "-")}</td>
@@ -197,7 +197,7 @@ function renderTraderSignalLadder(rows) {
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
-          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}${renderSecurityBadge(row.ticker)}</span></td>
           <td>${statusBadge(row.review_priority || row.status)}</td>
           <td class="numeric"><strong>${row.reward_to_risk == null ? "-" : `${formatNumber(row.reward_to_risk, 2)}R`}</strong></td>
           <td class="numeric">${formatPercent(row.risk_pct, 2)}</td>
@@ -220,7 +220,7 @@ function renderProviderTrustMap(rows) {
         <tr>
           <td><span class="provider-chip">${escapeHtml(row.provider || "-")}</span></td>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
-          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}${renderSecurityBadge(row.ticker)}</span></td>
           <td>${statusBadge(row.status)}</td>
           <td class="numeric">${formatNumber(row.rows, 0)}</td>
           <td class="numeric">${formatNumber(row.mismatch_count, 0)}</td>
@@ -284,7 +284,7 @@ function renderSignalHistoryCards(history) {
       <article class="signal-history-card status-${statusClass(card.status || "not_evaluated")}">
         <div class="signal-history-head">
           <div>
-            <strong>${renderTicker(card.ticker)}</strong>
+            <strong>${renderTicker(card.ticker)} <span style="font-size:12px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(card.ticker))})</span></strong>
             <span>${escapeHtml(card.latest_action_label || card.latest_action || "판단 없음")}</span>
           </div>
           ${statusBadge(signalTrendStatus(card.trend), signalTrendLabel(card.trend))}
@@ -365,7 +365,7 @@ function renderStockLifecycle(lifecycle) {
     <article class="stock-lifecycle-card state-${escapeHtml(item.status || "watch")}">
       <div class="stock-lifecycle-card-head">
         <div>
-          <strong>${renderTicker(item.ticker)}</strong>
+          <strong>${renderTicker(item.ticker)} <span style="font-size:12px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(item.ticker))})</span></strong>
           <span>${escapeHtml(item.status_label || item.status || "-")}</span>
         </div>
         ${statusBadge(stockLifecycleStatus(item.status), item.status_label || item.status || "-")}
@@ -429,7 +429,7 @@ function renderSignalStabilityPanel(stability) {
     <article class="signal-stability-card status-${statusClass(signalStabilityStatus(item.status))}">
       <div class="signal-stability-card-head">
         <div>
-          <strong>${renderTicker(item.ticker)}</strong>
+          <strong>${renderTicker(item.ticker)} <span style="font-size:12px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(item.ticker))})</span></strong>
           <span>${escapeHtml(item.latest_signal_label || item.latest_signal_state || "-")}</span>
         </div>
         ${statusBadge(signalStabilityStatus(item.status), signalStabilityLabel(item.status))}

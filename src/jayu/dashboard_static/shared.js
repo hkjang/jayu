@@ -112,7 +112,18 @@ function getStockName(ticker) {
   if (!ticker) return "-";
   const cleanTicker = String(ticker).trim().toUpperCase();
   const baseTicker = cleanTicker.split(".")[0];
-  return TOSS_TICKER_NAMES[baseTicker] || TOSS_TICKER_NAMES[cleanTicker] || cleanTicker;
+  
+  // 1. Check offline fallback mapping
+  if (TOSS_TICKER_NAMES[baseTicker]) return TOSS_TICKER_NAMES[baseTicker];
+  if (TOSS_TICKER_NAMES[cleanTicker]) return TOSS_TICKER_NAMES[cleanTicker];
+  
+  // 2. Check dynamic security master mapping
+  if (window.state && window.state.tossSecurityMaster) {
+    if (window.state.tossSecurityMaster[baseTicker]?.name) return window.state.tossSecurityMaster[baseTicker].name;
+    if (window.state.tossSecurityMaster[cleanTicker]?.name) return window.state.tossSecurityMaster[cleanTicker].name;
+  }
+  
+  return cleanTicker;
 }
 
 function statusClass(status) {
@@ -594,6 +605,7 @@ function renderOrderHistorySummaryPanel(data, context = "general") {
     ? weakScores.map((item) => `
         <tr>
           <td class="ticker-cell">${renderTicker(item.symbol)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(item.symbol))}</span>${renderSecurityBadge(item.symbol)}</td>
           <td>${statusBadge(item.score < 45 ? "blocked" : item.score < 65 ? "warning" : "success", item.grade || "-")}</td>
           <td class="numeric">${formatNumber(item.score, 1)}</td>
           <td class="numeric">${item.win_rate_pct == null ? "-" : `${formatNumber(item.win_rate_pct, 1)}%`}</td>
@@ -635,7 +647,7 @@ function renderOrderHistorySummaryPanel(data, context = "general") {
         <div>
           <h3 style="font-size:13px; margin:0 0 8px;">약한 매매 기억 종목</h3>
           <div class="table-wrap"><table>
-            <thead><tr><th>종목</th><th>등급</th><th class="numeric">점수</th><th class="numeric">승률</th><th class="numeric">실현손익</th></tr></thead>
+            <thead><tr><th>종목</th><th>종목명</th><th>등급</th><th class="numeric">점수</th><th class="numeric">승률</th><th class="numeric">실현손익</th></tr></thead>
             <tbody>${weakHtml}</tbody>
           </table></div>
           ${renderSourceCaption(memory.source || source)}
@@ -659,6 +671,7 @@ function renderAutotradeHistoryGuard(data) {
     ? rules.slice(0, 8).map((item) => `
         <tr>
           <td class="ticker-cell">${renderTicker(item.symbol)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(item.symbol))}</span>${renderSecurityBadge(item.symbol)}</td>
           <td>${statusBadge(item.action === "block_auto_order" ? "blocked" : "warning", item.action || "-")}</td>
           <td class="code">${escapeHtml(item.rule || "-")}</td>
           <td class="numeric">${formatNumber(item.order_size_multiplier, 2)}</td>
@@ -677,7 +690,7 @@ function renderAutotradeHistoryGuard(data) {
         ${statusBadge(guard.status || "not_evaluated")}
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>종목</th><th>처리</th><th>규칙</th><th class="numeric">주문배율</th><th class="numeric">냉각</th><th>사유</th></tr></thead>
+        <thead><tr><th>종목</th><th>종목명</th><th>처리</th><th>규칙</th><th class="numeric">주문배율</th><th class="numeric">냉각</th><th>사유</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
       ${renderSourceCaption(source)}
@@ -694,6 +707,7 @@ function renderOrderHistoryJournalPanel(data) {
     ? entries.slice(0, 8).map((item) => `
         <tr>
           <td class="ticker-cell">${renderTicker(item.symbol)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(item.symbol))}</span>${renderSecurityBadge(item.symbol)}</td>
           <td>${statusBadge(item.label === "winner" ? "success" : item.label === "loser" ? "blocked" : "not_evaluated", item.label || "-")}</td>
           <td class="numeric">${formatCurrency(item.realized_pnl_krw, "KRW")}</td>
           <td class="numeric">${item.return_pct == null ? "-" : `${formatNumber(item.return_pct, 2)}%`}</td>
@@ -708,7 +722,7 @@ function renderOrderHistoryJournalPanel(data) {
         ${statusBadge(journal.status || "not_evaluated")}
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>종목</th><th>라벨</th><th class="numeric">실현손익</th><th class="numeric">수익률</th><th>회고 메모</th></tr></thead>
+        <thead><tr><th>종목</th><th>종목명</th><th>라벨</th><th class="numeric">실현손익</th><th class="numeric">수익률</th><th>회고 메모</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
       ${renderSourceCaption(source)}
@@ -870,3 +884,51 @@ document.addEventListener("click", (e) => {
   }
 });
 
+
+
+function getSecurityInfo(symbol) {
+  if (!symbol) return null;
+  const clean = String(symbol).trim().toUpperCase();
+  const base = clean.split(".")[0];
+  return (state.tossSecurityMaster && (state.tossSecurityMaster[clean] || state.tossSecurityMaster[base])) || null;
+}
+
+function renderSecurityBadge(symbol) {
+  const info = getSecurityInfo(symbol);
+  if (!info) return "";
+  
+  let html = "";
+  const warnings = info.warnings || {};
+  
+  if (warnings.tradingSuspended) {
+    html += `<span class="status-label status-failed" style="font-size:10px; padding:2px 4px; margin-left:4px;">거래정지</span>`;
+  }
+  if (warnings.administrative) {
+    html += `<span class="status-label status-failed" style="font-size:10px; padding:2px 4px; margin-left:4px;">관리</span>`;
+  }
+  if (warnings.delistingCaution) {
+    html += `<span class="status-label status-failed" style="font-size:10px; padding:2px 4px; margin-left:4px;">상폐우려</span>`;
+  }
+  
+  const mWarning = String(warnings.marketWarning || "NONE").toUpperCase();
+  if (mWarning === "INVESTMENT_DANGER" || mWarning === "DANGER") {
+    html += `<span class="status-label status-failed" style="font-size:10px; padding:2px 4px; margin-left:4px;">투자위험</span>`;
+  } else if (mWarning === "INVESTMENT_WARNING" || mWarning === "WARNING") {
+    html += `<span class="status-label status-warning" style="font-size:10px; padding:2px 4px; margin-left:4px;">투자경고</span>`;
+  } else if (mWarning === "INVESTMENT_CAUTION" || mWarning === "CAUTION") {
+    html += `<span class="status-label status-validating" style="font-size:10px; padding:2px 4px; margin-left:4px;">투자주의</span>`;
+  }
+  
+  const leverage = parseFloat(info.leverage_factor || 1.0);
+  const secType = String(info.security_type || "STOCK").toUpperCase();
+  
+  if (leverage > 1.0) {
+    html += `<span class="status-label status-eligible" style="font-size:10px; padding:2px 4px; margin-left:4px; background:rgba(255,107,107,0.15); color:#ff6b6b; border:1px solid #ff6b6b;">${leverage}x 레버리지</span>`;
+  } else if (secType === "ETF") {
+    html += `<span class="status-label status-eligible" style="font-size:10px; padding:2px 4px; margin-left:4px; background:rgba(77,171,247,0.15); color:#4dabf7; border:1px solid #4dabf7;">ETF</span>`;
+  } else if (secType === "ETN") {
+    html += `<span class="status-label status-eligible" style="font-size:10px; padding:2px 4px; margin-left:4px; background:rgba(189,114,242,0.15); color:#bd72f2; border:1px solid #bd72f2;">ETN</span>`;
+  }
+  
+  return html;
+}

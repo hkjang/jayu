@@ -1333,6 +1333,7 @@ function renderInvestorCoach() {
           <tr>
             <td class="nowrap">${formatDate(j.created_at)}</td>
             <td class="ticker-cell">${renderTicker(j.ticker)}</td>
+            <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(j.ticker))}</span>${renderSecurityBadge(j.ticker)}</td>
             <td><span class="status-label status-${j.action_type === "approve" ? "success" : j.action_type === "hold" ? "warning" : "not-evaluated"}">${j.action_type === "approve" ? "승인" : j.action_type === "hold" ? "보류" : "무시"}</span></td>
             <td class="numeric">$${pf_fmt(j.entry_price, 2)}</td>
             <td class="numeric" style="color:${color5}; font-weight:700;">${perf5}</td>

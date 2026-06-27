@@ -235,7 +235,7 @@ function renderTodayBoardItem(item, fallbackSource) {
   return `
     <div class="today-item status-${statusClass(item.status || "not_evaluated")}">
       <div class="today-item-main">
-        <strong>${renderTicker(item.label || item.ticker)}</strong>
+        <strong>${renderTicker(item.label || item.ticker)} <span style="font-size:12px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(item.label || item.ticker))})</span></strong>
         ${tags.length ? `<div class="today-item-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
         <span>${escapeHtml(item.detail || "")}</span>
         ${priceBits.length ? `<small>${escapeHtml(priceBits.join(" · "))}</small>` : ""}
@@ -670,7 +670,7 @@ function renderSignalTable(rows) {
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
-          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}${renderSecurityBadge(row.ticker)}</span></td>
           <td>${statusBadge(row.status)}</td>
           <td>${escapeHtml(row.action || "-")}</td>
           <td>${escapeHtml(row.strategy || "-")}</td>

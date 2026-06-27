@@ -38,6 +38,7 @@ function renderSettingsValidation() {
     
     ${renderFeatureInventorySection(state.featureInventory)}
     ${renderOrderHistoryQualitySection(state.orderHistoryQuality)}
+    ${renderSecurityQualitySection(state.securityQuality)}
     <section class="panel" style="margin-top: 1.5rem;" id="backup-restore-panel">
       ${renderBackupRestoreSection()}
     </section>
@@ -2404,3 +2405,96 @@ async function loadEventTimeline() {
   }
 }
 
+
+
+function renderSecurityQualitySection(data) {
+  if (!data) return "";
+  
+  const q = data.quality || {};
+  const r = data.reconciliation || {};
+  
+  const unmappedHtml = (r.unmapped_symbols || []).length === 0
+    ? '<span class="muted" style="font-size:12px;">없음</span>'
+    : (r.unmapped_symbols || []).map(sym => `<span class="status-label status-warning" style="margin-right:4px;">${escapeHtml(sym)}</span>`).join("");
+    
+  const delistedHtml = (r.delisted_symbols || []).length === 0
+    ? '<span class="muted" style="font-size:12px;">없음</span>'
+    : (r.delisted_symbols || []).map(d => `<span class="status-label status-failed" style="margin-right:4px;" title="상장폐지">${escapeHtml(d.symbol)} (${escapeHtml(d.name)})</span>`).join("");
+    
+  const suspendedHtml = (r.suspended_symbols || []).length === 0
+    ? '<span class="muted" style="font-size:12px;">없음</span>'
+    : (r.suspended_symbols || []).map(s => `<span class="status-label status-failed" style="margin-right:4px;" title="거래정지">${escapeHtml(s.symbol)} (${escapeHtml(s.name)})</span>`).join("");
+
+  const anomaliesHtml = (q.anomalies || []).length === 0
+    ? '<tr><td colspan="3" class="muted" style="text-align:center;">이상치 데이터 없음</td></tr>'
+    : (q.anomalies || []).slice(0, 8).map(a => `
+      <tr>
+        <td class="ticker-cell"><strong>${renderTicker(a.symbol)}</strong></td>
+        <td><span class="code">${escapeHtml(a.field)}</span></td>
+        <td style="color:var(--status-warning);">${escapeHtml(a.issue)}</td>
+      </tr>
+    `).join("");
+
+  return `
+    <section class="panel" style="margin-top:1.5rem;">
+      <div class="panel-header">
+        <div>
+          <h2>🛡️ 토스 종목정보 품질 및 데이터 정합성 (Data Quality & Reconciliation)</h2>
+          <p>주문 이력의 종목코드와 실시간 토스 종목 마스터 데이터를 대조하여 미매핑/상장폐지/경고 정보를 검증한 결과입니다.</p>
+        </div>
+      </div>
+      
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:12px;">
+        <div class="card" style="padding:12px; background:var(--surface-subtle); border-radius:8px;">
+          <h3 style="font-size:13.5px; margin-bottom:10px; border-bottom:2px solid var(--accent); padding-bottom:4px; display:flex; justify-content:space-between; color:var(--text);">
+            <span>📊 데이터 품질 및 매핑 통계</span>
+            <span style="font-weight:700; color:var(--status-success);">${q.score || 100}%</span>
+          </h3>
+          <div style="font-size:12px; line-height:1.8;">
+            <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border); padding:4px 0;">
+              <span>검사한 고유 종목 수</span>
+              <strong>${q.total_securities_checked || 0}개</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border); padding:4px 0;">
+              <span>정합성 검증 점수</span>
+              <strong>${r.score || 100}%</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; padding:4px 0; margin-bottom:10px;">
+              <span>누락 필드 수</span>
+              <strong style="color:${q.missing_fields_count ? 'var(--status-warning)' : 'var(--status-success)'}">${q.missing_fields_count || 0}개</strong>
+            </div>
+            
+            <div style="margin-top:10px;">
+              <div style="font-weight:700; margin-bottom:4px;">🔍 미매핑 종목:</div>
+              <div style="margin-bottom:8px;">${unmappedHtml}</div>
+              
+              <div style="font-weight:700; margin-bottom:4px;">❌ 상장폐지/우려 종목:</div>
+              <div style="margin-bottom:8px;">${delistedHtml}</div>
+              
+              <div style="font-weight:700; margin-bottom:4px;">🛑 거래정지 종목:</div>
+              <div>${suspendedHtml}</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card" style="padding:12px; background:var(--surface-subtle); border-radius:8px;">
+          <h3 style="font-size:13.5px; margin-bottom:10px; border-bottom:2px solid #ff6b6b; padding-bottom:4px; color:var(--text);">⚠️ 메타데이터 이상치 목록</h3>
+          <div class="table-wrap" style="margin-top:6px; max-height:220px; overflow-y:auto;">
+            <table style="font-size:11.5px; width:100%;">
+              <thead>
+                <tr>
+                  <th>종목</th>
+                  <th>대상 필드</th>
+                  <th>이슈 내용</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${anomaliesHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}

@@ -1801,6 +1801,7 @@ def build_dashboard_toss_order_plan(paths: RuntimePaths) -> dict[str, Any]:
             today_signals,
             warnings_gate,
             market_session,
+            paths=paths,
         ),
         "warnings_gate": warnings_gate,
         "market_session": market_session,
@@ -1821,6 +1822,8 @@ def _paper_order_contract(
     today_signals: Mapping[str, Any],
     warnings_gate: Mapping[str, Any] | None = None,
     market_session: Mapping[str, Any] | None = None,
+    *,
+    paths: RuntimePaths,
 ) -> dict[str, Any]:
     intents: list[OrderIntent] = []
     rejected: list[dict[str, Any]] = []
@@ -1913,6 +1916,7 @@ def _paper_order_contract(
             today_signals=today_signals,
             warnings_gate=warnings_gate,
             market_session=market_session,
+            paths=paths,
         )
         for intent in intents
     ]
@@ -1943,10 +1947,11 @@ def _paper_order_contract(
 ORDER_INTENT_QUALITY_WEIGHTS = {
     "structure": 25,
     "signal_alignment": 20,
-    "warning_gate": 20,
-    "market_session": 15,
-    "execution_inputs": 15,
+    "warning_gate": 15,
+    "market_session": 10,
+    "execution_inputs": 10,
     "approval_lock": 5,
+    "security_guard": 15,
 }
 
 
@@ -1973,6 +1978,7 @@ def _order_intent_quality(
     today_signals: Mapping[str, Any],
     warnings_gate: Mapping[str, Any],
     market_session: Mapping[str, Any],
+    paths: RuntimePaths,
 ) -> dict[str, Any]:
     checks = [
         _intent_structure_check(intent),
@@ -1981,6 +1987,7 @@ def _order_intent_quality(
         _intent_market_session_check(intent, market_session),
         _intent_execution_input_check(intent),
         _intent_approval_lock_check(),
+        _intent_security_guard_check(intent, paths),
     ]
     score = round(sum(_float_or_none(check.get("score")) or 0.0 for check in checks), 1)
     blocked = any(check.get("status") == "blocked" for check in checks)
@@ -2192,6 +2199,61 @@ def _intent_approval_lock_check() -> dict[str, Any]:
         "대시보드 주문 의도 검증은 live 주문 전송 없이 읽기 전용으로만 동작합니다.",
         "OrderApproval.live_order_enabled=false",
     )
+
+def _intent_security_guard_check(intent: OrderIntent, paths: RuntimePaths) -> dict[str, Any]:
+    from .autotrade_security_guard import AutotradeSecurityGuard
+    import json
+    
+    guard = AutotradeSecurityGuard(paths.project_root)
+    orders_payload = None
+    orders_file = paths.state_dir / "toss_orders.json"
+    if orders_file.exists():
+        try:
+            with open(orders_file, "r", encoding="utf-8") as f:
+                orders_payload = json.load(f)
+        except Exception:
+            pass
+            
+    proposed_amount = intent.quantity * intent.decision_price
+    eval_res = guard.evaluate_order(intent.ticker, proposed_amount, orders_payload)
+    
+    verdict = eval_res["verdict"]
+    reasons = eval_res["reasons"]
+    
+    if verdict == "block":
+        return _quality_check(
+            key="security_guard",
+            label="자동매매 보안관 검증",
+            weight=ORDER_INTENT_QUALITY_WEIGHTS["security_guard"],
+            ratio=0.0,
+            status="blocked",
+            value="차단 (Block)",
+            message=" | ".join(reasons) if reasons else "보안관 정책에 의해 차단되었습니다.",
+            source="autotrade_security_guard.py",
+        )
+    elif verdict == "reduce":
+        return _quality_check(
+            key="security_guard",
+            label="자동매매 보안관 검증",
+            weight=ORDER_INTENT_QUALITY_WEIGHTS["security_guard"],
+            ratio=0.5,
+            status="warning",
+            value="축소 (Reduce)",
+            message=" | ".join(reasons) if reasons else "주문 금액 축소가 권장됩니다.",
+            source="autotrade_security_guard.py",
+            details={"allowed_amount": eval_res["allowed_amount"]}
+        )
+    else:
+        return _quality_check(
+            key="security_guard",
+            label="자동매매 보안관 검증",
+            weight=ORDER_INTENT_QUALITY_WEIGHTS["security_guard"],
+            ratio=1.0,
+            status="success",
+            value="통과 (Allow)",
+            message="보안관 검증을 정상 통과했습니다.",
+            source="autotrade_security_guard.py",
+        )
 
 
 def _order_intent_quality_summary(
@@ -3637,6 +3699,49 @@ def _dashboard_handler(
                         pass
                     mapping = manager.get_stock_names(client)
                     self._json(mapping)
+                    return
+                if parsed.path == "/api/v1/toss/security-master":
+                    from .toss_security_master import TossSecurityMaster
+                    manager = TossSecurityMaster(paths.project_root)
+                    client = None
+                    try:
+                        settings = _load_dashboard_settings(paths)
+                        status = build_dashboard_toss_status(paths)
+                        if status["status"] == "configured":
+                            client = _dashboard_toss_client(settings)
+                    except Exception:
+                        pass
+                    self._json(manager.get_security_master(client))
+                    return
+                if parsed.path == "/api/v1/toss/trade-context":
+                    query = parse_qs(parsed.query)
+                    symbol = query.get("symbol", [""])[0]
+                    from .toss_trade_context_builder import TossTradeContextBuilder
+                    builder = TossTradeContextBuilder(paths.project_root)
+                    client = None
+                    try:
+                        settings = _load_dashboard_settings(paths)
+                        status = build_dashboard_toss_status(paths)
+                        if status["status"] == "configured":
+                            client = _dashboard_toss_client(settings)
+                    except Exception:
+                        pass
+                    self._json(builder.build_context(symbol, client))
+                    return
+                if parsed.path == "/api/v1/toss/security-exposure":
+                    from .portfolio_security_exposure import PortfolioSecurityExposure
+                    exposure = PortfolioSecurityExposure(paths.project_root)
+                    self._json(exposure.calculate_exposure())
+                    return
+                if parsed.path == "/api/v1/toss/security-quality":
+                    from .security_metadata_quality_check import SecurityMetadataQualityChecker
+                    from .order_stock_reconciliation import OrderStockReconciler
+                    checker = SecurityMetadataQualityChecker(paths.project_root)
+                    reconciler = OrderStockReconciler(paths.project_root)
+                    self._json({
+                        "quality": checker.check_quality(),
+                        "reconciliation": reconciler.reconcile()
+                    })
                     return
                 if parsed.path == "/api/v1/toss/order-plan":
                     self._json(build_dashboard_toss_order_plan(paths))

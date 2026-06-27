@@ -1420,6 +1420,7 @@ def test_dashboard_toss_order_plan(tmp_path: Path):
         "market_session",
         "execution_inputs",
         "approval_lock",
+        "security_guard",
     }
     assert report["paper_order_contract"]["quality_summary"]["average_score"] == 100
     assert report["paper_order_contract"]["quality_summary"]["rejected_count"] == 0
