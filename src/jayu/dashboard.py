@@ -2201,24 +2201,14 @@ def _intent_approval_lock_check() -> dict[str, Any]:
     )
 
 def _intent_security_guard_check(intent: OrderIntent, paths: RuntimePaths) -> dict[str, Any]:
-    from .autotrade_security_guard import AutotradeSecurityGuard
-    import json
+    from .autotrade_security_policy import AutotradeSecurityPolicy
     
-    guard = AutotradeSecurityGuard(paths.project_root)
-    orders_payload = None
-    orders_file = paths.state_dir / "toss_orders.json"
-    if orders_file.exists():
-        try:
-            with open(orders_file, "r", encoding="utf-8") as f:
-                orders_payload = json.load(f)
-        except Exception:
-            pass
-            
+    policy = AutotradeSecurityPolicy(paths.project_root)
     proposed_amount = intent.quantity * intent.decision_price
-    eval_res = guard.evaluate_order(intent.ticker, proposed_amount, orders_payload)
+    eval_res = policy.evaluate_order(intent.ticker, proposed_amount)
     
     verdict = eval_res["verdict"]
-    reasons = eval_res["reasons"]
+    reason = eval_res["reason"]
     
     if verdict == "block":
         return _quality_check(
@@ -2228,8 +2218,8 @@ def _intent_security_guard_check(intent: OrderIntent, paths: RuntimePaths) -> di
             ratio=0.0,
             status="blocked",
             value="차단 (Block)",
-            message=" | ".join(reasons) if reasons else "보안관 정책에 의해 차단되었습니다.",
-            source="autotrade_security_guard.py",
+            message=reason or "보안관 정책에 의해 차단되었습니다.",
+            source="autotrade_security_policy.py",
         )
     elif verdict == "reduce":
         return _quality_check(
@@ -2239,8 +2229,8 @@ def _intent_security_guard_check(intent: OrderIntent, paths: RuntimePaths) -> di
             ratio=0.5,
             status="warning",
             value="축소 (Reduce)",
-            message=" | ".join(reasons) if reasons else "주문 금액 축소가 권장됩니다.",
-            source="autotrade_security_guard.py",
+            message=reason or "주문 금액 축소가 권장됩니다.",
+            source="autotrade_security_policy.py",
             details={"allowed_amount": eval_res["allowed_amount"]}
         )
     else:
@@ -2252,7 +2242,7 @@ def _intent_security_guard_check(intent: OrderIntent, paths: RuntimePaths) -> di
             status="success",
             value="통과 (Allow)",
             message="보안관 검증을 정상 통과했습니다.",
-            source="autotrade_security_guard.py",
+            source="autotrade_security_policy.py",
         )
 
 
@@ -3716,8 +3706,8 @@ def _dashboard_handler(
                 if parsed.path == "/api/v1/toss/trade-context":
                     query = parse_qs(parsed.query)
                     symbol = query.get("symbol", [""])[0]
-                    from .toss_trade_context_builder import TossTradeContextBuilder
-                    builder = TossTradeContextBuilder(paths.project_root)
+                    from .toss_trade_context import TossTradeContext
+                    builder = TossTradeContext(paths.project_root)
                     client = None
                     try:
                         settings = _load_dashboard_settings(paths)
@@ -3729,19 +3719,35 @@ def _dashboard_handler(
                     self._json(builder.build_context(symbol, client))
                     return
                 if parsed.path == "/api/v1/toss/security-exposure":
-                    from .portfolio_security_exposure import PortfolioSecurityExposure
-                    exposure = PortfolioSecurityExposure(paths.project_root)
+                    from .security_exposure_analyzer import SecurityExposureAnalyzer
+                    exposure = SecurityExposureAnalyzer(paths.project_root)
                     self._json(exposure.calculate_exposure())
                     return
                 if parsed.path == "/api/v1/toss/security-quality":
-                    from .security_metadata_quality_check import SecurityMetadataQualityChecker
-                    from .order_stock_reconciliation import OrderStockReconciler
-                    checker = SecurityMetadataQualityChecker(paths.project_root)
-                    reconciler = OrderStockReconciler(paths.project_root)
+                    from .security_data_quality import SecurityDataQuality
+                    from .order_security_reconciliation import OrderSecurityReconciler
+                    checker = SecurityDataQuality(paths.project_root)
+                    reconciler = OrderSecurityReconciler(paths.project_root)
                     self._json({
                         "quality": checker.check_quality(),
                         "reconciliation": reconciler.reconcile()
                     })
+                    return
+                if parsed.path == "/api/v1/toss/reference-data-report":
+                    from .toss_reference_data_report import TossReferenceDataReport
+                    report = TossReferenceDataReport(paths.project_root)
+                    res = report.generate_report()
+                    query = parse_qs(parsed.query)
+                    fmt = query.get("format", ["json"])[0]
+                    if fmt == "html":
+                        html_path = Path(res["html_path"])
+                        if html_path.exists():
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/html; charset=utf-8")
+                            self.end_headers()
+                            self.wfile.write(html_path.read_bytes())
+                            return
+                    self._json(res)
                     return
                 if parsed.path == "/api/v1/toss/order-plan":
                     self._json(build_dashboard_toss_order_plan(paths))

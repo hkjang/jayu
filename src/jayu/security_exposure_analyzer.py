@@ -4,7 +4,7 @@ from pathlib import Path
 from collections import defaultdict
 from .toss_security_master import TossSecurityMaster
 
-class PortfolioSecurityExposure:
+class SecurityExposureAnalyzer:
     def __init__(self, project_root: Path | str):
         self.project_root = Path(project_root)
         self.security_master = TossSecurityMaster(self.project_root)
@@ -13,7 +13,7 @@ class PortfolioSecurityExposure:
     def calculate_exposure(self) -> dict[str, Any]:
         """
         Calculates exposure metrics by joining holdings with security master metadata.
-        Groups by market, currency, security type, leverage factor, and sector.
+        Groups by market, currency, security type, leverage factor, sector, and warning status.
         """
         master = self.security_master.get_security_master()
         
@@ -45,6 +45,7 @@ class PortfolioSecurityExposure:
         by_currency = defaultdict(float)
         by_leverage = defaultdict(float)
         by_sector = defaultdict(float)
+        by_warning_status = defaultdict(float)
         
         for h in holdings:
             sym = h["symbol"]
@@ -75,6 +76,21 @@ class PortfolioSecurityExposure:
             # 5. Sector
             sector = h["sector"] or sec.get("sector") or "Unclassified"
             by_sector[sector] += val
+            
+            # 6. Warning status
+            warnings = sec.get("warnings") or {}
+            m_warning = str(warnings.get("marketWarning") or "NONE").upper()
+            if m_warning != "NONE":
+                warning_label = f"WARNED ({m_warning})"
+            elif warnings.get("tradingSuspended"):
+                warning_label = "SUSPENDED"
+            elif warnings.get("administrative"):
+                warning_label = "ADMINISTRATIVE"
+            elif warnings.get("delistingCaution"):
+                warning_label = "DELISTING_CAUTION"
+            else:
+                warning_label = "NORMAL"
+            by_warning_status[warning_label] += val
 
         # Convert to percentages
         def to_pct_list(grouped_dict):
@@ -95,4 +111,5 @@ class PortfolioSecurityExposure:
             "by_currency": to_pct_list(by_currency),
             "by_leverage": to_pct_list(by_leverage),
             "by_sector": to_pct_list(by_sector),
+            "by_warning_status": to_pct_list(by_warning_status)
         }

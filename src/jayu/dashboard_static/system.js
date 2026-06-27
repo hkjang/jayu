@@ -2437,11 +2437,14 @@ function renderSecurityQualitySection(data) {
 
   return `
     <section class="panel" style="margin-top:1.5rem;">
-      <div class="panel-header">
+      <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
         <div>
           <h2>🛡️ 토스 종목정보 품질 및 데이터 정합성 (Data Quality & Reconciliation)</h2>
           <p>주문 이력의 종목코드와 실시간 토스 종목 마스터 데이터를 대조하여 미매핑/상장폐지/경고 정보를 검증한 결과입니다.</p>
         </div>
+        <a href="/api/v1/toss/reference-data-report?format=html" target="_blank" class="button button-primary" style="display:flex; align-items:center; gap:6px; min-height:30px; text-decoration:none; white-space:nowrap;">
+          <span>📊</span> 보고서 보기
+        </a>
       </div>
       
       <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:12px;">

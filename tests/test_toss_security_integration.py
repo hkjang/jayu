@@ -3,13 +3,15 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 from jayu.toss_security_master import TossSecurityMaster
-from jayu.security_risk_profile import SecurityRiskProfiler
-from jayu.autotrade_security_guard import AutotradeSecurityGuard
-from jayu.portfolio_security_exposure import PortfolioSecurityExposure
-from jayu.toss_trade_context_builder import TossTradeContextBuilder
-from jayu.order_stock_reconciliation import OrderStockReconciler
-from jayu.security_metadata_quality_check import SecurityMetadataQualityChecker
-from jayu.signal_security_context import SignalSecurityContext
+from jayu.toss_warning_registry import TossWarningRegistry
+from jayu.toss_order_feature_store import build_toss_order_feature_store
+from jayu.toss_trade_context import TossTradeContext
+from jayu.security_data_quality import SecurityDataQuality
+from jayu.order_security_reconciliation import OrderSecurityReconciler
+from jayu.security_exposure_analyzer import SecurityExposureAnalyzer
+from jayu.autotrade_security_policy import AutotradeSecurityPolicy
+from jayu.signal_trade_memory_context import SignalTradeMemoryContext
+from jayu.toss_reference_data_report import TossReferenceDataReport
 
 @pytest.fixture
 def setup_project_root(tmp_path: Path):
@@ -60,7 +62,7 @@ def setup_project_root(tmp_path: Path):
         
     return tmp_path
 
-def test_toss_security_master_and_risk_profile(setup_project_root: Path):
+def test_toss_security_master_and_warning_registry(setup_project_root: Path):
     master = TossSecurityMaster(setup_project_root)
     
     # Mock client
@@ -113,23 +115,22 @@ def test_toss_security_master_and_risk_profile(setup_project_root: Path):
     assert suspended_info["is_tradable"] is False
     assert suspended_info["warnings"]["tradingSuspended"] is True
 
-    # Test Risk Profiler
-    aapl_risk = SecurityRiskProfiler.evaluate_risk(aapl_info)
-    assert aapl_risk["grade"] == "normal"
-    assert aapl_risk["autotrade_allowed"] is True
-    
-    suspended_risk = SecurityRiskProfiler.evaluate_risk(suspended_info)
-    assert suspended_risk["grade"] == "blocked"
-    assert suspended_risk["autotrade_allowed"] is False
+    # Test Warning Registry
+    registry = TossWarningRegistry(setup_project_root)
+    reg_res = registry.register_warnings("SUSPENDED_STOCK", suspended_info["warnings"])
+    assert reg_res["blocks_autotrade"] is True
+    assert reg_res["trading_suspended"] is True
 
-def test_autotrade_security_guard(setup_project_root: Path):
-    guard = AutotradeSecurityGuard(setup_project_root)
+def test_autotrade_security_policy(setup_project_root: Path):
+    policy = AutotradeSecurityPolicy(setup_project_root)
     
     # Create mock security master cache manually
     cache_data = {
         "AAPL": {
             "symbol": "AAPL",
             "name": "애플",
+            "market": "NASDAQ",
+            "currency": "USD",
             "security_type": "STOCK",
             "leverage_factor": 1.0,
             "warnings": {"tradingSuspended": False},
@@ -138,6 +139,8 @@ def test_autotrade_security_guard(setup_project_root: Path):
         "SOXL": {
             "symbol": "SOXL",
             "name": "SOXL",
+            "market": "NYSE",
+            "currency": "USD",
             "security_type": "ETF",
             "leverage_factor": 3.0,
             "warnings": {"tradingSuspended": False},
@@ -146,6 +149,8 @@ def test_autotrade_security_guard(setup_project_root: Path):
         "SUSPENDED_STOCK": {
             "symbol": "SUSPENDED_STOCK",
             "name": "정지회사",
+            "market": "KOSPI",
+            "currency": "KRW",
             "security_type": "STOCK",
             "leverage_factor": 1.0,
             "warnings": {"tradingSuspended": True},
@@ -156,17 +161,17 @@ def test_autotrade_security_guard(setup_project_root: Path):
         json.dump(cache_data, f)
 
     # AAPL - Should be Allowed
-    eval_aapl = guard.evaluate_order("AAPL", 1000000.0)
+    eval_aapl = policy.evaluate_order("AAPL", 1000000.0)
     assert eval_aapl["verdict"] == "allow"
     assert eval_aapl["allowed_amount"] == 1000000.0
     
     # SOXL - Should be Reduced (3x Leverage)
-    eval_soxl = guard.evaluate_order("SOXL", 1000000.0)
+    eval_soxl = policy.evaluate_order("SOXL", 1000000.0)
     assert eval_soxl["verdict"] == "reduce"
-    assert eval_soxl["allowed_amount"] == 300000.0
+    assert eval_soxl["allowed_amount"] == round(1000000.0 / 3.0, 2)
     
     # SUSPENDED_STOCK - Should be Blocked
-    eval_susp = guard.evaluate_order("SUSPENDED_STOCK", 1000000.0)
+    eval_susp = policy.evaluate_order("SUSPENDED_STOCK", 1000000.0)
     assert eval_susp["verdict"] == "block"
     assert eval_susp["allowed_amount"] == 0.0
 
@@ -197,8 +202,8 @@ def test_portfolio_exposure_and_quality(setup_project_root: Path):
     with open(setup_project_root / "state" / "toss_security_master_cache.json", "w", encoding="utf-8") as f:
         json.dump(cache_data, f)
         
-    exposure = PortfolioSecurityExposure(setup_project_root)
-    exp_res = exposure.calculate_exposure()
+    analyzer = SecurityExposureAnalyzer(setup_project_root)
+    exp_res = analyzer.calculate_exposure()
     
     assert exp_res["total_value_krw"] == 3350000.0
     # AAPL (2,000,000) and TSLA (1,350,000) are both USD
@@ -206,20 +211,27 @@ def test_portfolio_exposure_and_quality(setup_project_root: Path):
     assert exp_res["by_currency"][0]["percentage"] == 100.0
 
     # Trade Context Builder
-    builder = TossTradeContextBuilder(setup_project_root)
+    builder = TossTradeContext(setup_project_root)
     context = builder.build_context("AAPL")
     assert context["symbol"] == "AAPL"
     assert context["holding"]["qty"] == 10.0
     assert context["performance"]["total_trades"] > 0
 
     # Quality and Reconciler
-    quality = SecurityMetadataQualityChecker(setup_project_root).check_quality()
+    quality = SecurityDataQuality(setup_project_root).check_quality()
     assert quality["score"] > 80
     
-    reconciliation = OrderStockReconciler(setup_project_root).reconcile()
+    reconciliation = OrderSecurityReconciler(setup_project_root).reconcile()
     assert reconciliation["score"] > 50
 
-    # Signal Security Context
-    sig_context = SignalSecurityContext(setup_project_root).get_signal_context("AAPL")
+    # Signal Trade Memory Context
+    sig_context = SignalTradeMemoryContext(setup_project_root).get_memory_context("AAPL")
     assert sig_context["symbol"] == "AAPL"
-    assert sig_context["autotrade_allowed"] is True
+    assert sig_context["memory_score"] > 50
+
+    # Toss Reference Data Report
+    report = TossReferenceDataReport(setup_project_root)
+    rep_res = report.generate_report()
+    assert rep_res["quality"]["score"] > 80
+    assert (setup_project_root / "state" / "toss_reference_data_report.md").exists()
+    assert (setup_project_root / "state" / "toss_reference_data_report.html").exists()

@@ -1,5 +1,6 @@
-from __future__ import annotations
-
+import csv
+import json
+from pathlib import Path
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from .order_history_utils import (
     symbol,
     tax,
 )
-
+from .toss_security_master import TossSecurityMaster
 
 @dataclass
 class OpenLot:
@@ -33,13 +34,21 @@ class OpenLot:
     ordered_at: Any
     commission_per_share: float
 
-
 def build_toss_order_feature_store(
     orders_payload: Any,
     *,
     usd_krw: float = KRW_PER_USD_FALLBACK,
     portfolio_mapping: Mapping[str, Any] | None = None,
+    security_master: dict[str, dict[str, Any]] | None = None,
+    project_root: Path | str | None = None,
 ) -> dict[str, Any]:
+    # Load security master if not provided
+    if security_master is None:
+        if project_root:
+            security_master = TossSecurityMaster(project_root).get_security_master()
+        else:
+            security_master = {}
+
     rows = sorted(
         [row for row in order_rows(orders_payload) if is_filled(row)],
         key=lambda row: str(row.get("orderedAt") or row.get("ordered_at") or ""),
@@ -47,9 +56,13 @@ def build_toss_order_feature_store(
     order_features: list[dict[str, Any]] = []
     trade_rounds: list[dict[str, Any]] = []
     open_lots: dict[str, list[OpenLot]] = defaultdict(list)
+    
     by_symbol: dict[str, dict[str, Any]] = defaultdict(_symbol_bucket)
     by_month: dict[str, dict[str, Any]] = defaultdict(_period_bucket)
     by_portfolio_type: dict[str, dict[str, Any]] = defaultdict(_portfolio_bucket)
+    by_market: dict[str, dict[str, Any]] = defaultdict(_market_bucket)
+    by_currency_bucket: dict[str, dict[str, Any]] = defaultdict(_currency_bucket)
+    by_security_type: dict[str, dict[str, Any]] = defaultdict(_security_type_bucket)
 
     for row in rows:
         sym = symbol(row)
@@ -63,6 +76,18 @@ def build_toss_order_feature_store(
         dt = parse_ordered_at(row.get("orderedAt") or row.get("ordered_at"))
         month = f"{dt.year:04d}-{dt.month:02d}" if dt else "UNKNOWN"
         ptype = _portfolio_type_for(sym, portfolio_mapping)
+        
+        # Resolve metadata
+        sec_info = security_master.get(sym) or {}
+        market = str(sec_info.get("market") or "UNKNOWN").upper()
+        sec_type = str(sec_info.get("security_type") or "STOCK").upper()
+        leverage = float(sec_info.get("leverage_factor") or 1.0)
+        
+        if leverage > 1.0:
+            sec_type_label = f"LEVERAGED {sec_type} ({leverage}x)"
+        else:
+            sec_type_label = sec_type
+
         amount = amount_krw(row, usd_krw=usd_krw) or _to_krw(qty * px, cur, usd_krw)
         comm_krw = _to_krw(commission(row), cur, usd_krw)
         tax_krw = _to_krw(tax(row), cur, usd_krw)
@@ -80,15 +105,29 @@ def build_toss_order_feature_store(
             "commission_krw": _round(comm_krw, 2),
             "tax_krw": _round(tax_krw, 2),
             "portfolio_type": ptype,
+            "market": market,
+            "security_type": sec_type_label,
         }
         order_features.append(feature)
 
-        for bucket in (by_symbol[sym], by_month[month], by_portfolio_type[ptype]):
+        buckets = (
+            by_symbol[sym],
+            by_month[month],
+            by_portfolio_type[ptype],
+            by_market[market],
+            by_currency_bucket[cur],
+            by_security_type[sec_type_label]
+        )
+        for bucket in buckets:
             _add_order(bucket, sd, amount, comm_krw, tax_krw)
+            
         by_symbol[sym]["symbol"] = sym
         by_symbol[sym]["portfolio_type"] = ptype
         by_month[month]["period"] = month
         by_portfolio_type[ptype]["portfolio_type"] = ptype
+        by_market[market]["market"] = market
+        by_currency_bucket[cur]["currency"] = cur
+        by_security_type[sec_type_label]["security_type"] = sec_type_label
 
         if sd == "BUY":
             open_lots[sym].append(
@@ -115,13 +154,24 @@ def build_toss_order_feature_store(
         )
         trade_rounds.extend(matched)
         for trade in matched:
-            _add_round(by_symbol[trade["symbol"]], trade)
-            _add_round(by_month[month], trade)
-            _add_round(by_portfolio_type[trade["portfolio_type"]], trade)
+            trade_buckets = (
+                by_symbol[trade["symbol"]],
+                by_month[month],
+                by_portfolio_type[trade["portfolio_type"]],
+                by_market[market],
+                by_currency_bucket[cur],
+                by_security_type[sec_type_label]
+            )
+            for bucket in trade_buckets:
+                _add_round(bucket, trade)
 
     by_symbol_rows = [_finalize_bucket(item) for item in by_symbol.values()]
     by_month_rows = [_finalize_bucket(item) for item in by_month.values()]
     by_portfolio_rows = [_finalize_bucket(item) for item in by_portfolio_type.values()]
+    by_market_rows = [_finalize_bucket(item) for item in by_market.values()]
+    by_currency_rows = [_finalize_bucket(item) for item in by_currency_bucket.values()]
+    by_security_type_rows = [_finalize_bucket(item) for item in by_security_type.values()]
+    
     summary = _finalize_bucket(_summary_bucket(order_features, trade_rounds))
 
     return {
@@ -132,6 +182,9 @@ def build_toss_order_feature_store(
         "by_symbol": sorted(by_symbol_rows, key=lambda item: abs(item.get("realized_pnl_krw") or 0.0), reverse=True),
         "by_month": sorted(by_month_rows, key=lambda item: item.get("period") or "")[-72:],
         "by_portfolio_type": sorted(by_portfolio_rows, key=lambda item: item.get("portfolio_type") or ""),
+        "by_market": sorted(by_market_rows, key=lambda item: abs(item.get("realized_pnl_krw") or 0.0), reverse=True),
+        "by_currency": sorted(by_currency_rows, key=lambda item: abs(item.get("realized_pnl_krw") or 0.0), reverse=True),
+        "by_security_type": sorted(by_security_type_rows, key=lambda item: abs(item.get("realized_pnl_krw") or 0.0), reverse=True),
         "open_lots": _open_lot_rows(open_lots),
         "source": "state/toss_orders.json - Toss Order History getOrders - toss_order_feature_store.py",
         "assumptions": {
@@ -140,7 +193,6 @@ def build_toss_order_feature_store(
             "portfolio_type_method": "configs/portfolio_mapping.json ticker metadata when available",
         },
     }
-
 
 def _match_sell(
     lots: list[OpenLot],
@@ -190,7 +242,6 @@ def _match_sell(
             lots.pop(0)
     return realized
 
-
 def _portfolio_type_for(symbol_value: str, mapping: Mapping[str, Any] | None) -> str:
     sym = symbol_value.upper()
     if not mapping:
@@ -198,33 +249,36 @@ def _portfolio_type_for(symbol_value: str, mapping: Mapping[str, Any] | None) ->
     tickers = mapping.get("tickers") if isinstance(mapping.get("tickers"), Mapping) else mapping
     if isinstance(tickers, Mapping):
         direct = tickers.get(sym) or tickers.get(sym.replace(".KS", ""))
-        if isinstance(direct, str):
-            return direct
-        if isinstance(direct, Mapping):
-            types = direct.get("portfolio_types") or direct.get("portfolio_type")
-            if isinstance(types, list) and types:
-                return str(types[0])
-            if isinstance(types, str):
-                return types
-        for portfolio_type, value in tickers.items():
-            if isinstance(value, list) and sym in {str(item).upper() for item in value}:
-                return str(portfolio_type)
-            if isinstance(value, Mapping):
-                symbols = value.get("symbols") or value.get("tickers")
-                if isinstance(symbols, list) and sym in {str(item).upper() for item in symbols}:
-                    return str(portfolio_type)
+        if direct:
+            if direct.get("type"):
+                return direct["type"]
+            pts = direct.get("portfolio_types") or direct.get("portfolio_type")
+            if pts:
+                if isinstance(pts, list) and pts:
+                    return pts[0]
+                return str(pts)
     return "unclassified"
 
-
 def _symbol_bucket() -> dict[str, Any]:
-    bucket = _period_bucket()
-    bucket.update({"symbol": "", "portfolio_type": "unclassified"})
-    return bucket
-
+    return {"symbol": "", "portfolio_type": "", **_base_bucket()}
 
 def _period_bucket() -> dict[str, Any]:
+    return {"period": "", **_base_bucket()}
+
+def _portfolio_bucket() -> dict[str, Any]:
+    return {"portfolio_type": "", **_base_bucket()}
+
+def _market_bucket() -> dict[str, Any]:
+    return {"market": "", **_base_bucket()}
+
+def _currency_bucket() -> dict[str, Any]:
+    return {"currency": "", **_base_bucket()}
+
+def _security_type_bucket() -> dict[str, Any]:
+    return {"security_type": "", **_base_bucket()}
+
+def _base_bucket() -> dict[str, Any]:
     return {
-        "period": "",
         "trade_count": 0,
         "buy_count": 0,
         "sell_count": 0,
@@ -236,103 +290,116 @@ def _period_bucket() -> dict[str, Any]:
         "round_count": 0,
         "win_count": 0,
         "loss_count": 0,
-        "return_pct_total": 0.0,
-        "return_pct_count": 0,
-        "holding_days_total": 0.0,
-        "holding_days_count": 0,
+        "total_holding_days": 0.0,
+        "holding_days_counted": 0,
+        "total_return_pct": 0.0,
+        "return_pct_counted": 0,
     }
 
+def _summary_bucket(orders: list[dict[str, Any]], rounds: list[dict[str, Any]]) -> dict[str, Any]:
+    b = _base_bucket()
+    for o in orders:
+        _add_order(b, o["side"], o["amount_krw"], o["commission_krw"], o["tax_krw"])
+    for r in rounds:
+        _add_round(b, r)
+    b["period"] = "all"
+    return b
 
-def _portfolio_bucket() -> dict[str, Any]:
-    bucket = _period_bucket()
-    bucket.update({"portfolio_type": ""})
-    return bucket
+def _add_order(b: dict[str, Any], side_val: str, amt: float, comm: float, tax_val: float):
+    b["trade_count"] += 1
+    b["commission_krw"] += comm
+    b["tax_krw"] += tax_val
+    if side_val == "BUY":
+        b["buy_count"] += 1
+        b["buy_amount_krw"] += amt
+    elif side_val == "SELL":
+        b["sell_count"] += 1
+        b["sell_amount_krw"] += amt
 
+def _add_round(b: dict[str, Any], r: dict[str, Any]):
+    b["round_count"] += 1
+    pnl = r["realized_pnl_krw"]
+    ret = r["return_pct"]
+    days = r["holding_days"]
+    b["realized_pnl_krw"] += pnl
+    if pnl > 1e-2:
+        b["win_count"] += 1
+    else:
+        b["loss_count"] += 1
+    if ret is not None:
+        b["total_return_pct"] += ret
+        b["return_pct_counted"] += 1
+    if days is not None:
+        b["total_holding_days"] += days
+        b["holding_days_counted"] += 1
 
-def _summary_bucket(order_features: list[dict[str, Any]], trade_rounds: list[dict[str, Any]]) -> dict[str, Any]:
-    bucket = _period_bucket()
-    bucket["period"] = "all"
-    for row in order_features:
-        side_value = str(row.get("side") or "")
-        _add_order(
-            bucket,
-            side_value,
-            float(row.get("amount_krw") or 0.0),
-            float(row.get("commission_krw") or 0.0),
-            float(row.get("tax_krw") or 0.0),
-        )
-    for trade in trade_rounds:
-        _add_round(bucket, trade)
-    return bucket
+def _finalize_bucket(b: dict[str, Any]) -> dict[str, Any]:
+    rounds = b["round_count"]
+    wins = b["win_count"]
+    losses = b["loss_count"]
+    total_rounds = wins + losses
+    b["win_rate_pct"] = (wins / total_rounds * 100.0) if total_rounds > 0 else None
+    
+    ret_cnt = b["return_pct_counted"]
+    b["avg_return_pct"] = (b["total_return_pct"] / ret_cnt) if ret_cnt > 0 else None
+    
+    days_cnt = b["holding_days_counted"]
+    b["avg_holding_days"] = (b["total_holding_days"] / days_cnt) if days_cnt > 0 else None
+    
+    total_vol = b["buy_amount_krw"] + b["sell_amount_krw"]
+    total_costs = b["commission_krw"] + b["tax_krw"]
+    b["fee_bps"] = (total_costs / total_vol * 10000.0) if total_vol > 0 else 0.0
+    
+    # Remove aggregation helpers
+    for k in [
+        "total_holding_days",
+        "holding_days_counted",
+        "total_return_pct",
+        "return_pct_counted",
+    ]:
+        b.pop(k, None)
+        
+    # Round floats
+    for k in ["buy_amount_krw", "sell_amount_krw", "commission_krw", "tax_krw", "realized_pnl_krw"]:
+        b[k] = _round(b[k], 2)
+    if b["win_rate_pct"] is not None:
+        b["win_rate_pct"] = _round(b["win_rate_pct"], 2)
+    if b["avg_return_pct"] is not None:
+        b["avg_return_pct"] = _round(b["avg_return_pct"], 2)
+    if b["avg_holding_days"] is not None:
+        b["avg_holding_days"] = _round(b["avg_holding_days"], 1)
+    b["fee_bps"] = _round(b["fee_bps"], 2)
+    return b
 
-
-def _add_order(bucket: dict[str, Any], side_value: str, amount: float, comm_krw: float, tax_krw: float) -> None:
-    bucket["trade_count"] += 1
-    bucket["commission_krw"] += comm_krw
-    bucket["tax_krw"] += tax_krw
-    if side_value == "BUY":
-        bucket["buy_count"] += 1
-        bucket["buy_amount_krw"] += amount
-    elif side_value == "SELL":
-        bucket["sell_count"] += 1
-        bucket["sell_amount_krw"] += amount
-
-
-def _add_round(bucket: dict[str, Any], trade: Mapping[str, Any]) -> None:
-    pnl = float(trade.get("realized_pnl_krw") or 0.0)
-    bucket["round_count"] += 1
-    bucket["realized_pnl_krw"] += pnl
-    bucket["win_count"] += 1 if pnl > 0 else 0
-    bucket["loss_count"] += 1 if pnl < 0 else 0
-    return_pct = trade.get("return_pct")
-    if return_pct is not None:
-        bucket["return_pct_total"] += float(return_pct)
-        bucket["return_pct_count"] += 1
-    holding_days = trade.get("holding_days")
-    if holding_days is not None:
-        bucket["holding_days_total"] += float(holding_days)
-        bucket["holding_days_count"] += 1
-
-
-def _finalize_bucket(bucket: Mapping[str, Any]) -> dict[str, Any]:
-    row = dict(bucket)
-    round_count = int(row.get("round_count") or 0)
-    return_pct_count = int(row.get("return_pct_count") or 0)
-    holding_days_count = int(row.get("holding_days_count") or 0)
-    row["win_rate_pct"] = _round(row.get("win_count", 0) / round_count * 100.0, 2) if round_count else None
-    row["avg_return_pct"] = _round(row.get("return_pct_total", 0.0) / return_pct_count, 2) if return_pct_count else None
-    row["avg_holding_days"] = _round(row.get("holding_days_total", 0.0) / holding_days_count, 1) if holding_days_count else None
-    fee_base = max(float(row.get("buy_amount_krw") or 0.0) + float(row.get("sell_amount_krw") or 0.0), 1.0)
-    row["fee_bps"] = _round((float(row.get("commission_krw") or 0.0) + float(row.get("tax_krw") or 0.0)) / fee_base * 10000.0, 2)
-    for key in ("return_pct_total", "return_pct_count", "holding_days_total", "holding_days_count"):
-        row.pop(key, None)
-    return {key: _round(value, 2) if isinstance(value, float) else value for key, value in row.items()}
-
-
-def _open_lot_rows(open_lots: Mapping[str, list[OpenLot]]) -> list[dict[str, Any]]:
-    rows = []
+def _open_lot_rows(open_lots: dict[str, list[OpenLot]]) -> list[dict[str, Any]]:
+    res = []
     for sym, lots in open_lots.items():
-        quantity_sum = sum(lot.quantity for lot in lots)
-        if quantity_sum <= 1e-9:
+        if not lots:
             continue
-        rows.append(
-            {
-                "symbol": sym,
-                "quantity": _round(quantity_sum, 6),
-                "lot_count": len(lots),
-                "portfolio_type": lots[0].portfolio_type if lots else "unclassified",
-            }
-        )
-    return sorted(rows, key=lambda item: item["symbol"])
+        total_qty = sum(lot.quantity for lot in lots)
+        if total_qty > 1e-9:
+            res.append(
+                {
+                    "symbol": sym,
+                    "quantity": _round(total_qty, 6),
+                    "lot_count": len(lots),
+                    "portfolio_type": lots[0].portfolio_type,
+                }
+            )
+    return sorted(res, key=lambda x: x["quantity"], reverse=True)
 
+def _round_trade(trade: dict[str, Any]) -> dict[str, Any]:
+    trade["quantity"] = _round(trade["quantity"], 6)
+    trade["buy_value_krw"] = _round(trade["buy_value_krw"], 2)
+    trade["sell_value_krw"] = _round(trade["sell_value_krw"], 2)
+    trade["fees_krw"] = _round(trade["fees_krw"], 2)
+    trade["realized_pnl_krw"] = _round(trade["realized_pnl_krw"], 2)
+    if trade["return_pct"] is not None:
+        trade["return_pct"] = _round(trade["return_pct"], 2)
+    return trade
 
-def _round_trade(row: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: _round(value, 2) if isinstance(value, float) else value for key, value in row.items()}
+def _to_krw(val: float, cur: str, usd_krw: float) -> float:
+    return val * usd_krw if cur.upper() == "USD" else val
 
-
-def _round(value: Any, digits: int) -> Any:
-    return round(value, digits) if isinstance(value, float) else value
-
-
-def _to_krw(value: float, cur: str, usd_krw: float) -> float:
-    return value * usd_krw if cur == "USD" else value
+def _round(val: float | None, digits: int) -> float | None:
+    return round(val, digits) if val is not None else None
