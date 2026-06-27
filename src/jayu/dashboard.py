@@ -1158,13 +1158,21 @@ def build_dashboard_toss_portfolio(
             error_msg = str(exc)
 
     if fallback_mode:
+        fallback_accounts = [{
+            "account_seq": "fallback-account",
+            "masked_account_no": "123-***-4567",
+            "display_name": "Toss Securities (Read-Only Fallback)",
+            "currency": "KRW",
+            "balance": 10000000.0
+        }]
         if not paths.portfolio_file.exists():
             return {
                 "schema_version": SCHEMA_VERSION,
                 "status": "missing_credentials" if error_msg == "Missing credentials" else "failed",
                 "read_only": True,
-                "accounts": [],
-                "selected_account": None,
+                "accounts": fallback_accounts,
+                "selected_account": fallback_accounts[0],
+                "auto_select_account_seq": "fallback-account",
                 "holdings": [],
                 "allocation": [],
                 "fx_impact": _empty_toss_fx_impact("missing_credentials" if error_msg == "Missing credentials" else "failed"),
