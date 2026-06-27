@@ -1605,7 +1605,7 @@ function renderInvestCalendar() {
     const avgPrice = exec.averageFilledPrice || o.price;
     const commission = exec.commission || "0";
     const currency = o.currency || "KRW";
-    const stockName = TOSS_TICKER_NAMES[o.symbol.toUpperCase()] || o.symbol;
+    const stockName = getStockName(o.symbol);
     
     return {
       date: (o.orderedAt || "").slice(0, 10),

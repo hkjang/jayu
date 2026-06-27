@@ -132,6 +132,11 @@ class TossStockMetadataManager:
             "TQQQ": "TQQQ",
             "SOXL": "SOXL",
             "NVDA": "엔비디아",
+            "VOO": "VOO (S&P 500 ETF)",
+            "JEPQ": "JEPQ (나스닥 고배당 커버드콜)",
+            "ROBO": "ROBO (로봇/자동화 ETF)",
+            "QQQ": "QQQ (나스닥 100 ETF)",
+            "QLD": "QLD (나스닥 2배 레버리지)",
         }
         for sym, name in fallback_names.items():
             if sym not in mapping:

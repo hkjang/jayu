@@ -59,7 +59,12 @@ const TOSS_TICKER_NAMES = {
   "GOOGL": "구글",
   "META": "메타",
   "NVDA": "엔비디아",
-  "IONQ": "아이온큐"
+  "IONQ": "아이온큐",
+  "VOO": "VOO (S&P 500 ETF)",
+  "JEPQ": "JEPQ (나스닥 고배당 커버드콜)",
+  "ROBO": "ROBO (로봇/자동화 ETF)",
+  "QQQ": "QQQ (나스닥 100 ETF)",
+  "QLD": "QLD (나스닥 2배 레버리지)"
 };
 
 const TICKER_DESCRIPTIONS = {
@@ -86,7 +91,10 @@ const TICKER_DESCRIPTIONS = {
   "META": "Meta Platforms, Inc. (페이스북, 인스타그램, 왓츠앱 등 글로벌 SNS 채널 및 메타버스, AI 인프라 선도 기업)",
   "SCHD": "Schwab U.S. Dividend Equity ETF (미국 배당성장 대표 ETF, 다우존스 US 배당 100 지수를 추종하는 장기 배당 자산)",
   "O": "Realty Income Corporation (대표 상업용 부동산 리츠, 매월 안정적인 월배당을 지급하는 글로벌 배당 성장주)",
-  "JEPI": "JPMorgan Equity Premium Income ETF (주식 연계 채권 ELN을 결합해 안정적인 고배당/월배당을 추종하는 커버드콜 ETF)"
+  "JEPI": "JPMorgan Equity Premium Income ETF (주식 연계 채권 ELN을 결합해 안정적인 고배당/월배당을 추종하는 커버드콜 ETF)",
+  "VOO": "Vanguard S&P 500 ETF (미국 S&P 500 지수 추종 대표 ETF)",
+  "JEPQ": "JPMorgan Nasdaq Equity Premium Income ETF (나스닥 100 지수 기반 고배당/월배당 커버드콜 ETF)",
+  "ROBO": "ROBO Global Robotics and Automation Index ETF (글로벌 로봇 및 자동화 산업 투자 ETF)"
 };
 
 function renderTicker(ticker) {
