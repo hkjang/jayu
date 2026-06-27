@@ -3518,13 +3518,24 @@ def _dashboard_handler(
                     return
 
                 if parsed.path == "/api/v1/investment-goals":
-                    goal_id = payload.get("goal_id")
+                    import time
+                    goal_id = payload.get("goal_id") or f"goal_{int(time.time() * 1000)}"
                     name = payload.get("name")
-                    target_amount = float(payload.get("target_amount", 0.0))
+                    target_amount = float(payload.get("target_amount") or payload.get("target_value") or 0.0)
+                    
                     target_date = payload.get("target_date")
-                    current_amount = float(payload.get("current_amount", 0.0))
-                    monthly_deposit = float(payload.get("monthly_deposit", 0.0))
+                    if not target_date:
+                        months = int(payload.get("horizon_months") or 240)
+                        from datetime import datetime
+                        yr = datetime.now().year + (datetime.now().month + months - 1) // 12
+                        mn = (datetime.now().month + months - 1) % 12 + 1
+                        target_date = f"{yr:04d}-{mn:02d}-{datetime.now().day:02d}"
+                        
+                    current_amount = float(payload.get("current_amount") or payload.get("current_value") or 0.0)
+                    monthly_deposit = float(payload.get("monthly_deposit") or payload.get("monthly_contribution") or 0.0)
                     expected_return = float(payload.get("expected_return", 0.08))
+                    goal_type = payload.get("goal_type") or "retirement"
+                    
                     if not (goal_id and name and target_date):
                         self._json({"status": "error", "message": "missing required parameters"}, status=400)
                         return
@@ -3539,6 +3550,15 @@ def _dashboard_handler(
                         monthly_deposit=monthly_deposit,
                         expected_return=expected_return
                     )
+                    
+                    if goal_type:
+                        goals = planner.load_goals()
+                        for g in goals:
+                            if g["goal_id"] == goal_id:
+                                g["goal_type"] = goal_type
+                        planner.save_goals(goals)
+                        goal["goal_type"] = goal_type
+                        
                     self._json({"status": "success", "goal": goal})
                     return
 

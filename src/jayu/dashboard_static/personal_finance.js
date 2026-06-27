@@ -211,6 +211,22 @@ function renderGoalPlanner() {
           barChartHtml = `<div style="display:flex; gap:6px; align-items:flex-end; padding:8px 0; border-top:1px solid var(--border); margin-top:10px;">${bars}</div>`;
         }
 
+        const curAmt = g.current_amount !== undefined ? g.current_amount : (g.current_value !== undefined ? g.current_value : 0);
+        const tgtAmt = g.target_amount !== undefined ? g.target_amount : (g.target_value !== undefined ? g.target_value : 0);
+        const monDep = g.monthly_deposit !== undefined ? g.monthly_deposit : (g.monthly_contribution !== undefined ? g.monthly_contribution : 0);
+        
+        let horizon = g.horizon_months;
+        if (horizon === undefined && g.target_date) {
+          try {
+            const targetDt = new Date(g.target_date);
+            const now = new Date();
+            horizon = (targetDt.getFullYear() - now.getFullYear()) * 12 + (targetDt.getMonth() - now.getMonth());
+          } catch(e) {}
+        }
+        if (horizon === undefined || horizon === null || isNaN(horizon) || horizon <= 0) {
+          horizon = sv ? sv.months_remaining : 240;
+        }
+
         return `
           <div class="panel" style="margin-bottom:14px; border-left:4px solid ${isFeasible ? "var(--success)" : "var(--warning)"};">
             <div class="panel-header" style="min-height:44px; padding:8px 12px;">
@@ -225,16 +241,16 @@ function renderGoalPlanner() {
             <div class="panel-body" style="padding:12px;">
               <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:12px; margin-bottom:10px;">
                 <div style="display:flex; justify-content:space-between; border-bottom:1px solid #f1f5f9; padding-bottom:3px;">
-                  <span style="color:var(--muted)">현재 자산 (PV)</span><strong>${pf_fmt(g.current_value)}원</strong>
+                  <span style="color:var(--muted)">현재 자산 (PV)</span><strong>${pf_fmt(curAmt)}원</strong>
                 </div>
                 <div style="display:flex; justify-content:space-between; border-bottom:1px solid #f1f5f9; padding-bottom:3px;">
-                  <span style="color:var(--muted)">목표 자산 (FV)</span><strong>${pf_fmt(g.target_value)}원</strong>
+                  <span style="color:var(--muted)">목표 자산 (FV)</span><strong>${pf_fmt(tgtAmt)}원</strong>
                 </div>
                 <div style="display:flex; justify-content:space-between; border-bottom:1px solid #f1f5f9; padding-bottom:3px;">
-                  <span style="color:var(--muted)">월 적립액 (PMT)</span><strong>${pf_fmt(g.monthly_contribution)}원</strong>
+                  <span style="color:var(--muted)">월 적립액 (PMT)</span><strong>${pf_fmt(monDep)}원</strong>
                 </div>
                 <div style="display:flex; justify-content:space-between; border-bottom:1px solid #f1f5f9; padding-bottom:3px;">
-                  <span style="color:var(--muted)">목표 기간</span><strong>${g.horizon_months}개월 (${(g.horizon_months / 12).toFixed(1)}년)</strong>
+                  <span style="color:var(--muted)">목표 기간</span><strong>${horizon}개월 (${(horizon / 12).toFixed(1)}년)</strong>
                 </div>
               </div>
               
