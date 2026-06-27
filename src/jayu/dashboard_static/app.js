@@ -11,6 +11,7 @@ const state = {
   traderLens: null,
   promotion: null,
   settingsValidation: null,
+  featureInventory: null,
   tossStatus: null,
   tossAccounts: null,
   tossMarket: null,
@@ -271,6 +272,12 @@ async function loadPage() {
       } catch (err) {
         console.warn("Failed to load experiments list", err);
         state.experiments = null;
+      }
+      try {
+        state.featureInventory = await api("/api/v1/features");
+      } catch (err) {
+        console.warn("Failed to load feature inventory", err);
+        state.featureInventory = null;
       }
     }
     if (state.page === "toss") {

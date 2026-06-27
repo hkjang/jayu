@@ -194,21 +194,166 @@ class TestLossRecoveryPlanner:
 # Toss Orders Manager Tests
 # ──────────────────────────────────────────────────────────────────────────────
 class TestTossOrdersManager:
-    def test_toss_orders(self, tmp_path: Path) -> None:
+    def test_toss_orders_cache(self, tmp_path: Path) -> None:
         from jayu.toss_orders import TossOrdersManager
-        from jayu.paths import RuntimePaths
 
         mgr = TossOrdersManager(tmp_path)
-        
-        # Test loading from empty/non-existent file generates mock orders
-        orders = mgr.load_orders()
-        assert len(orders) > 0
-        assert orders[0]["orderId"].startswith("mock_oid_")
+        if mgr.orders_file.exists():
+            mgr.orders_file.unlink()
+
+        # Empty cache should stay empty; live data comes only from Toss Order History.
+        assert mgr.load_orders() == []
 
         # Test save and load back
         custom_orders = [{"orderId": "custom_1", "symbol": "AAPL", "side": "BUY"}]
         mgr._save_orders(custom_orders)
-        
-        orders2 = mgr.load_orders()
-        assert orders2 == custom_orders
 
+        assert mgr.load_orders() == custom_orders
+
+    def test_toss_orders_fetches_official_history_and_detail(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from datetime import date
+
+        from jayu.paths import RuntimePaths
+        from jayu.toss_orders import TossOrdersManager
+
+        class FakeSecret:
+            def __init__(self, value: str) -> None:
+                self.value = value
+
+            def get_secret_value(self) -> str:
+                return self.value
+
+        class FakeSettings:
+            toss_api_key = FakeSecret("client-id")
+            toss_secret_key = FakeSecret("client-secret")
+            toss_account = FakeSecret("account-seq")
+            toss_oauth_auth_style = "body"
+
+        clients = []
+
+        class FakeTossClient:
+            def __init__(self, *args, **kwargs) -> None:
+                self.args = args
+                self.kwargs = kwargs
+                self.calls = []
+                clients.append(self)
+
+            def orders(self, **kwargs):
+                self.calls.append(("orders", kwargs))
+                if kwargs["status"] == "CLOSED" and kwargs.get("cursor") is None:
+                    return {
+                        "result": {
+                            "orders": [
+                                {
+                                    "orderId": "closed-1",
+                                    "symbol": "005930",
+                                    "side": "BUY",
+                                    "status": "FILLED",
+                                    "orderedAt": "2026-03-28T09:30:00+09:00",
+                                    "currency": "KRW",
+                                }
+                            ],
+                            "hasNext": True,
+                            "nextCursor": "cursor-2",
+                        }
+                    }
+                if kwargs["status"] == "CLOSED":
+                    return {
+                        "result": {
+                            "orders": [
+                                {
+                                    "orderId": "closed-2",
+                                    "symbol": "AAPL",
+                                    "side": "SELL",
+                                    "status": "FILLED",
+                                    "orderedAt": "2026-03-27T09:30:00+09:00",
+                                    "currency": "USD",
+                                }
+                            ],
+                            "hasNext": False,
+                        }
+                    }
+                return {
+                    "result": {
+                        "orders": [
+                            {
+                                "orderId": "open-1",
+                                "symbol": "SOXL",
+                                "side": "BUY",
+                                "status": "OPEN",
+                                "orderedAt": "2026-03-29T09:30:00+09:00",
+                                "currency": "USD",
+                            }
+                        ]
+                    }
+                }
+
+            def order(self, order_id: str, **kwargs):
+                self.calls.append(("order", order_id, kwargs))
+                return {
+                    "result": {
+                        "orderId": order_id,
+                        "symbol": "005930",
+                        "side": "BUY",
+                        "orderType": "LIMIT",
+                        "timeInForce": "DAY",
+                        "status": "FILLED",
+                        "price": "70000",
+                        "quantity": "10",
+                        "orderAmount": None,
+                        "currency": "KRW",
+                        "orderedAt": "2026-03-28T09:30:00+09:00",
+                        "canceledAt": None,
+                        "execution": {
+                            "filledQuantity": "10",
+                            "averageFilledPrice": "70000",
+                            "filledAmount": "700000",
+                            "commission": "1400",
+                            "tax": "0",
+                            "filledAt": "2026-03-28T09:31:15+09:00",
+                            "settlementDate": "2026-03-30",
+                        },
+                    }
+                }
+
+        monkeypatch.setattr("jayu.toss_orders.load_settings", lambda config: FakeSettings())
+        monkeypatch.setattr("jayu.toss_orders.TossInvestClient", FakeTossClient)
+
+        paths = RuntimePaths.from_root(tmp_path)
+        mgr = TossOrdersManager(tmp_path)
+
+        result = mgr.fetch_and_save(paths, account="override-account", today=date(2026, 6, 27))
+
+        assert result["status"] == "success"
+        assert result["from"] == "2025-06-27"
+        assert result["to"] == "2026-06-27"
+        assert result["closed_pages"] == 2
+        assert result["closed_count"] == 2
+        assert result["open_count"] == 1
+        assert result["count"] == 3
+        assert "GET /api/v1/orders" in result["source"]
+        assert [order["orderId"] for order in mgr.load_orders()] == ["open-1", "closed-1", "closed-2"]
+
+        orders_calls = clients[0].calls
+        assert orders_calls[0][1] == {
+            "status": "CLOSED",
+            "account": "override-account",
+            "from_date": "2025-06-27",
+            "to_date": "2026-06-27",
+            "cursor": None,
+            "limit": 100,
+        }
+        assert orders_calls[1][1]["cursor"] == "cursor-2"
+        assert orders_calls[2][1]["status"] == "OPEN"
+
+        detail = mgr.fetch_order_detail(paths, "closed-1", account="override-account")
+
+        assert detail["status"] == "success"
+        assert detail["order"]["execution"]["filledQuantity"] == "10"
+        assert "GET /api/v1/orders/{orderId}" in detail["source"]
+        assert mgr.load_order_detail("closed-1")["execution"]["settlementDate"] == "2026-03-30"
+        assert clients[1].calls == [("order", "closed-1", {"account": "override-account"})]

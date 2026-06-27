@@ -36,6 +36,7 @@ function renderSettingsValidation() {
       ${renderSourceCaption("config.json · environment · policy audits")}
     </section>
     
+    ${renderFeatureInventorySection(state.featureInventory)}
     <section class="panel" style="margin-top: 1.5rem;" id="backup-restore-panel">
       ${renderBackupRestoreSection()}
     </section>
@@ -52,6 +53,58 @@ function renderSettingsValidation() {
   setTimeout(() => {
     bindSettingsExtensionsActions();
   }, 100);
+}
+
+function renderFeatureInventorySection(data) {
+  if (!data) {
+    return `
+      <section class="panel" style="margin-top:1.5rem;">
+        <div class="panel-header"><div><h2>Feature Inventory</h2><p>기능 인벤토리를 불러오지 못했습니다.</p></div></div>
+        ${renderSourceCaption("GET /api/v1/features")}
+      </section>
+    `;
+  }
+  const summary = data.summary || {};
+  const statusCounts = data.status_counts || {};
+  const features = (data.features || []).slice(0, 12);
+  return `
+    <section class="panel" style="margin-top:1.5rem;">
+      <div class="panel-header">
+        <div>
+          <h2>Feature Inventory &amp; Status Matrix</h2>
+          <p>Python 모듈, CLI 명령, Dashboard API, 화면 섹션을 자동 수집한 기능 관리 표입니다.</p>
+        </div>
+        <span class="status-label status-success">${summary.feature_count || 0} features</span>
+      </div>
+      <section class="metric-grid" style="margin-top:12px;">
+        ${metricCard("Features", summary.feature_count || 0, "success", "src/jayu module inventory")}
+        ${metricCard("CLI Commands", summary.cli_command_count || 0, summary.cli_command_count ? "success" : "warning", "Typer command decorators")}
+        ${metricCard("Dashboard API", summary.dashboard_route_count || 0, summary.dashboard_route_count ? "success" : "warning", "dashboard.py /api/v1 routes")}
+        ${metricCard("Tested", summary.tested_feature_count || 0, summary.tested_feature_count ? "success" : "warning", "tests/test_*.py related files")}
+      </section>
+      <div class="table-wrap" style="margin-top:12px;">
+        <table>
+          <thead><tr><th>Feature</th><th>Status</th><th>CLI</th><th>API</th><th>UI</th><th>Tests</th></tr></thead>
+          <tbody>
+            ${features.map((feature) => `
+              <tr>
+                <td><strong>${escapeHtml(feature.name || feature.feature_id)}</strong><br><span class="code">${escapeHtml(feature.module || "-")}</span></td>
+                <td><span class="status-label status-${feature.status === "stable" ? "success" : feature.status === "deprecated" ? "failed" : "warning"}">${escapeHtml(feature.status || "-")}</span></td>
+                <td>${(feature.cli_commands || []).length}</td>
+                <td>${(feature.dashboard_routes || []).length}</td>
+                <td>${(feature.dashboard_sections || []).length}</td>
+                <td>${(feature.tests || []).length}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+      <p class="metric-detail" style="margin:10px 0 0;color:var(--muted);font-size:11px;">
+        stable ${statusCounts.stable || 0} · beta ${statusCounts.beta || 0} · experimental ${statusCounts.experimental || 0} · deprecated ${statusCounts.deprecated || 0}
+      </p>
+      ${renderSourceCaption("GET /api/v1/features · configs/feature_status.yaml · src/jayu")}
+    </section>
+  `;
 }
 
 function renderSettingsRules(rows) {

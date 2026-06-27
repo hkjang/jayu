@@ -100,6 +100,9 @@ notebook_app = typer.Typer(no_args_is_help=True, help="Jupyter Notebook export a
 goal_app = typer.Typer(no_args_is_help=True, help="Investment goal planning")
 cashflow_app = typer.Typer(no_args_is_help=True, help="Monthly cashflow planning")
 coach_app = typer.Typer(no_args_is_help=True, help="Investor coaching and diet mode")
+inventory_app = typer.Typer(no_args_is_help=True, help="Feature inventory and coverage maps")
+release_app = typer.Typer(no_args_is_help=True, help="Release readiness checks")
+config_app = typer.Typer(no_args_is_help=True, help="Configuration helpers")
 
 app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(report_app, name="report")
@@ -112,6 +115,9 @@ app.add_typer(notebook_app, name="notebook")
 app.add_typer(goal_app, name="goal")
 app.add_typer(cashflow_app, name="cashflow")
 app.add_typer(coach_app, name="coach")
+app.add_typer(inventory_app, name="inventory")
+app.add_typer(release_app, name="release")
+app.add_typer(config_app, name="config")
 
 
 @app.command()
@@ -145,6 +151,100 @@ def _secret_value(value: Any) -> str | None:
 
 def _echo_json(payload: Any) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+
+
+@inventory_app.command("build")
+def inventory_build(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Generate state/feature_inventory.json and docs/FEATURES.md."""
+    _, paths = _load(config)
+    from .feature_inventory import write_feature_inventory
+
+    _echo_json(write_feature_inventory(paths.project_root))
+
+
+@inventory_app.command("dashboard-coverage")
+def inventory_dashboard_coverage(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Generate dashboard coverage JSON and Markdown."""
+    _, paths = _load(config)
+    from .dashboard_coverage_map import write_dashboard_coverage_map
+
+    _echo_json(write_dashboard_coverage_map(paths.project_root))
+
+
+@inventory_app.command("cli-coverage")
+def inventory_cli_coverage(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Generate CLI coverage JSON and Markdown."""
+    _, paths = _load(config)
+    from .cli_coverage_map import write_cli_coverage_map
+
+    _echo_json(write_cli_coverage_map(paths.project_root))
+
+
+@release_app.command("doctor")
+def release_doctor_command(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Run release-readiness checks and write state/release_doctor.json."""
+    _, paths = _load(config)
+    from .release_doctor import run_release_doctor
+
+    _echo_json(run_release_doctor(paths.project_root))
+
+
+@release_app.command("notes")
+def release_notes_command(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Generate docs/releases/YYYY-MM-DD.md from git changes and inventory."""
+    _, paths = _load(config)
+    from .release_notes_generator import generate_release_notes
+
+    _echo_json(generate_release_notes(paths.project_root))
+
+
+@config_app.command("wizard")
+def config_wizard(
+    output: Annotated[Path, typer.Option("--output")] = Path("config.generated.json"),
+    env_output: Annotated[Path, typer.Option("--env-output")] = Path(".env.example"),
+    non_interactive: Annotated[bool, typer.Option("--non-interactive/--interactive")] = False,
+) -> None:
+    """Create a starter config and env template without storing secrets."""
+    root = _project_root()
+    mode = "research" if non_interactive else typer.prompt("mode", default="research")
+    data_provider = "yfinance" if non_interactive else typer.prompt("data_provider", default="yfinance")
+    fallback = "none" if non_interactive else typer.prompt("data_fallback_provider", default="none")
+    config_payload = {
+        "mode": mode,
+        "data_provider": data_provider,
+        "data_fallback_provider": fallback,
+        "risk": {"enforcement": "warn"},
+        "universe": {"policy": "audit", "includes_delisted": False},
+        "dashboard": {"permission_mode": "read_only"},
+    }
+    output_path = output if output.is_absolute() else root / output
+    env_path = env_output if env_output.is_absolute() else root / env_output
+    output_path.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    env_path.write_text(
+        "\n".join(
+            [
+                "# Jayu secrets template. Fill values in your shell or local .env, not in config.json.",
+                "JAYU_TOSS_API_KEY=",
+                "JAYU_TOSS_SECRET_KEY=",
+                "JAYU_TOSS_ACCOUNT=",
+                "JAYU_KAKAO_ACCESS_TOKEN=",
+                "JAYU_KAKAO_REFRESH_TOKEN=",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _echo_json({"status": "success", "config": str(output_path), "env_template": str(env_path)})
 
 
 def _toss_client(config: Path | None) -> TossInvestClient:

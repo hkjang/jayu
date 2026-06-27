@@ -47,7 +47,7 @@ from .next_command_recommender import NextCommandRecommender
 from .backup_manager import BackupManager
 from .notification_policy_engine import NotificationPolicyEngine
 from .stock_knowledge_card import StockKnowledgeCardManager
-from .dashboard_permission_mode import DashboardPermissionModeManager, PermissionMode
+from .dashboard_permission_mode import DashboardPermissionModeManager
 from .strategy_risk_budget import StrategyRiskBudgetManager
 from .registry import ExperimentRegistry
 
@@ -3043,6 +3043,11 @@ def _dashboard_handler(
                 if parsed.path == "/api/v1/experiments":
                     self._json({"experiments": experiment_registry.get_experiments()})
                     return
+                if parsed.path == "/api/v1/features":
+                    from .feature_inventory import build_feature_inventory
+
+                    self._json(build_feature_inventory(paths.project_root))
+                    return
                 if parsed.path == "/api/v1/query":
                     query = parse_qs(parsed.query)
                     resource = query.get("resource", [""])[0]
@@ -3740,7 +3745,7 @@ def _dashboard_handler(
                             entry_price=price_val,
                             note=rationale or f"신호 {action}에 대한 {user_decision} 의사결정"
                         )
-                    except Exception as e:
+                    except Exception:
                         pass
                     
                     self._json({"status": "success", "entry": log_entry})

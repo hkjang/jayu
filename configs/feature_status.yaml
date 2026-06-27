@@ -1,0 +1,69 @@
+features:
+  cli:
+    status: stable
+    owner: core
+    notes: Primary operator entrypoint.
+  dashboard:
+    status: stable
+    owner: core
+    notes: Main operations console.
+  settings:
+    status: stable
+    owner: core
+    notes: Runtime configuration model.
+  engine:
+    status: stable
+    owner: research
+    notes: Research and backtest engine.
+  risk:
+    status: stable
+    owner: risk
+    notes: Risk gates and portfolio policy.
+  toss:
+    status: beta
+    owner: broker
+    notes: Read-only Toss OpenAPI integration.
+  toss_orders:
+    status: beta
+    owner: broker
+    notes: Toss Order History cache and getOrder detail.
+  broker_interface:
+    status: beta
+    owner: broker
+    notes: Order intent and broker adapter boundary.
+  backup_manager:
+    status: beta
+    owner: ops
+    notes: Backup and restore workflow.
+  investment_goal_planner:
+    status: beta
+    owner: personal
+    notes: Personal investment goals.
+  cashflow_planner:
+    status: beta
+    owner: personal
+    notes: Monthly cashflow planning.
+  personal_investment_score:
+    status: beta
+    owner: personal
+    notes: Personal investment readiness score.
+  portfolio_diet_mode:
+    status: beta
+    owner: personal
+    notes: Portfolio concentration coaching.
+  agent_mode:
+    status: experimental
+    owner: agent
+    notes: Natural-language agent mode.
+  jayu_mcp_server:
+    status: experimental
+    owner: agent
+    notes: MCP surface for external agents.
+  legacy_adapter:
+    status: deprecated
+    owner: legacy
+    notes: Compatibility bridge for older scripts.
+  legacy_cli:
+    status: deprecated
+    owner: legacy
+    notes: Compatibility bridge for older commands.

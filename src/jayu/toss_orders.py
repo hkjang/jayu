@@ -9,6 +9,7 @@ from .paths import RuntimePaths
 from .settings import load_settings
 from .toss import TossInvestClient
 
+
 class TossOrdersManager:
     """Manages order history from Toss Securities OpenAPI, caching it in state/toss_orders.json."""
 
@@ -144,9 +145,7 @@ class TossOrdersManager:
 
     def load_orders(self) -> list[dict[str, Any]]:
         if not self.orders_file.exists():
-            mock_orders = self._generate_mock_orders()
-            self._save_orders(mock_orders)
-            return mock_orders
+            return []
         try:
             with open(self.orders_file, "r", encoding="utf-8") as f:
                 data = json.load(f)

@@ -49,7 +49,7 @@ line-length = 100
 [tool.pytest.ini_options]
 testpaths = ["tests", "."]
 python_files = ["test_*.py"]
-pythonpath = ["."]
+pythonpath = ["src", "."]
 
 # Coverage is enforced via a dedicated CI step (`uv run pytest --cov=jayu`), not
 # the default `pytest -q` run, so subset/local runs are not blocked by the
