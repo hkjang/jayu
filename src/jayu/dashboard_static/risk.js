@@ -58,7 +58,7 @@ function renderRiskChecks(rows) {
   if (!rows?.length) return emptyTable("리스크 게이트가 평가되지 않았습니다.", "심사 대상 신호와 portfolio snapshot을 확인하세요.");
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>상태</th><th>종목</th><th>지표</th><th class="numeric">현재값</th><th class="numeric">한도</th><th class="numeric">초과값</th><th>Reason code</th></tr></thead>
+      <thead><tr><th>상태</th><th>종목</th><th>종목명</th><th>지표</th><th class="numeric">현재값</th><th class="numeric">한도</th><th class="numeric">초과값</th><th>Reason code</th></tr></thead>
       <tbody>${rows.map((row) => {
         const observed = Number(row.observed);
         const limit = Number(row.limit);
@@ -83,7 +83,7 @@ function renderRiskSignals(rows) {
   if (!rows?.length) return emptyTable("종목별 리스크 결과가 없습니다.", "Risk explanation artifact가 아직 생성되지 않았습니다.");
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>종목</th><th>행동</th><th>상태</th><th class="numeric">승인 비중</th><th class="numeric">통과</th><th class="numeric">실패</th><th>Reason code</th></tr></thead>
+      <thead><tr><th>종목</th><th>종목명</th><th>행동</th><th>상태</th><th class="numeric">승인 비중</th><th class="numeric">통과</th><th class="numeric">실패</th><th>Reason code</th></tr></thead>
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>

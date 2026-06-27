@@ -205,8 +205,8 @@ function renderTradeHistoryMiniTable(rows, fields) {
             <tr>
               ${fields.map(field => {
                 const value = row[field];
-                const formatted = field.endsWith("_krw") ? formatCurrency(value, "KRW") : escapeHtml(value ?? "-");
-                return `<td class="${field.endsWith("_krw") ? "numeric" : ""}">${formatted}</td>`;
+                const formatted = field === "symbol" ? `${renderTicker(value)} <span style="font-size:11px;color:var(--muted);margin-left:4px;">(${escapeHtml(getStockName(value))})</span>` : (field.endsWith("_krw") ? formatCurrency(value, "KRW") : escapeHtml(value ?? "-"));
+                return `<td class="${field.endsWith("_krw") ? "numeric" : (field === "symbol" ? "ticker-cell" : "")}">${formatted}</td>`;
               }).join("")}
             </tr>
           `).join("")}
@@ -309,7 +309,7 @@ function renderPnlReconciliationDiscrepancies(rows) {
     <div class="table-wrap" style="margin-top:12px"><table>
       <thead>
         <tr>
-          <th>Symbol</th>
+          <th>Symbol</th><th>종목명</th>
           <th>Status</th>
           <th class="numeric">주문 수량</th>
           <th class="numeric">Tax Lot 수량</th>
@@ -377,7 +377,7 @@ function renderStockTradeLifecycleTable(rows) {
     <div class="table-wrap" style="margin-top:12px"><table>
       <thead>
         <tr>
-          <th>Symbol</th>
+          <th>Symbol</th><th>종목명</th>
           <th>Stage</th>
           <th class="numeric">Buy</th>
           <th class="numeric">Sell</th>
@@ -579,7 +579,7 @@ function renderTaxLotLedgerSection() {
             <table style="font-size: 12px; width: 100%;">
               <thead>
                 <tr>
-                  <th>종목</th>
+                  <th>종목</th><th>종목명</th>
                   <th class="numeric">세금 Lot 원장 잔고</th>
                   <th class="numeric">토스 실계좌 잔고</th>
                   <th class="numeric">차이 수량</th>
@@ -623,7 +623,7 @@ function renderTaxLotLedgerSection() {
         <thead>
           <tr>
             <th>Lot ID</th>
-            <th>종목</th>
+            <th>종목</th><th>종목명</th>
             <th>매수일자</th>
             <th class="numeric">남은 수량 / 최초 수량</th>
             <th class="numeric">매수가 (단가)</th>
@@ -688,7 +688,7 @@ function renderReconciliationReview(recon) {
     <div class="table-wrap reconciliation-issue-table"><table>
       <thead>
         <tr>
-          <th>종목</th>
+          <th>종목</th><th>종목명</th>
           <th>이슈</th>
           <th>운용 타입</th>
           <th>상세</th>
@@ -858,7 +858,7 @@ function renderOrderPlan(orderPlanData) {
       <div class="table-wrap"><table>
         <thead>
           <tr>
-            <th>종목</th>
+            <th>종목</th><th>종목명</th>
             <th>행동</th>
             <th class="numeric">승인 비중 (Approved %)</th>
             <th class="numeric">주문 예정 금액 (Target Cash)</th>
@@ -987,7 +987,7 @@ function renderAllocationPreview(data) {
     <div class="table-wrap allocation-preview-table"><table>
       <thead>
         <tr>
-          <th>종목</th>
+          <th>종목</th><th>종목명</th>
           <th>섹터</th>
           <th class="numeric">전</th>
           <th class="numeric">후</th>
@@ -1059,7 +1059,7 @@ function renderPaperOrderContract(contract) {
         <div class="table-wrap"><table>
           <thead>
             <tr>
-              <th>종목</th>
+              <th>종목</th><th>종목명</th>
               <th>Side</th>
               <th>품질</th>
               <th class="numeric">수량</th>
@@ -1588,7 +1588,7 @@ function renderTossHoldingsTable(rows) {
   }
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>Symbol</th><th>Market</th><th>투자 타입</th><th>Category</th><th>Sector</th><th>Name</th><th class="numeric">Qty</th><th class="numeric">KRW value</th><th class="numeric">P/L KRW</th><th class="numeric">P/L %</th><th class="numeric">Day %</th><th class="numeric">FX day</th><th class="numeric">Weight</th><th>Tags</th></tr></thead>
+      <thead><tr><th>Symbol</th><th>종목명</th><th>Market</th><th>투자 타입</th><th>Category</th><th>Sector</th><th>Name</th><th class="numeric">Qty</th><th class="numeric">KRW value</th><th class="numeric">P/L KRW</th><th class="numeric">P/L %</th><th class="numeric">Day %</th><th class="numeric">FX day</th><th class="numeric">Weight</th><th>Tags</th></tr></thead>
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.symbol)}</td>

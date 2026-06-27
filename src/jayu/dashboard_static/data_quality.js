@@ -192,7 +192,7 @@ function renderSourcesTable(rows) {
   if (!rows?.length) return emptyTable("Provider 수집 기록이 없습니다.", "비교 대상이 없으므로 검증 성공으로 간주하지 않습니다.");
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>Provider</th><th>종목</th><th>상태</th><th class="numeric">행 수</th><th>첫 날짜</th><th>마지막 날짜</th><th>Hash</th><th>오류</th></tr></thead>
+      <thead><tr><th>Provider</th><th>종목</th><th>종목명</th><th>상태</th><th class="numeric">행 수</th><th>첫 날짜</th><th>마지막 날짜</th><th>Hash</th><th>오류</th></tr></thead>
       <tbody>${rows.map((row) => `
         <tr>
           <td>${escapeHtml(row.provider || "-")}</td>
@@ -211,7 +211,7 @@ function renderMismatchTable(rows) {
   if (!rows?.length) return emptyTable("임계값 초과 불일치가 없습니다.", "Provider 비교가 실행되지 않았다면 상단 상태는 미검증으로 유지됩니다.");
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>종목</th><th>날짜</th><th>필드</th><th>Providers</th><th>값 / 누락</th><th class="numeric">차이</th><th class="numeric">한도</th></tr></thead>
+      <thead><tr><th>종목</th><th>종목명</th><th>날짜</th><th>필드</th><th>Providers</th><th>값 / 누락</th><th class="numeric">차이</th><th class="numeric">한도</th></tr></thead>
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>

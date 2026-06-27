@@ -29,12 +29,13 @@ function renderApprovalAuditHistoryPanel(history) {
         <span class="muted">${rows.length}건</span>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>일시</th><th>실행 ID</th><th>종목</th><th>행동</th><th>추천 상태</th><th>결정</th><th>의사결정 사유</th></tr></thead>
+        <thead><tr><th>일시</th><th>실행 ID</th><th>종목</th><th>종목명</th><th>행동</th><th>추천 상태</th><th>결정</th><th>의사결정 사유</th></tr></thead>
         <tbody>${rows.map((row) => `
           <tr>
             <td>${formatDate(row.timestamp)}</td>
             <td class="code">${escapeHtml(row.run_id)}</td>
             <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+            <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
             <td>${escapeHtml(row.action)}</td>
             <td>${statusBadge(row.recommendation_verdict)}</td>
             <td>${statusBadge(row.user_decision === "approve" ? "success" : row.user_decision === "hold" ? "warning" : "not_evaluated", row.user_decision === "approve" ? "승인" : row.user_decision === "hold" ? "보류" : "무시")}</td>
@@ -144,7 +145,7 @@ function renderSignalDetailTable(rows) {
   const runId = state.signals?.run_id || state.runId;
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>종목</th><th>상태</th><th>행동</th><th>전략</th><th class="numeric">점수</th><th class="numeric">진입가</th><th class="numeric">손절가</th><th class="numeric">목표가</th><th class="numeric">승인 비중</th><th>유동성</th><th>데이터</th><th>Reason code</th><th>의사결정</th></tr></thead>
+      <thead><tr><th>종목</th><th>종목명</th><th>상태</th><th>행동</th><th>전략</th><th class="numeric">점수</th><th class="numeric">진입가</th><th class="numeric">손절가</th><th class="numeric">목표가</th><th class="numeric">승인 비중</th><th>유동성</th><th>데이터</th><th>Reason code</th><th>의사결정</th></tr></thead>
       <tbody>${rows.map((row) => {
         const decision = findLastDecision(runId, row.ticker, row.action);
         let decisionHtml = "";
@@ -170,6 +171,7 @@ function renderSignalDetailTable(rows) {
         return `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
           <td>${statusBadge(row.status)}</td>
           <td>${escapeHtml(row.action || "-")}</td>
           <td>${escapeHtml(row.strategy || "-")}</td>
@@ -191,10 +193,11 @@ function renderTraderSignalLadder(rows) {
   if (!rows?.length) return emptyTable("No signal rows found.", "Run-local signals are required before Trader Lens can score reward/risk.");
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>Ticker</th><th>Status</th><th class="numeric">R/R</th><th class="numeric">Risk</th><th class="numeric">Reward</th><th class="numeric">Entry</th><th class="numeric">Stop</th><th class="numeric">Target</th><th>Data</th><th>Reason code</th></tr></thead>
+      <thead><tr><th>Ticker</th><th>종목명</th><th>Status</th><th class="numeric">R/R</th><th class="numeric">Risk</th><th class="numeric">Reward</th><th class="numeric">Entry</th><th class="numeric">Stop</th><th class="numeric">Target</th><th>Data</th><th>Reason code</th></tr></thead>
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
           <td>${statusBadge(row.review_priority || row.status)}</td>
           <td class="numeric"><strong>${row.reward_to_risk == null ? "-" : `${formatNumber(row.reward_to_risk, 2)}R`}</strong></td>
           <td class="numeric">${formatPercent(row.risk_pct, 2)}</td>
@@ -212,11 +215,12 @@ function renderProviderTrustMap(rows) {
   if (!rows?.length) return emptyTable("No provider trust rows.", "Data source artifacts are missing or provider comparison has not run.");
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>Provider</th><th>Ticker</th><th>Status</th><th class="numeric">Rows</th><th class="numeric">Mismatches</th><th>Dates</th><th>Hash</th><th>Error</th></tr></thead>
+      <thead><tr><th>Provider</th><th>Ticker</th><th>종목명</th><th>Status</th><th class="numeric">Rows</th><th class="numeric">Mismatches</th><th>Dates</th><th>Hash</th><th>Error</th></tr></thead>
       <tbody>${rows.map((row) => `
         <tr>
           <td><span class="provider-chip">${escapeHtml(row.provider || "-")}</span></td>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
           <td>${statusBadge(row.status)}</td>
           <td class="numeric">${formatNumber(row.rows, 0)}</td>
           <td class="numeric">${formatNumber(row.mismatch_count, 0)}</td>

@@ -100,6 +100,13 @@ function renderTicker(ticker) {
   return `<span class="ticker-tooltip-trigger" data-ticker="${escapeHtml(cleanTicker)}" data-desc="${escapeHtml(desc)}">${escapeHtml(ticker)}</span>`;
 }
 
+function getStockName(ticker) {
+  if (!ticker) return "-";
+  const cleanTicker = String(ticker).trim().toUpperCase();
+  const baseTicker = cleanTicker.split(".")[0];
+  return TOSS_TICKER_NAMES[baseTicker] || TOSS_TICKER_NAMES[cleanTicker] || cleanTicker;
+}
+
 function statusClass(status) {
   return String(status || "not_evaluated").replaceAll("_", "-");
 }

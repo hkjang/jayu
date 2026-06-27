@@ -139,7 +139,7 @@ function renderTossOrderHistoryPanel(orders) {
           <table class="compact-table">
             <thead>
               <tr>
-                <th>주문시각</th><th>종목</th><th>방향</th><th>상태</th><th style="text-align:right;">금액</th><th style="text-align:right;">상세</th>
+                <th>주문시각</th><th>종목</th><th>종목명</th><th>방향</th><th>상태</th><th style="text-align:right;">금액</th><th style="text-align:right;">상세</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -1359,7 +1359,7 @@ function renderInvestorCoach() {
           <thead>
             <tr>
               <th>작성일시</th>
-              <th>종목</th>
+              <th>종목</th><th>종목명</th>
               <th>의사결정</th>
               <th class="numeric">결정 시가</th>
               <th class="numeric">5일 후 성과</th>

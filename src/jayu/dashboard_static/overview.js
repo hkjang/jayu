@@ -666,10 +666,11 @@ function renderSignalTable(rows) {
   if (!rows?.length) return emptyTable("생성된 신호가 없습니다.", "선택한 run에는 signal artifact가 없습니다.");
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>종목</th><th>상태</th><th>행동</th><th>전략</th><th class="numeric">점수</th><th class="numeric">진입가</th><th>데이터</th><th>Reason code</th></tr></thead>
+      <thead><tr><th>종목</th><th>종목명</th><th>상태</th><th>행동</th><th>전략</th><th class="numeric">점수</th><th class="numeric">진입가</th><th>데이터</th><th>Reason code</th></tr></thead>
       <tbody>${rows.map((row) => `
         <tr>
           <td class="ticker-cell">${renderTicker(row.ticker)}</td>
+          <td><span style="font-size:11.5px;color:var(--muted);">${escapeHtml(getStockName(row.ticker))}</span></td>
           <td>${statusBadge(row.status)}</td>
           <td>${escapeHtml(row.action || "-")}</td>
           <td>${escapeHtml(row.strategy || "-")}</td>
