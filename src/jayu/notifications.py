@@ -77,19 +77,20 @@ class KakaoNotifier:
         )
         self._secure_token_file()
 
-    def _request(self, message: str) -> requests.Response:
+    def _request(self, message: str, link_url: str | None = None) -> requests.Response:
         if (
             not self.access_token
             or any(ord(char) > 127 for char in self.access_token)
             or "YOUR_" in self.access_token.upper()
         ):
             raise RuntimeError("Kakao access token is not configured")
+        web_url = link_url or "https://finance.naver.com"
         template = {
             "object_type": "text",
             "text": message,
             "link": {
-                "web_url": "https://finance.naver.com",
-                "mobile_web_url": "https://finance.naver.com",
+                "web_url": web_url,
+                "mobile_web_url": web_url,
             },
         }
         return requests.post(
@@ -102,13 +103,13 @@ class KakaoNotifier:
             timeout=15,
         )
 
-    def send(self, message: str) -> dict[str, Any]:
+    def send(self, message: str, link_url: str | None = None) -> dict[str, Any]:
         message = _limit_message(message, self.settings.notification_message_limit)
         refreshed = False
         failures: list[str] = []
         for attempt in range(1, self.settings.notification_retries + 1):
             try:
-                response = self._request(message)
+                response = self._request(message, link_url=link_url)
             except Exception as exc:
                 failures.append(f"{type(exc).__name__}: {exc}")
                 if isinstance(exc, requests.RequestException) and (

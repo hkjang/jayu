@@ -23,6 +23,20 @@
 ├── 📄 requirements.txt          ← 파이썬 가상환경 의존성 패키지 목록
 ├── 📄 .gitignore                ← API 키 및 로컬 상태 파일 보안용 Git 제외 리스트
 │
+├── 📂 docs/
+│   └── 📄 agent_platform.md     ← [최신] 투자 에이전트 플랫폼 상세 설계 및 운용 가이드
+│
+├── 📂 src/jayu/
+│   ├── 🐍 broker_interface.py    ← 다중 브로커 표준 인터페이스 및 Toss read-only 어댑터
+│   ├── 🐍 strategy_dsl.py       ← YAML 기반 선언적 트레이딩 전략 DSL 파서
+│   ├── 🐍 strategy_card_registry.py ← 전략 속성 및 성과 카드 레지스트리
+│   ├── 🐍 local_knowledge_index.py ← 로컬 문서 및 산출물 RAG (지식 색인/검색)
+│   ├── 🐍 llm_explainer.py      ← AI / Rule-based 이중 결합 한국어 설명 레이어
+│   ├── 🐍 notebook_export.py     ← 실행 결과 주피터 노트북(.ipynb) 내보내기 엔진
+│   ├── 🐍 notification_deeplink.py ← 알림톡 원클릭 이동용 SPA 앵커 링크 구성 모듈
+│   ├── 🐍 jayu_mcp_server.py    ← 외부 AI 에이전트 연동용 Model Context Protocol 서버
+│   └── 🐍 agent_mode.py         ← 터미널 자연어(한글) 지시 실행 계획 수립 및 집행 에이전트
+│
 ├── 🐍 danta_simulation.py       ← 시스템 핵심. 자율 진화 및 백테스팅 통합 엔진
 ├── 🐍 test_simulation.py        ← 엔진 안정성을 보증하는 15대 통합 유닛 테스트 스위트
 ├── 🐍 stock_kakao.py            ← 매일 주가 지수 + 뉴스 카톡 전송

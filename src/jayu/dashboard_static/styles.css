@@ -128,23 +128,84 @@ a:focus-visible {
 }
 
 .nav-list {
+  flex: 1;
+  overflow-y: auto;
   display: grid;
-  gap: 4px;
+  gap: 8px;
   margin-top: 18px;
+  padding-right: 2px;
+}
+
+.nav-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.nav-list::-webkit-scrollbar-thumb {
+  background: #2c3948;
+  border-radius: 2px;
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.nav-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #8f9cab;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: left;
+}
+
+.nav-group-header:hover {
+  color: #fff;
+}
+
+.nav-group-chevron {
+  font-size: 8px;
+  transition: transform 0.2s ease;
+  color: #5d6e80;
+}
+
+.nav-group.is-collapsed .nav-group-content {
+  display: none;
+}
+
+.nav-group.is-collapsed .nav-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.nav-group-content {
+  display: grid;
+  gap: 3px;
+  padding-left: 6px;
+  margin-top: 4px;
+  border-left: 1px solid #222e3b;
 }
 
 .nav-item {
   display: grid;
-  grid-template-columns: 30px 1fr;
+  grid-template-columns: 24px 1fr;
   align-items: center;
   width: 100%;
-  padding: 9px 10px;
+  padding: 7px 8px;
   color: #cbd3dc;
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
   cursor: pointer;
+  font-size: 12.5px;
 }
 
 .nav-item:hover {
@@ -159,8 +220,8 @@ a:focus-visible {
 }
 
 .nav-index {
-  color: #8f9cab;
-  font-size: 11px;
+  color: #5d6e80;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 

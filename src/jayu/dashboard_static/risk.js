@@ -49,6 +49,7 @@ function renderRisk() {
     <section class="panel" style="margin-top: 1.5rem;">
       ${renderStrategyRiskBudgets(state.strategyBudgets)}
     </section>
+    <section class="panel" id="strategy-cards-section" style="margin-top: 1.5rem;"></section>
   `;
 }
 
@@ -155,4 +156,99 @@ function renderStrategyRiskBudgets(budgetsData) {
       </div>
     </div>
   `;
+}
+
+async function loadAndRenderStrategyCards() {
+  const container = document.querySelector("#strategy-cards-section");
+  if (!container) return;
+
+  container.innerHTML = `
+    <div class="panel-header">
+      <div>
+        <h2 style="color: #60a5fa; font-size: 1.2rem; margin:0;">🎴 전략 카드 마켓 (Strategy Cards Registry)</h2>
+        <p style="margin: 4px 0 0 0; font-size: 0.9rem; color: #94a3b8;">
+          등록된 핵심 투자 전략의 성격과 운용 적합국면, 성과 지표를 카드 구조로 시각화하여 간편하게 비교/검토합니다.
+        </p>
+      </div>
+      <span class="status-label status-success" style="font-size:0.75rem;">자율 전략 비교</span>
+    </div>
+    <div class="panel-body" style="padding-top: 1rem;">
+      <div style="text-align: center; padding: 1.5rem; color: #94a3b8;">전략 카드를 불러오는 중...</div>
+    </div>
+  `;
+
+  try {
+    const response = await fetch("/api/v1/strategies/cards");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    const cards = data.cards || [];
+
+    if (!cards.length) {
+      container.querySelector(".panel-body").innerHTML = `
+        <div style="text-align: center; padding: 1.5rem; color: #94a3b8;">등록된 전략 카드가 없습니다.</div>
+      `;
+      return;
+    }
+
+    const cardsHtml = cards.map(c => {
+      const perf = c.recent_performance || {};
+      const forbiddenRegimesHtml = (c.forbidden_market_regimes || [])
+        .map(r => `<span class="status-badge" style="background:#fecaca; color:#b91c1c; border:1px solid #fca5a5; font-size:0.75rem; margin-right:0.3rem;">${r.toUpperCase()} 금지</span>`)
+        .join("");
+      
+      return `
+        <div style="border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; background: var(--neutral-bg, #f8fafc); display: flex; flex-direction: column; justify-content: space-between; gap: 0.8rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: transform 0.2s, box-shadow 0.2s;">
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+              <span class="status-badge" style="background:#dbeafe; color:#1e40af; border:1px solid #bfdbfe; font-size:0.75rem; font-weight:bold;">${escapeHtml(c.type)}</span>
+              <span style="font-size: 0.8rem; color:#94a3b8; font-family: monospace;">ID: ${escapeHtml(c.strategy_id)}</span>
+            </div>
+            <h3 style="font-size: 1.1rem; margin: 0 0 0.6rem 0; color: var(--text); font-weight: bold;">${escapeHtml(c.name)}</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0; line-height: 1.5; height: 4.5rem; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;">
+              ${escapeHtml(c.investment_objective)}
+            </p>
+          </div>
+
+          <div style="border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 0.6rem 0; display: flex; justify-content: space-between; font-size: 0.8rem;">
+            <div>
+              <span style="display:block; color:#94a3b8; font-size:0.7rem; margin-bottom:2px;">Sharpe Ratio</span>
+              <strong style="color: #60a5fa; font-size:1rem;">${perf.sharpe_ratio || "N/A"}</strong>
+            </div>
+            <div>
+              <span style="display:block; color:#94a3b8; font-size:0.7rem; margin-bottom:2px;">최대 낙폭 (MDD)</span>
+              <strong style="color: #f87171; font-size:1rem;">${perf.mdd_pct ? `${perf.mdd_pct}%` : "N/A"}</strong>
+            </div>
+            <div>
+              <span style="display:block; color:#94a3b8; font-size:0.7rem; margin-bottom:2px;">평균 승률</span>
+              <strong style="color: #34d399; font-size:1rem;">${perf.win_rate_pct ? `${perf.win_rate_pct}%` : "N/A"}</strong>
+            </div>
+          </div>
+
+          <div style="font-size: 0.8rem;">
+            <div style="margin-bottom: 0.4rem;">
+              <span class="muted">🎯 적합 포트폴리오:</span>
+              <strong style="color: var(--text);">${escapeHtml(c.suitable_portfolio_type.toUpperCase())}</strong>
+            </div>
+            <div style="margin-bottom: 0.4rem; display: flex; align-items: center; flex-wrap: wrap;">
+              <span class="muted" style="margin-right:0.3rem;">🚫 제한 국면:</span>
+              ${forbiddenRegimesHtml || "<span style='color:#34d399;'>없음</span>"}
+            </div>
+            <div style="color: #94a3b8; font-size: 0.75rem; line-height: 1.4; margin-top: 0.4rem; font-style: italic;">
+              * 위험: ${escapeHtml(c.risk_description)}
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    container.querySelector(".panel-body").innerHTML = `
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.2rem;">
+        ${cardsHtml}
+      </div>
+    `;
+  } catch (e) {
+    container.querySelector(".panel-body").innerHTML = `
+      <div style="text-align: center; padding: 1.5rem; color: #f87171;">전략 카드를 불러오지 못했습니다: ${escapeHtml(e.message)}</div>
+    `;
+  }
 }

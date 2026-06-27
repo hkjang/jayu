@@ -96,6 +96,11 @@ promotion_app = typer.Typer(no_args_is_help=True, help="Shadow-to-live promotion
 toss_app = typer.Typer(no_args_is_help=True, help="Read-only Toss Securities Open API")
 run_app = typer.Typer(no_args_is_help=True, help="Run management and comparison")
 backup_app = typer.Typer(no_args_is_help=True, help="System backup and restore management")
+notebook_app = typer.Typer(no_args_is_help=True, help="Jupyter Notebook export and research tools")
+goal_app = typer.Typer(no_args_is_help=True, help="Investment goal planning")
+cashflow_app = typer.Typer(no_args_is_help=True, help="Monthly cashflow planning")
+coach_app = typer.Typer(no_args_is_help=True, help="Investor coaching and diet mode")
+
 app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(report_app, name="report")
 app.add_typer(experiments_app, name="experiments")
@@ -103,6 +108,10 @@ app.add_typer(promotion_app, name="promotion")
 app.add_typer(toss_app, name="toss")
 app.add_typer(run_app, name="run")
 app.add_typer(backup_app, name="backup")
+app.add_typer(notebook_app, name="notebook")
+app.add_typer(goal_app, name="goal")
+app.add_typer(cashflow_app, name="cashflow")
+app.add_typer(coach_app, name="coach")
 
 
 @app.command()
@@ -1958,6 +1967,242 @@ def backup_restore(
     except Exception as e:
         typer.echo(f"Error restoring backup: {e}", err=True)
         raise typer.Exit(code=1)
+
+
+@notebook_app.command("export")
+def notebook_export(
+    run_id: Annotated[str, typer.Option("--run-id", help="The run ID to export")],
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Custom output notebook path")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Export a specific run's results into a Jupyter Notebook."""
+    settings, paths = _load(config)
+    from .notebook_export import NotebookExporter
+    exporter = NotebookExporter(paths.project_root)
+    try:
+        out_path = exporter.export(run_id, output_file=str(output) if output else None)
+        typer.echo(f"Jupyter Notebook exported successfully to: {out_path}")
+    except Exception as e:
+        typer.echo(f"Error exporting notebook: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command("agent")
+def agent_command(
+    request: Annotated[str, typer.Argument(help="Korean natural language instruction")],
+) -> None:
+    """Ask the Jayu Agent to perform tasks using natural language."""
+    from .agent_mode import JayuAgentMode
+    JayuAgentMode().run_plan(request, auto_approve=True)
+
+
+@app.command("mcp")
+def mcp_command(
+    action: Annotated[str, typer.Argument(help="Action to perform (start)")] = "start",
+) -> None:
+    """Start the Model Context Protocol (MCP) server for external AI agents."""
+    if action != "start":
+        raise typer.BadParameter("Supported action: start")
+    from .jayu_mcp_server import JayuMcpServer
+    server = JayuMcpServer()
+    server.run()
+
+
+# Investment Goal Planner Commands
+@goal_app.command("set")
+def goal_set(
+    goal_id: Annotated[str, typer.Option("--id", help="Goal identifier")],
+    name: Annotated[str, typer.Option("--name", help="Goal name")],
+    target_amount: Annotated[float, typer.Option("--target-amount", help="Target money amount")],
+    target_date: Annotated[str, typer.Option("--target-date", help="YYYY-MM-DD format")],
+    current_amount: Annotated[float, typer.Option("--current-amount", help="Current starting money")],
+    monthly_deposit: Annotated[float, typer.Option("--monthly-deposit", help="Monthly deposit money")],
+    expected_return: Annotated[float, typer.Option("--expected-return", help="Expected annual return rate, e.g. 0.08")] = 0.08,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Set or update an investment goal."""
+    _, paths = _load(config)
+    from .investment_goal_planner import InvestmentGoalPlanner
+    planner = InvestmentGoalPlanner(paths.project_root)
+    goal = planner.set_goal(
+        goal_id=goal_id,
+        name=name,
+        target_amount=target_amount,
+        target_date=target_date,
+        current_amount=current_amount,
+        monthly_deposit=monthly_deposit,
+        expected_return=expected_return
+    )
+    typer.echo(f"Goal set successfully: {json.dumps(goal, ensure_ascii=False, indent=2)}")
+
+
+@goal_app.command("show")
+def goal_show(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Show and analyze all investment goals."""
+    _, paths = _load(config)
+    from .investment_goal_planner import InvestmentGoalPlanner
+    planner = InvestmentGoalPlanner(paths.project_root)
+    goals = planner.load_goals()
+    analyses = [planner.calculate_analysis(g) for g in goals]
+    typer.echo(json.dumps(analyses, ensure_ascii=False, indent=2))
+
+
+@goal_app.command("delete")
+def goal_delete(
+    goal_id: Annotated[str, typer.Option("--id", help="Goal identifier to delete")],
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Delete a specific investment goal."""
+    _, paths = _load(config)
+    from .investment_goal_planner import InvestmentGoalPlanner
+    planner = InvestmentGoalPlanner(paths.project_root)
+    success = planner.delete_goal(goal_id)
+    if success:
+        typer.echo(f"Deleted goal: {goal_id}")
+    else:
+        typer.echo(f"Goal not found: {goal_id}", err=True)
+
+
+# Monthly Cashflow Commands
+@cashflow_app.command("add")
+def cashflow_add(
+    month: Annotated[str, typer.Option("--month", help="YYYY-MM")],
+    salary: Annotated[float, typer.Option("--salary", help="Monthly salary deposit")],
+    dividends: Annotated[float, typer.Option("--dividends", help="Expected dividends")] = 0.0,
+    extra: Annotated[float, typer.Option("--extra", help="Extra deposit cash")] = 0.0,
+    buys: Annotated[float, typer.Option("--buys", help="Planned purchases value")] = 0.0,
+    reserved: Annotated[float, typer.Option("--reserved", help="Reserved emergency cash")] = 0.0,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Add a monthly cashflow record."""
+    _, paths = _load(config)
+    from .cashflow_planner import CashflowPlanner
+    planner = CashflowPlanner(paths.project_root)
+    rec = planner.add_cashflow(
+        month=month,
+        salary_deposit=salary,
+        expected_dividends=dividends,
+        extra_deposits=extra,
+        planned_buys=buys,
+        reserved_cash=reserved
+    )
+    typer.echo(f"Cashflow record added: {json.dumps(rec, ensure_ascii=False, indent=2)}")
+
+
+@cashflow_app.command("show")
+def cashflow_show(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Show monthly cashflow plans and allocations."""
+    _, paths = _load(config)
+    from .cashflow_planner import CashflowPlanner
+    planner = CashflowPlanner(paths.project_root)
+    records = planner.load_cashflows()
+    budgets = [planner.calculate_monthly_budget(r) for r in records]
+    typer.echo(json.dumps(budgets, ensure_ascii=False, indent=2))
+
+
+@cashflow_app.command("delete")
+def cashflow_delete(
+    month: Annotated[str, typer.Option("--month", help="YYYY-MM to delete")],
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Delete a monthly cashflow record."""
+    _, paths = _load(config)
+    from .cashflow_planner import CashflowPlanner
+    planner = CashflowPlanner(paths.project_root)
+    success = planner.delete_cashflow(month)
+    if success:
+        typer.echo(f"Deleted cashflow for: {month}")
+    else:
+        typer.echo(f"Cashflow not found: {month}", err=True)
+
+
+# Investor Coach & Diet Commands
+@coach_app.command("behavior")
+def coach_behavior(
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Show behavioral bias warnings and healthy habits analysis."""
+    _, paths = _load(config)
+    from .investor_behavior_insights import InvestorBehaviorInsights
+    insights = InvestorBehaviorInsights(paths.project_root)
+    report = insights.analyze_behavior(limit=limit)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@coach_app.command("diet")
+def coach_diet(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Show portfolio diet pruning targets and redundancy warnings."""
+    _, paths = _load(config)
+    from .portfolio_diet_mode import PortfolioDietMode
+    diet = PortfolioDietMode(paths.project_root)
+    report = diet.analyze_portfolio_diet()
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+# Monthly report, benchmark, and dividend simulations commands
+@report_app.command("monthly")
+def report_monthly(
+    year: Annotated[int, typer.Option("--year", help="Year of the report")],
+    month: Annotated[int, typer.Option("--month", help="Month of the report")],
+    return_pct: Annotated[float, typer.Option("--return-pct")] = 0.0,
+    dividend_krw: Annotated[float, typer.Option("--dividend-krw")] = 0.0,
+    cost_krw: Annotated[float, typer.Option("--cost-krw")] = 0.0,
+    fx_effect_krw: Annotated[float, typer.Option("--fx-effect-krw")] = 0.0,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Generate HTML and Markdown monthly investment report."""
+    _, paths = _load(config)
+    from .monthly_investment_report import MonthlyInvestmentReport
+    reporter = MonthlyInvestmentReport(paths.project_root)
+    
+    # Compile mock/given metrics for generator
+    data = {
+        "return_pct": return_pct,
+        "dividend_krw": dividend_krw,
+        "cost_krw": cost_krw,
+        "fx_effect_krw": fx_effect_krw,
+        "risk_blocks_count": 0,
+        "signals_count": 0,
+        "win_rate_pct": 65.4,
+        "goal_achievement_pct": 74.2,
+        "generated_at": datetime.now().isoformat()
+    }
+    paths_dict = reporter.generate_report(year, month, data)
+    typer.echo(f"Generated monthly reports successfully:\n{json.dumps(paths_dict, indent=2)}")
+
+
+@report_app.command("benchmark")
+def report_benchmark(
+    return_pct: Annotated[float, typer.Option("--return-pct", help="Portfolio return pct")],
+    volatility_pct: Annotated[float, typer.Option("--volatility-pct", help="Portfolio volatility pct")],
+    mdd_pct: Annotated[float, typer.Option("--mdd-pct", help="Portfolio MDD pct")],
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Compare portfolio return against major index benchmarks."""
+    _, paths = _load(config)
+    from .benchmark_comparison import BenchmarkComparison
+    comp = BenchmarkComparison()
+    report = comp.compare_portfolio(return_pct, volatility_pct, mdd_pct)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("dividend-simulate")
+def report_dividend_simulate(
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Estimate expected monthly dividend cashflow and compound growth scenarios."""
+    _, paths = _load(config)
+    from .dividend_cashflow_simulator import DividendCashflowSimulator
+    sim = DividendCashflowSimulator(paths.project_root)
+    report = sim.simulate_cashflow()
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

@@ -161,6 +161,11 @@ const PAGE_DATA_SOURCES = {
   autotrading: ["autotrading safety gates", "operational run lock", "Toss API config"],
   "simulation-log": ["cli execute simulate", "events.jsonl", "VIX & Index benchmark"],
   "run-history": ["run_evidence.json", "api list runs", "manifest.json", "safety_verdict.json", "risk_explanation.json", "events.jsonl per run_id"],
+  "goal-planner": ["state/investment_goals.json", "investment_goal_planner.py"],
+  "cashflow": ["state/cashflows.json", "cashflow_planner.py"],
+  "dividend-sim": ["toss_portfolio.csv", "dividend_cashflow_simulator.py"],
+  "investor-coach": ["state/user_approval_audit.jsonl", "investor_behavior_insights.py", "portfolio_diet_mode.py"],
+  "invest-calendar": ["investment_calendar.py", "preset_events", "FRED economic series"],
 };
 
 const METRIC_DATA_SOURCE_BY_PAGE = {
@@ -287,6 +292,41 @@ const METRIC_DATA_SOURCE_BY_PAGE = {
     "누락 증거": "run_evidence.json · filesystem existence checks",
     "경고 증거": "run_evidence.json · warning artifacts",
     __default: "runs/*/manifest.json",
+  },
+  "goal-planner": {
+    "목표 수": "state/investment_goals.json",
+    "총 목표금액": "state/investment_goals.json",
+    "현재 자산합": "state/investment_goals.json",
+    "평균 필요수익률": "investment_goal_planner.py",
+    __default: "state/investment_goals.json",
+  },
+  "cashflow": {
+    "총 수입": "state/cashflows.json",
+    "총 지출": "state/cashflows.json",
+    "순 투자 가능액": "state/cashflows.json",
+    "배분 완료 예산": "cashflow_planner.py",
+    __default: "state/cashflows.json",
+  },
+  "dividend-sim": {
+    "월 예상 배당": "toss_portfolio.csv",
+    "연 예상 배당": "toss_portfolio.csv",
+    "배당 수익률": "dividend_cashflow_simulator.py",
+    "보유 배당주": "toss_portfolio.csv",
+    __default: "toss_portfolio.csv",
+  },
+  "investor-coach": {
+    "코칭 점수": "investor_behavior_insights.py",
+    "총 승인 거래": "state/user_approval_audit.jsonl",
+    "감지된 편향": "investor_behavior_insights.py",
+    "다이어트 종목": "portfolio_diet_mode.py",
+    __default: "state/user_approval_audit.jsonl",
+  },
+  "invest-calendar": {
+    "전체 일정": "investment_calendar.py",
+    "다가오는 일정": "investment_calendar.py",
+    "오늘 일정": "investment_calendar.py",
+    "배당 이벤트": "investment_calendar.py",
+    __default: "investment_calendar.py",
   },
 };
 

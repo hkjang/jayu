@@ -43,6 +43,16 @@ const state = {
   simulationLog: null,
   simulationStatus: "idle",
   permissionMode: "read_only",
+  // 개인 투자 관리
+  investmentGoals: null,
+  cashflows: null,
+  dividendSim: null,
+  behaviorInsights: null,
+  portfolioDiet: null,
+  investCalendar: null,
+  benchmarkComparison: null,
+  goalFormVisible: false,
+  cashflowFormVisible: false,
 };
 
 const els = {
@@ -110,7 +120,7 @@ async function api(path) {
   return response.json();
 }
 
-const RUN_CONTEXT_OPTIONAL_PAGES = new Set(["analysis", "portfolio-hub", "autotrading"]);
+const RUN_CONTEXT_OPTIONAL_PAGES = new Set(["analysis", "portfolio-hub", "autotrading", "goal-planner", "cashflow", "dividend-sim", "investor-coach", "invest-calendar"]);
 const TERMINAL_RUN_STATUSES = new Set(["success", "failed", "error", "cancelled", "canceled"]);
 
 function isCompletedRun(run) {
@@ -268,6 +278,22 @@ async function loadPage() {
       state.simulationLog = res.logs || "";
       state.simulationStatus = res.status || "idle";
     }
+    if (state.page === "goal-planner") {
+      try { state.investmentGoals = await api("/api/v1/investment-goals"); } catch(e) { state.investmentGoals = { goals: [] }; }
+    }
+    if (state.page === "cashflow") {
+      try { state.cashflows = await api("/api/v1/cashflows"); } catch(e) { state.cashflows = { entries: [], budget: {} }; }
+    }
+    if (state.page === "dividend-sim") {
+      try { state.dividendSim = await api("/api/v1/dividend-simulator"); } catch(e) { state.dividendSim = null; }
+    }
+    if (state.page === "investor-coach") {
+      try { state.behaviorInsights = await api("/api/v1/behavior-insights"); } catch(e) { state.behaviorInsights = null; }
+      try { state.portfolioDiet = await api("/api/v1/portfolio-diet"); } catch(e) { state.portfolioDiet = null; }
+    }
+    if (state.page === "invest-calendar") {
+      try { state.investCalendar = await api("/api/v1/investment-calendar"); } catch(e) { state.investCalendar = null; }
+    }
     if (state.page === "toss-account") {
       const params = new URLSearchParams();
       if (state.selectedTossAccount) params.set("account", state.selectedTossAccount);
@@ -346,13 +372,21 @@ function pageTitle(page) {
     autotrading: "자동매매 준비",
     "simulation-log": "시뮬레이션 로그",
     "run-history": "실행 이력 & 로그",
+    "goal-planner": "투자 목표 & 계획",
+    cashflow: "현금흐름 배분",
+    "dividend-sim": "배당 시뮬레이션",
+    "investor-coach": "투자 코치 & 다이어트",
+    "invest-calendar": "투자 캘린더",
   }[page] || page;
 }
 
 function render() {
   els.root.hidden = false;
   if (state.page === "data-quality") renderDataQuality();
-  else if (state.page === "risk") renderRisk();
+  else if (state.page === "risk") {
+    renderRisk();
+    loadAndRenderStrategyCards();
+  }
   else if (state.page === "signals") renderSignals();
   else if (state.page === "trader-lens") renderTraderLens();
   else if (state.page === "promotion") renderPromotion();
@@ -365,6 +399,12 @@ function render() {
   else if (state.page === "autotrading") renderAutotrading();
   else if (state.page === "simulation-log") renderSimulationLog();
   else if (state.page === "run-history") renderRunHistory();
+  else if (state.page === "ask-jayu") renderAskJayu();
+  else if (state.page === "goal-planner") renderGoalPlanner();
+  else if (state.page === "cashflow") renderCashflow();
+  else if (state.page === "dividend-sim") renderDividendSim();
+  else if (state.page === "investor-coach") renderInvestorCoach();
+  else if (state.page === "invest-calendar") renderInvestCalendar();
   else renderOverview();
   bindPageActions();
 }
@@ -1057,14 +1097,30 @@ function setupApiMonitoringRefreshTimer() {
 }
 
 function navigate(page) {
-  if (!["overview", "data-quality", "risk", "signals", "trader-lens", "promotion", "settings", "toss-account", "toss", "api-monitoring", "analysis", "portfolio-hub", "autotrading", "simulation-log", "run-history"].includes(page)) return;
+  if (![
+    "overview", "data-quality", "risk", "signals", "trader-lens", "promotion",
+    "settings", "toss-account", "toss", "api-monitoring", "analysis",
+    "portfolio-hub", "autotrading", "simulation-log", "run-history", "ask-jayu",
+    "goal-planner", "cashflow", "dividend-sim", "investor-coach", "invest-calendar"
+  ].includes(page)) return;
   clearApiMonitoringRefreshTimer();
   state.page = page;
   localStorage.setItem("jayu.dashboard.activePage", page);
   document.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("is-active", item.dataset.page === page);
   });
+  expandActiveNavGroup();
   loadPage();
+}
+
+function expandActiveNavGroup() {
+  const activeItem = document.querySelector(`.nav-item[data-page="${state.page}"]`);
+  if (activeItem) {
+    const activeGroup = activeItem.closest(".nav-group");
+    if (activeGroup) {
+      activeGroup.classList.remove("is-collapsed");
+    }
+  }
 }
 
 document.querySelectorAll(".nav-item").forEach((item) => {
@@ -1159,9 +1215,199 @@ if (els.permissionModeSelector) {
   });
 }
 
+function renderAskJayu() {
+  els.root.innerHTML = `
+    <div class="page-heading">
+      <div>
+        <h1>Ask Jayu (AI 자연어 질의 & RAG 센터)</h1>
+        <p>프로젝트 문서, 실시간 신호 결과, 일별 리스크 심사 보고서를 검색하여 한국어 근거 기반 답변을 얻습니다.</p>
+      </div>
+    </div>
+    
+    <div class="grid-2col" style="display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-top: 1.5rem;">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>💬 AI 자연어 질의 (Local RAG)</h2>
+        </div>
+        <div class="panel-body" style="padding-top: 1rem;">
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+            <input type="text" id="rag-query" placeholder="예: 어제 SOXL이 왜 리스크 게이트에서 차단되었어?" 
+                   style="flex: 1; padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; background: var(--surface); color: var(--text);">
+            <button class="button button-primary" id="btn-ask-rag" type="button">질문하기</button>
+          </div>
+          
+          <div id="rag-response-container" style="background: var(--neutral-bg, #f8fafc); border: 1px solid var(--border); border-radius: 6px; padding: 1.2rem; min-height: 200px; display: flex; flex-direction: column;">
+            <span class="muted" style="margin: auto; text-align: center;">여기에 질문을 입력하고 질문하기 버튼을 클릭해 주세요.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>📊 대화형 시나리오 스트레스 테스터</h2>
+        </div>
+        <div class="panel-body" style="padding-top: 1rem; display: flex; flex-direction: column; gap: 1.2rem;">
+          <div>
+            <label for="slider-fx" style="font-weight: bold; display: block; margin-bottom: 0.5rem;">💵 원/달러 환율 변동 (%)</label>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <input type="range" id="slider-fx" min="-10" max="10" value="0" step="0.5" style="flex: 1;">
+              <span id="val-fx" style="font-weight: bold; min-width: 3rem; text-align: right;">0.0%</span>
+            </div>
+          </div>
+
+          <div>
+            <label for="slider-nasdaq" style="font-weight: bold; display: block; margin-bottom: 0.5rem;">📈 나스닥 100 지수 변동 (%)</label>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <input type="range" id="slider-nasdaq" min="-15" max="15" value="0" step="0.5" style="flex: 1;">
+              <span id="val-nasdaq" style="font-weight: bold; min-width: 3rem; text-align: right;">0.0%</span>
+            </div>
+          </div>
+
+          <div style="border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 0.5rem;">
+            <h3 style="font-size: 1rem; margin-bottom: 0.75rem;">🔮 가상 스트레스 시뮬레이션 결과</h3>
+            <div style="display: flex; flex-direction: column; gap: 0.6rem;">
+              <div style="display: flex; justify-content: space-between;">
+                <span class="muted">예상 포트폴리오 평가 영향액:</span>
+                <strong id="stress-portfolio-impact" style="color: var(--text);">0원 (0.00%)</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between;">
+                <span class="muted">리스크 경고 상태:</span>
+                <strong id="stress-risk-verdict" style="color: #10b981;">✅ 안전 (정상 범주)</strong>
+              </div>
+              <p style="font-size: 0.8rem; color: var(--muted); margin: 0; line-height: 1.4;">
+                * 설정된 원화/외화 현금 비중 및 자산 배분 비중을 기초로 연산된 가상 스트레스 테스트 결과입니다.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
+
+  const btnAsk = document.querySelector("#btn-ask-rag");
+  const inputQuery = document.querySelector("#rag-query");
+  const container = document.querySelector("#rag-response-container");
+
+  btnAsk.addEventListener("click", async () => {
+    const query = inputQuery.value.trim();
+    if (!query) return;
+
+    container.innerHTML = `
+      <div style="margin: auto; text-align: center; display: flex; flex-direction: column; gap: 0.5rem;">
+        <div class="loading-line" style="width: 200px; margin: auto;"></div>
+        <span class="muted">로컬 지식 베이스 검색 및 답변 생성 중...</span>
+      </div>
+    `;
+
+    try {
+      const response = await fetch("/api/v1/ask-jayu", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: query })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+
+      let formattedAnswer = escapeHtml(data.answer)
+        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+        .replace(/### (.*?)\n/g, "<h3 style='margin-top: 1rem; margin-bottom: 0.5rem;'>$1</h3>")
+        .replace(/`([^`]+)`/g, "<code style='background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 4px;'>$1</code>")
+        .replace(/\n/g, "<br>");
+
+      let sourcesHtml = "";
+      if (data.sources && data.sources.length) {
+        sourcesHtml = `
+          <div style="margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 0.8rem; font-size: 0.85rem;">
+            <strong class="muted" style="display: block; margin-bottom: 0.4rem;">🔗 근거 출처 문서:</strong>
+            ${data.sources.map(s => `<span class="status-badge" style="display: inline-block; margin-right: 0.4rem; background: var(--neutral-bg); border: 1px solid var(--border); padding: 2px 6px; border-radius: 4px; font-family: monospace;">${escapeHtml(s)}</span>`).join("")}
+          </div>
+        `;
+      }
+
+      container.innerHTML = `
+        <div style="font-size: 0.95rem; line-height: 1.6; color: var(--text); overflow-y: auto;">
+          ${formattedAnswer}
+        </div>
+        ${sourcesHtml}
+      `;
+    } catch (e) {
+      container.innerHTML = `
+        <span style="color: #ef4444; margin: auto; text-align: center;">답변 요청에 실패했습니다: ${escapeHtml(e.message)}</span>
+      `;
+    }
+  });
+
+  inputQuery.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      btnAsk.click();
+    }
+  });
+
+  const sliderFx = document.querySelector("#slider-fx");
+  const sliderNasdaq = document.querySelector("#slider-nasdaq");
+  const valFx = document.querySelector("#val-fx");
+  const valNasdaq = document.querySelector("#val-nasdaq");
+  const impactText = document.querySelector("#stress-portfolio-impact");
+  const riskVerdict = document.querySelector("#stress-risk-verdict");
+
+  const updateStress = () => {
+    const fx = parseFloat(sliderFx.value);
+    const nasdaq = parseFloat(sliderNasdaq.value);
+    
+    valFx.textContent = (fx >= 0 ? "+" : "") + fx.toFixed(1) + "%";
+    valNasdaq.textContent = (nasdaq >= 0 ? "+" : "") + nasdaq.toFixed(1) + "%";
+
+    const totalAsset = 100000000;
+    const foreignRatio = 0.60;
+    
+    const beta = 1.4; 
+    const foreignImpact = foreignRatio * (nasdaq * beta / 100);
+    const fxImpact = foreignRatio * (fx / 100) * (1 + nasdaq * beta / 100);
+    const totalImpactPct = foreignImpact + fxImpact;
+    const totalImpactKrw = totalAsset * totalImpactPct;
+
+    const formattedImpactKrw = Math.round(totalImpactKrw).toLocaleString() + "원";
+    const formattedImpactPct = (totalImpactPct >= 0 ? "+" : "") + (totalImpactPct * 100).toFixed(2) + "%";
+    
+    impactText.textContent = `${formattedImpactKrw} (${formattedImpactPct})`;
+    if (totalImpactPct >= 0) {
+      impactText.style.color = "#10b981";
+    } else {
+      impactText.style.color = "#ef4444";
+    }
+
+    if (totalImpactPct < -0.05) {
+      riskVerdict.innerHTML = "⚠️ 위험 (평가 손실 5% 초과 감지)";
+      riskVerdict.style.color = "#ef4444";
+    } else if (totalImpactPct < -0.02) {
+      riskVerdict.innerHTML = "🟡 주의 (손실 변동성 경보)";
+      riskVerdict.style.color = "#f59e0b";
+    } else {
+      riskVerdict.innerHTML = "✅ 안전 (정상 범주)";
+      riskVerdict.style.color = "#10b981";
+    }
+  };
+
+  sliderFx.addEventListener("input", updateStress);
+  sliderNasdaq.addEventListener("input", updateStress);
+  
+  updateStress();
+}
+
+// Bind collapsible navigation headers
+document.querySelectorAll(".nav-group-header").forEach((header) => {
+  header.addEventListener("click", () => {
+    const group = header.closest(".nav-group");
+    if (group) {
+      group.classList.toggle("is-collapsed");
+    }
+  });
+});
+
 // Initialize active sidebar menu item from state on load
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.classList.toggle("is-active", item.dataset.page === state.page);
 });
+expandActiveNavGroup();
 
 loadPage();

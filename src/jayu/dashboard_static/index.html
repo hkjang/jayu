@@ -19,51 +19,118 @@
           </div>
         </div>
         <nav class="nav-list">
-          <button class="nav-item is-active" data-page="overview" type="button">
-            <span class="nav-index">01</span><span>개요</span>
-          </button>
-          <button class="nav-item" data-page="data-quality" type="button">
-            <span class="nav-index">02</span><span>데이터 품질</span>
-          </button>
-          <button class="nav-item" data-page="risk" type="button">
-            <span class="nav-index">03</span><span>리스크 게이트</span>
-          </button>
-          <button class="nav-item" data-page="signals" type="button">
-            <span class="nav-index">04</span><span>신호</span>
-          </button>
-          <button class="nav-item" data-page="trader-lens" type="button">
-            <span class="nav-index">05</span><span>Trader Lens</span>
-          </button>
-          <button class="nav-item" data-page="promotion" type="button">
-            <span class="nav-index">06</span><span>Shadow 승격</span>
-          </button>
-          <button class="nav-item" data-page="settings" type="button">
-            <span class="nav-index">07</span><span>설정</span>
-          </button>
-          <button class="nav-item" data-page="toss-account" type="button">
-            <span class="nav-index">08</span><span>Toss Account</span>
-          </button>
-          <button class="nav-item" data-page="toss" type="button">
-            <span class="nav-index">09</span><span>Toss Market</span>
-          </button>
-          <button class="nav-item" data-page="api-monitoring" type="button">
-            <span class="nav-index">10</span><span>API 모니터링</span>
-          </button>
-          <button class="nav-item" data-page="analysis" type="button">
-            <span class="nav-index">11</span><span>주식 & 경제 분석</span>
-          </button>
-          <button class="nav-item" data-page="portfolio-hub" type="button">
-            <span class="nav-index">12</span><span>포트폴리오 허브</span>
-          </button>
-          <button class="nav-item" data-page="autotrading" type="button">
-            <span class="nav-index">13</span><span>자동매매 준비</span>
-          </button>
-          <button class="nav-item" data-page="simulation-log" type="button">
-            <span class="nav-index">14</span><span>시뮬레이션 로그</span>
-          </button>
-          <button class="nav-item" data-page="run-history" type="button">
-            <span class="nav-index">15</span><span>실행 이력 & 로그</span>
-          </button>
+          <!-- Group 1: 운용 현황 & 분석 -->
+          <div class="nav-group" data-group="ops">
+            <button class="nav-group-header" type="button">
+              <span>운영 현황 &amp; 분석</span>
+              <span class="nav-group-chevron">▼</span>
+            </button>
+            <div class="nav-group-content">
+              <button class="nav-item is-active" data-page="overview" type="button">
+                <span class="nav-index">01</span><span>개요</span>
+              </button>
+              <button class="nav-item" data-page="analysis" type="button">
+                <span class="nav-index">02</span><span>주식 &amp; 경제 분석</span>
+              </button>
+              <button class="nav-item" data-page="portfolio-hub" type="button">
+                <span class="nav-index">03</span><span>포트폴리오 허브</span>
+              </button>
+              <button class="nav-item" data-page="ask-jayu" type="button">
+                <span class="nav-index">04</span><span>Ask Jayu (AI)</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Group 2: 투자 실행 & 리스크 -->
+          <div class="nav-group" data-group="trading">
+            <button class="nav-group-header" type="button">
+              <span>투자 실행 &amp; 리스크</span>
+              <span class="nav-group-chevron">▼</span>
+            </button>
+            <div class="nav-group-content">
+              <button class="nav-item" data-page="risk" type="button">
+                <span class="nav-index">05</span><span>리스크 게이트</span>
+              </button>
+              <button class="nav-item" data-page="signals" type="button">
+                <span class="nav-index">06</span><span>신호</span>
+              </button>
+              <button class="nav-item" data-page="trader-lens" type="button">
+                <span class="nav-index">07</span><span>Trader Lens</span>
+              </button>
+              <button class="nav-item" data-page="promotion" type="button">
+                <span class="nav-index">08</span><span>Shadow 승격</span>
+              </button>
+              <button class="nav-item" data-page="autotrading" type="button">
+                <span class="nav-index">09</span><span>자동매매 준비</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Group 3: Toss 증권 연동 -->
+          <div class="nav-group" data-group="toss">
+            <button class="nav-group-header" type="button">
+              <span>Toss 증권 연동</span>
+              <span class="nav-group-chevron">▼</span>
+            </button>
+            <div class="nav-group-content">
+              <button class="nav-item" data-page="toss-account" type="button">
+                <span class="nav-index">10</span><span>Toss Account</span>
+              </button>
+              <button class="nav-item" data-page="toss" type="button">
+                <span class="nav-index">11</span><span>Toss Market</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Group 4: 개인 자산 & 재무 계획 -->
+          <div class="nav-group" data-group="personal">
+            <button class="nav-group-header" type="button">
+              <span>개인 자산 &amp; 재무 계획</span>
+              <span class="nav-group-chevron">▼</span>
+            </button>
+            <div class="nav-group-content">
+              <button class="nav-item" data-page="goal-planner" type="button">
+                <span class="nav-index">12</span><span>투자 목표 &amp; 계획</span>
+              </button>
+              <button class="nav-item" data-page="cashflow" type="button">
+                <span class="nav-index">13</span><span>현금흐름 배분</span>
+              </button>
+              <button class="nav-item" data-page="dividend-sim" type="button">
+                <span class="nav-index">14</span><span>배당 시뮬레이션</span>
+              </button>
+              <button class="nav-item" data-page="investor-coach" type="button">
+                <span class="nav-index">15</span><span>투자 코치 &amp; 다이어트</span>
+              </button>
+              <button class="nav-item" data-page="invest-calendar" type="button">
+                <span class="nav-index">16</span><span>투자 캘린더</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Group 5: 시스템 로그 & 설정 -->
+          <div class="nav-group" data-group="system">
+            <button class="nav-group-header" type="button">
+              <span>시스템 로그 &amp; 설정</span>
+              <span class="nav-group-chevron">▼</span>
+            </button>
+            <div class="nav-group-content">
+              <button class="nav-item" data-page="data-quality" type="button">
+                <span class="nav-index">17</span><span>데이터 품질</span>
+              </button>
+              <button class="nav-item" data-page="api-monitoring" type="button">
+                <span class="nav-index">18</span><span>API 모니터링</span>
+              </button>
+              <button class="nav-item" data-page="simulation-log" type="button">
+                <span class="nav-index">19</span><span>시뮬레이션 로그</span>
+              </button>
+              <button class="nav-item" data-page="run-history" type="button">
+                <span class="nav-index">20</span><span>실행 이력 &amp; 로그</span>
+              </button>
+              <button class="nav-item" data-page="settings" type="button">
+                <span class="nav-index">21</span><span>설정 검증</span>
+              </button>
+            </div>
+          </div>
         </nav>
         <div class="sidebar-note">
           <span>분석 보조 시스템</span>
@@ -140,6 +207,7 @@
     <script src="/autotrading.js" defer></script>
     <script src="/analysis.js" defer></script>
     <script src="/system.js" defer></script>
+    <script src="/personal_finance.js" defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

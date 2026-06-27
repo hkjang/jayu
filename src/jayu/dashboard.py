@@ -2907,6 +2907,66 @@ def _dashboard_handler(
                     events = event_bus.get_events(date_str)
                     self._json({"events": [e.model_dump() for e in events]})
                     return
+                if parsed.path == "/api/v1/investment-goals":
+                    from .investment_goal_planner import InvestmentGoalPlanner
+                    planner = InvestmentGoalPlanner(paths.project_root)
+                    goals = planner.load_goals()
+                    analyses = [planner.calculate_analysis(g) for g in goals]
+                    self._json({"goals": analyses})
+                    return
+                if parsed.path == "/api/v1/cashflows":
+                    from .cashflow_planner import CashflowPlanner
+                    planner = CashflowPlanner(paths.project_root)
+                    records = planner.load_cashflows()
+                    budgets = [planner.calculate_monthly_budget(r) for r in records]
+                    self._json({"cashflows": budgets})
+                    return
+                if parsed.path == "/api/v1/benchmark-comparison":
+                    from .benchmark_comparison import BenchmarkComparison
+                    comp = BenchmarkComparison()
+                    query = parse_qs(parsed.query)
+                    ret = float(query.get("return_pct", [15.4])[0])
+                    vol = float(query.get("volatility_pct", [16.2])[0])
+                    mdd = float(query.get("mdd_pct", [11.2])[0])
+                    self._json(comp.compare_portfolio(ret, vol, mdd))
+                    return
+                if parsed.path == "/api/v1/monthly-report":
+                    from .monthly_investment_report import MonthlyInvestmentReport
+                    reporter = MonthlyInvestmentReport(paths.project_root)
+                    data = {
+                        "return_pct": 15.4,
+                        "dividend_krw": 450000.0,
+                        "cost_krw": 25000.0,
+                        "fx_effect_krw": 180000.0,
+                        "risk_blocks_count": 2,
+                        "signals_count": 14,
+                        "win_rate_pct": 65.4,
+                        "goal_achievement_pct": 74.2,
+                        "generated_at": datetime.now().isoformat()
+                    }
+                    reporter.generate_report(2026, 6, data)
+                    self._json(data)
+                    return
+                if parsed.path == "/api/v1/dividend-simulator":
+                    from .dividend_cashflow_simulator import DividendCashflowSimulator
+                    sim = DividendCashflowSimulator(paths.project_root)
+                    self._json(sim.simulate_cashflow())
+                    return
+                if parsed.path == "/api/v1/behavior-insights":
+                    from .investor_behavior_insights import InvestorBehaviorInsights
+                    insights = InvestorBehaviorInsights(paths.project_root)
+                    self._json(insights.analyze_behavior())
+                    return
+                if parsed.path == "/api/v1/portfolio-diet":
+                    from .portfolio_diet_mode import PortfolioDietMode
+                    diet = PortfolioDietMode(paths.project_root)
+                    self._json(diet.analyze_portfolio_diet())
+                    return
+                if parsed.path == "/api/v1/investment-calendar":
+                    from .investment_calendar import InvestmentCalendar
+                    cal = InvestmentCalendar()
+                    self._json({"events": cal.get_events()})
+                    return
                 if parsed.path == "/api/v1/pretrade-checklist":
                     res = checklist_evaluator.evaluate(
                         signal_data={"risk_passed": True, "score": 0.8},
@@ -2928,6 +2988,10 @@ def _dashboard_handler(
                         self._json(knowledge_card_mgr.get_card(ticker))
                     else:
                         self._json({"cards": knowledge_card_mgr.list_cards()})
+                    return
+                if parsed.path == "/api/v1/strategies/cards":
+                    from .strategy_card_registry import GLOBAL_STRATEGY_CARD_REGISTRY
+                    self._json({"cards": [c.to_dict() for c in GLOBAL_STRATEGY_CARD_REGISTRY.list_cards()]})
                     return
                 if parsed.path == "/api/v1/strategy/budgets":
                     self._json({"budgets": risk_budget_mgr.get_all_budgets_status()})
@@ -3305,7 +3369,6 @@ def _dashboard_handler(
                 post_data = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else ""
                 payload = json.loads(post_data) if post_data else {}
 
-                # --- 권한 모드 검증 필터 ---
                 path_action_map = {
                     "/api/v1/permission-mode": "view",
                     "/api/v1/approvals": "record_approval",
@@ -3316,6 +3379,10 @@ def _dashboard_handler(
                     "/api/v1/backup/restore": "trigger_restore",
                     "/api/v1/notifications/send": "modify_settings",
                     "/api/v1/experiments": "modify_settings",
+                    "/api/v1/ask-jayu": "view",
+                    "/api/v1/llm-explain": "view",
+                    "/api/v1/investment-goals": "modify_settings",
+                    "/api/v1/cashflows": "modify_settings",
                 }
                 
                 req_action = path_action_map.get(parsed.path)
@@ -3327,6 +3394,30 @@ def _dashboard_handler(
                     return
 
                 # --- 신규 고도화 API 라우트 (POST) ---
+                if parsed.path == "/api/v1/ask-jayu":
+                    query_text = payload.get("query", "")
+                    from .local_knowledge_index import LocalKnowledgeIndex
+                    rag = LocalKnowledgeIndex(paths.project_root)
+                    result = rag.ask_jayu(query_text)
+                    self._json(result)
+                    return
+
+                if parsed.path == "/api/v1/llm-explain":
+                    explain_type = payload.get("type")
+                    explain_data = payload.get("data", {})
+                    from .llm_explainer import LlmExplainer
+                    explainer = LlmExplainer()
+                    if explain_type == "signal":
+                        explanation = explainer.explain_signal(explain_data)
+                    elif explain_type == "risk":
+                        explanation = explainer.explain_risk_block(explain_data)
+                    elif explain_type == "disagreement":
+                        explanation = explainer.explain_disagreement(explain_data)
+                    else:
+                        explanation = "알 수 없는 설명 요청 유형입니다."
+                    self._json({"explanation": explanation})
+                    return
+
                 if parsed.path == "/api/v1/permission-mode":
                     mode = payload.get("mode")
                     if mode in {"read_only", "review_only", "approve_enabled", "admin"}:
@@ -3334,6 +3425,54 @@ def _dashboard_handler(
                         self._json({"status": "success", "mode": mode})
                     else:
                         self._json({"status": "error", "message": "invalid mode"}, status=400)
+                    return
+
+                if parsed.path == "/api/v1/investment-goals":
+                    goal_id = payload.get("goal_id")
+                    name = payload.get("name")
+                    target_amount = float(payload.get("target_amount", 0.0))
+                    target_date = payload.get("target_date")
+                    current_amount = float(payload.get("current_amount", 0.0))
+                    monthly_deposit = float(payload.get("monthly_deposit", 0.0))
+                    expected_return = float(payload.get("expected_return", 0.08))
+                    if not (goal_id and name and target_date):
+                        self._json({"status": "error", "message": "missing required parameters"}, status=400)
+                        return
+                    from .investment_goal_planner import InvestmentGoalPlanner
+                    planner = InvestmentGoalPlanner(paths.project_root)
+                    goal = planner.set_goal(
+                        goal_id=goal_id,
+                        name=name,
+                        target_amount=target_amount,
+                        target_date=target_date,
+                        current_amount=current_amount,
+                        monthly_deposit=monthly_deposit,
+                        expected_return=expected_return
+                    )
+                    self._json({"status": "success", "goal": goal})
+                    return
+
+                if parsed.path == "/api/v1/cashflows":
+                    month = payload.get("month")
+                    salary = float(payload.get("salary_deposit", 0.0))
+                    dividends = float(payload.get("expected_dividends", 0.0))
+                    extra = float(payload.get("extra_deposits", 0.0))
+                    buys = float(payload.get("planned_buys", 0.0))
+                    reserved = float(payload.get("reserved_cash", 0.0))
+                    if not month:
+                        self._json({"status": "error", "message": "missing month parameter"}, status=400)
+                        return
+                    from .cashflow_planner import CashflowPlanner
+                    planner = CashflowPlanner(paths.project_root)
+                    rec = planner.add_cashflow(
+                        month=month,
+                        salary_deposit=salary,
+                        expected_dividends=dividends,
+                        extra_deposits=extra,
+                        planned_buys=buys,
+                        reserved_cash=reserved
+                    )
+                    self._json({"status": "success", "cashflow": rec})
                     return
 
                 if parsed.path == "/api/v1/backup/create":

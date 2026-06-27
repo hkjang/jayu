@@ -12,7 +12,7 @@
 
 ## 🏗️ 시스템 레이어 아키텍처
 
-시스템은 데이터 수집부터 연산, 의사결정 진화, 외부 연동까지 총 5개의 레이어로 나뉘어 동작하며, 각 레이어는 느슨한 결합(Loose Coupling)을 유지합니다.
+시스템은 데이터 수집부터 연산, 의사결정 진화, 외부 연동, 에이전트 인터페이스까지 총 6개의 레이어로 나뉘어 동작하며, 각 레이어는 느슨한 결합(Loose Coupling)을 유지합니다.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -36,7 +36,12 @@
                                   │ KakaoTalk Notification / JSON Reports
                                   ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 5. 정적 안정성 & 검증 레이어 (test_simulation.py - 15대 유닛 테스트)   │
+│ 5. 정적 안정성 & 검증 레이어 (test_simulation.py - 회귀 테스트 스위트)  │
+└─────────────────────────────────┬──────────────────────────────────────┘
+                                  │ Grounded Test Scenarios
+                                  ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ 6. 에이전트 & RAG 지식 레이어 (MCP Server, Agent CLI, Local RAG, DSL)  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,6 +86,19 @@
 ### 6. 데이터 유틸리티 (`check_csv.py` & `fix_tickers.py`)
 *   **역할**: 토스증권 등에서 출력한 CSV 데이터의 구조적 결함을 진단하고, 상장폐지 혹은 티커 변경으로 야후 파이낸스에서 다운로드가 막힌 기형 티커를 자동 보정해주는 도구.
 
+### 7. 투자 에이전트 플랫폼 확장 모듈 (`src/jayu/`)
+*   **역할**: 외부 AI 에이전트 연동, 자연어 한국어 조작, 로컬 지식 RAG 및 다중 브로커 안전 조회를 담당합니다.
+*   **상세 기능**:
+    - **브로커 인터페이스 (`broker_interface.py`)**: 다중 브로커 인터페이스 표준화 및 Toss 실거래 차단용 read-only 격리 어댑터.
+    - **전략 DSL (`strategy_dsl.py`)**: 복잡한 Python 코딩 없이 선언적 YAML 명세를 안전하게 파싱하여 백테스트와 신호 엔진에 주입.
+    - **전략 카드 레지스트리 (`strategy_card_registry.py`)**: 대시보드 마켓에서 볼 수 있는 전략 속성, Sharpe Ratio, MDD 메타데이터 목록 관리.
+    - **로컬 RAG 지식베이스 (`local_knowledge_index.py`)**: 문서와 실행 산출물(runs)을 로컬 DB에 수집 및 색인하여 질문에 근거 기반 한국어 답변 제공.
+    - **LLM 해설 레이어 (`llm_explainer.py`)**: 신호 생성 이유, 리스크 차단 사유를 Ollama 또는 규칙 기반 Fallback 템플릿으로 한국어 번역.
+    - **노트북 익스포터 (`notebook_export.py`)**: 런타임 보고서를 검증용 주피터 노트북(`.ipynb`)으로 자동 출력.
+    - **딥링크 알림 모듈 (`notification_deeplink.py`)**: 대시보드의 특정 탭과 쿼리로 즉시 이동 가능한 SPA 해시 라우팅 URL 링크 생성.
+    - **Jayu MCP Server (`jayu_mcp_server.py`)**: Model Context Protocol stdio 서버 구현을 통해 Cursor/Claude Code 등의 도구 연동.
+    - **에이전트 CLI 모드 (`agent_mode.py`)**: 한글 자연어 입력 시 실행 계획 수립 및 안전 가이드를 검토하여 명령 시퀀스 실행.
+
 ---
 
 ## 🔄 데이터 흐름도 및 파일 간 의존 관계 (Dataflow)
@@ -99,8 +117,19 @@
                         ▼ (당일 시그널 생성)
                   [today_signals.json]
                         │
-                        ▼ (시그널 파싱 및 발송)
-                  [stock_kakao.py] ──► [Kakao Talk API] ──► (사용자 스마트폰 알림)
+                        ├─► [stock_kakao.py] ──► [Kakao Talk API] ──► (사용자 스마트폰 알림)
+                        │
+                        ▼ (RAG 지식 색인)
+                  [local_knowledge_index.py] ◄── [README/Docs]
+                        │
+                        ├─► [llm_explainer.py] (Ollama / Fallback 한글 해설)
+                        │         │
+                        │         ├─► [jayu_mcp_server.py] (MCP Client 연동)
+                        │         ├─► [agent_mode.py] (자연어 CLI 실행계획 피드백)
+                        │         └─► [dashboard.py] (Ask Jayu / 스트레스 테스터 UI)
+                        │
+                        ▼ (노트북 출력)
+                  [notebook_export.py] ──► [Research Report.ipynb]
 ```
 
 ---
