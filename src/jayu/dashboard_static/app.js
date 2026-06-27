@@ -192,6 +192,18 @@ async function loadPage() {
         console.warn("Failed to load next command recommendation", err);
         state.nextCommand = null;
       }
+      try {
+        state.personalScore = await api("/api/v1/personal-investment-score");
+      } catch (err) {
+        console.warn("Failed to load personal investment score", err);
+        state.personalScore = null;
+      }
+      try {
+        state.investmentGoals = await api("/api/v1/investment-goals");
+      } catch (err) {
+        console.warn("Failed to load goals for overview page", err);
+        state.investmentGoals = null;
+      }
     }
     if (!state.portfolioHub) {
       try {
@@ -265,10 +277,15 @@ async function loadPage() {
       state.apiMonitoring = await api("/api/v1/api-monitoring");
     }
     if (state.page === "analysis") {
-      // Analysis tabs load data themselves via bindPageActions auto-triggers
+      try { state.journals = await api("/api/v1/investment-journals"); } catch(e) { state.journals = { journals: [] }; }
     }
     if (state.page === "portfolio-hub") {
-      // 포트폴리오 허브는 bindPageActions에서 자동 로드
+      try {
+        state.portfolioPurposeTags = await api("/api/v1/portfolio-purpose-tags");
+      } catch (err) {
+        console.warn("Failed to load purpose tags", err);
+        state.portfolioPurposeTags = {};
+      }
     }
     if (state.page === "autotrading") {
       state.autotradingStatus = await api("/api/v1/autotrading-status");
@@ -280,16 +297,20 @@ async function loadPage() {
     }
     if (state.page === "goal-planner") {
       try { state.investmentGoals = await api("/api/v1/investment-goals"); } catch(e) { state.investmentGoals = { goals: [] }; }
+      try { state.lossRecovery = await api("/api/v1/loss-recovery-planner?loss_pct=0.20"); } catch(e) { state.lossRecovery = null; }
     }
     if (state.page === "cashflow") {
       try { state.cashflows = await api("/api/v1/cashflows"); } catch(e) { state.cashflows = { entries: [], budget: {} }; }
     }
     if (state.page === "dividend-sim") {
       try { state.dividendSim = await api("/api/v1/dividend-simulator"); } catch(e) { state.dividendSim = null; }
+      try { state.dividendLivingExpense = await api("/api/v1/dividend-living-expense-simulator"); } catch(e) { state.dividendLivingExpense = null; }
     }
     if (state.page === "investor-coach") {
       try { state.behaviorInsights = await api("/api/v1/behavior-insights"); } catch(e) { state.behaviorInsights = null; }
       try { state.portfolioDiet = await api("/api/v1/portfolio-diet"); } catch(e) { state.portfolioDiet = null; }
+      try { state.personalScore = await api("/api/v1/personal-investment-score"); } catch(e) { state.personalScore = null; }
+      try { state.journals = await api("/api/v1/investment-journals"); } catch(e) { state.journals = { journals: [] }; }
     }
     if (state.page === "invest-calendar") {
       try { state.investCalendar = await api("/api/v1/investment-calendar"); } catch(e) { state.investCalendar = null; }

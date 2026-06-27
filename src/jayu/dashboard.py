@@ -2952,6 +2952,45 @@ def _dashboard_handler(
                     sim = DividendCashflowSimulator(paths.project_root)
                     self._json(sim.simulate_cashflow())
                     return
+                if parsed.path == "/api/v1/personal-investment-score":
+                    from .personal_investment_score import PersonalInvestmentScore
+                    scorer = PersonalInvestmentScore(paths.project_root)
+                    self._json(scorer.calculate_score())
+                    return
+                if parsed.path == "/api/v1/portfolio-purpose-tags":
+                    from .portfolio_purpose_tags import PortfolioPurposeTags
+                    tagger = PortfolioPurposeTags(paths.project_root)
+                    query = parse_qs(parsed.query)
+                    ticker = query.get("ticker", [None])[0]
+                    if ticker:
+                        self._json({"ticker": ticker, "tags": tagger.get_tags(ticker)})
+                    else:
+                        self._json(tagger.load_tags())
+                    return
+                if parsed.path == "/api/v1/investment-journals":
+                    from .investment_journal import InvestmentJournal
+                    journal = InvestmentJournal(paths.project_root)
+                    entries = journal.update_outcomes()
+                    self._json({"journals": entries})
+                    return
+                if parsed.path == "/api/v1/dividend-living-expense-simulator":
+                    from .dividend_living_expense_simulator import DividendLivingExpenseSimulator
+                    sim = DividendLivingExpenseSimulator(paths.project_root)
+                    self._json(sim.simulate())
+                    return
+                if parsed.path == "/api/v1/loss-recovery-planner":
+                    from .loss_recovery_planner import LossRecoveryPlanner
+                    planner = LossRecoveryPlanner()
+                    query = parse_qs(parsed.query)
+                    loss_pct = float(query.get("loss_pct", [0.20])[0])
+                    from .dividend_cashflow_simulator import DividendCashflowSimulator
+                    div_sim = DividendCashflowSimulator(paths.project_root)
+                    port_data = div_sim.simulate_cashflow()
+                    port_val = port_data.get("portfolio_value_krw", 10000000.0)
+                    if port_val <= 0:
+                        port_val = 10000000.0
+                    self._json(planner.calculate_recovery_plan(port_val, loss_pct))
+                    return
                 if parsed.path == "/api/v1/behavior-insights":
                     from .investor_behavior_insights import InvestorBehaviorInsights
                     insights = InvestorBehaviorInsights(paths.project_root)
@@ -3383,6 +3422,9 @@ def _dashboard_handler(
                     "/api/v1/llm-explain": "view",
                     "/api/v1/investment-goals": "modify_settings",
                     "/api/v1/cashflows": "modify_settings",
+                    "/api/v1/portfolio-purpose-tags": "write_memo",
+                    "/api/v1/investment-journals": "write_memo",
+                    "/api/v1/dividend-living-expense-simulator": "modify_settings",
                 }
                 
                 req_action = path_action_map.get(parsed.path)
@@ -3465,14 +3507,48 @@ def _dashboard_handler(
                     from .cashflow_planner import CashflowPlanner
                     planner = CashflowPlanner(paths.project_root)
                     rec = planner.add_cashflow(
-                        month=month,
-                        salary_deposit=salary,
-                        expected_dividends=dividends,
-                        extra_deposits=extra,
-                        planned_buys=buys,
-                        reserved_cash=reserved
+                         month=month,
+                         salary_deposit=salary,
+                         expected_dividends=dividends,
+                         extra_deposits=extra,
+                         planned_buys=buys,
+                         reserved_cash=reserved
                     )
                     self._json({"status": "success", "cashflow": rec})
+                    return
+
+                if parsed.path == "/api/v1/portfolio-purpose-tags":
+                    ticker = payload.get("ticker")
+                    tags = payload.get("tags")
+                    if not ticker or tags is None:
+                        self._json({"status": "error", "message": "missing ticker or tags"}, status=400)
+                        return
+                    from .portfolio_purpose_tags import PortfolioPurposeTags
+                    tagger = PortfolioPurposeTags(paths.project_root)
+                    res_tags = tagger.set_tags(ticker, tags)
+                    self._json({"status": "success", "ticker": ticker, "tags": res_tags})
+                    return
+
+                if parsed.path == "/api/v1/investment-journals":
+                    ticker = payload.get("ticker")
+                    action_type = payload.get("action_type")
+                    price = float(payload.get("price", 0.0))
+                    note = payload.get("note", "")
+                    if not (ticker and action_type and price > 0):
+                        self._json({"status": "error", "message": "missing required parameters"}, status=400)
+                        return
+                    from .investment_journal import InvestmentJournal
+                    journal = InvestmentJournal(paths.project_root)
+                    entry = journal.add_entry(ticker, action_type, price, note)
+                    self._json({"status": "success", "journal": entry})
+                    return
+
+                if parsed.path == "/api/v1/dividend-living-expense-simulator":
+                    target_krw = float(payload.get("monthly_target_krw", 2000000.0))
+                    from .dividend_living_expense_simulator import DividendLivingExpenseSimulator
+                    sim = DividendLivingExpenseSimulator(paths.project_root)
+                    sim.save_target(target_krw)
+                    self._json({"status": "success", "monthly_target_krw": target_krw})
                     return
 
                 if parsed.path == "/api/v1/backup/create":
@@ -3588,6 +3664,34 @@ def _dashboard_handler(
                     log_entry = log_approval_decision(
                         paths, run_id, ticker, action, rec_verdict, user_decision, rationale
                     )
+                    
+                    # Automatically record to investment journal
+                    try:
+                        from .investment_journal import InvestmentJournal
+                        price_val = 0.0
+                        try:
+                            import yfinance as yf
+                            from .yahoo import get_yahoo_session
+                            session = get_yahoo_session()
+                            ticker_obj = yf.Ticker(ticker, session=session)
+                            hist = ticker_obj.history(period="1d")
+                            if not hist.empty:
+                                price_val = float(hist["Close"].iloc[-1])
+                        except Exception:
+                            pass
+                        if price_val <= 0:
+                            price_val = 100.0  # Fallback dummy price
+                        
+                        journal = InvestmentJournal(paths.project_root)
+                        journal.add_entry(
+                            ticker=ticker,
+                            action_type=user_decision,
+                            entry_price=price_val,
+                            note=rationale or f"신호 {action}에 대한 {user_decision} 의사결정"
+                        )
+                    except Exception as e:
+                        pass
+                    
                     self._json({"status": "success", "entry": log_entry})
                     return
                 if parsed.path == "/api/v1/tax-lots/buy":
@@ -3651,13 +3755,40 @@ def _dashboard_handler(
                 # --- 권한 모드 검증 필터 ---
                 path_action_map = {
                     "/api/v1/knowledge-cards": "write_memo",
+                    "/api/v1/investment-goals": "modify_settings",
+                    "/api/v1/investment-journals": "write_memo",
                 }
                 req_action = path_action_map.get(parsed.path)
+                if not req_action:
+                    # check for path prefix like /api/v1/investment-goals/g1
+                    if parsed.path.startswith("/api/v1/investment-goals/"):
+                        req_action = "modify_settings"
+
                 if req_action and not permission_mgr.is_action_allowed(req_action):
                     self._json({
                         "status": "error",
                         "message": f"permission_denied: action '{req_action}' is not allowed in current mode '{permission_mgr.get_mode()}'"
                     }, status=403)
+                    return
+
+                if parsed.path.startswith("/api/v1/investment-goals/"):
+                    goal_id = parsed.path.split("/")[-1]
+                    from .investment_goal_planner import InvestmentGoalPlanner
+                    planner = InvestmentGoalPlanner(paths.project_root)
+                    deleted = planner.delete_goal(goal_id)
+                    self._json({"status": "success", "deleted": deleted})
+                    return
+
+                if parsed.path == "/api/v1/investment-journals":
+                    query = parse_qs(parsed.query)
+                    entry_id = query.get("entry_id", [None])[0]
+                    if not entry_id:
+                        self._json({"status": "error", "message": "missing entry_id"}, status=400)
+                        return
+                    from .investment_journal import InvestmentJournal
+                    journal = InvestmentJournal(paths.project_root)
+                    deleted = journal.delete_entry(entry_id)
+                    self._json({"status": "success", "deleted": deleted})
                     return
 
                 if parsed.path == "/api/v1/knowledge-cards":

@@ -109,6 +109,59 @@ function renderGoalPlanner() {
         `;
       }).join("");
 
+  const lr = state.lossRecovery || {};
+  let lrHtml = "";
+  if (lr.break_even_return_pct) {
+    const advices = lr.risk_reduction_advices || [];
+    const recoveryMonths = lr.recovery_months_by_return || {};
+    const depositScenarios = lr.deposit_scenarios_recovery_months_at_15pct || {};
+    
+    lrHtml = `
+      <section class="panel" style="margin-top:20px;">
+        <div class="panel-header" style="padding-bottom:10px; border-bottom:1px solid var(--border);">
+          <div>
+            <h2 style="font-size:13.5px; font-weight:700; margin:0;">📉 손실 복구 플랜 (Loss Recovery Planner)</h2>
+            <p style="font-size:11px; margin:2px 0 0 0;">포트폴리오 평가 손실 발생 시 원금 복구를 위한 수학적 계산 및 추가 저축 단축 시나리오입니다.</p>
+          </div>
+          <span class="status-label status-warning">${lr.loss_pct}% 손실 기준</span>
+        </div>
+        <div class="panel-body" style="padding-top:12px;">
+          <div class="status-banner status-warning" style="margin-bottom:14px; grid-template-columns:auto 1fr; border-left-width:3px; padding:10px 12px;">
+            <div style="font-size:18px; margin-right:8px;">💡</div>
+            <div>
+              <strong style="font-size:12.5px; display:block; margin-bottom:2px;">원금 복구 필요 수익률: <span style="color:var(--failed); font-weight:800; font-size:13.5px;">+${lr.break_even_return_pct}%</span></strong>
+              <span style="font-size:11.5px; color:var(--text); line-height:1.4;">손실금액: ${pf_fmt(lr.shortfall_amount_krw)}원. 손실이 커질수록 복구에 필요한 상승률은 기하급수적으로 증가합니다.</span>
+            </div>
+          </div>
+          
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:14px;">
+            <div>
+              <h3 style="font-size:12px; font-weight:700; color:var(--text); margin:0 0 6px 0;">⏳ 무입금 자연 복구 기간 (DRIP만 활용)</h3>
+              <ul style="font-size:11.5px; color:var(--muted); padding-left:16px; margin:0; line-height:1.6;">
+                <li>연 8% 성장 시: <strong>${recoveryMonths["8pct_return"] ? recoveryMonths["8pct_return"] + "개월" : "계산 대기"}</strong></li>
+                <li>연 15% 성장 시: <strong>${recoveryMonths["15pct_return"] ? recoveryMonths["15pct_return"] + "개월" : "계산 대기"}</strong></li>
+                <li>연 25% 성장 시: <strong>${recoveryMonths["25pct_return"] ? recoveryMonths["25pct_return"] + "개월" : "계산 대기"}</strong></li>
+              </ul>
+            </div>
+            <div>
+              <h3 style="font-size:12px; font-weight:700; color:var(--text); margin:0 0 6px 0;">🚀 매월 추가 투자 시 복구 기간 (연 15% 가정)</h3>
+              <ul style="font-size:11.5px; color:var(--muted); padding-left:16px; margin:0; line-height:1.6;">
+                <li>월 50만원 추가: <strong>${depositScenarios.deposit_50ten_thousand_krw ? depositScenarios.deposit_50ten_thousand_krw + "개월" : "계산 대기"}</strong></li>
+                <li>월 100만원 추가: <strong>${depositScenarios.deposit_100ten_thousand_krw ? depositScenarios.deposit_100ten_thousand_krw + "개월" : "계산 대기"}</strong></li>
+                <li>월 200만원 추가: <strong>${depositScenarios.deposit_200ten_thousand_krw ? depositScenarios.deposit_200ten_thousand_krw + "개월" : "계산 대기"}</strong></li>
+              </ul>
+            </div>
+          </div>
+
+          <div style="background:var(--surface-subtle); padding:10px; border-radius:6px; border:1px solid var(--border); font-size:11.5px; line-height:1.5;">
+            <strong style="display:block; margin-bottom:4px; color:var(--text); font-size:12px;">🛡️ 리스크 축소 및 원칙 대응 가이드</strong>
+            ${advices.map(a => `<p style="margin:2px 0; color:var(--text);">${pf_esc(a)}</p>`).join("")}
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
   els.root.innerHTML = `
     <div class="page-heading">
       <div>
@@ -131,6 +184,7 @@ function renderGoalPlanner() {
       <div style="display:flex; flex-direction:column;">
         <h2 style="font-size:14px; font-weight:700; margin:0 0 10px 0; color:var(--text);">📋 등록된 투자 목표 목록</h2>
         ${goalListHtml}
+        ${lrHtml}
       </div>
 
       <!-- Right side: Add Goal Form -->
@@ -531,21 +585,76 @@ function renderDividendSim() {
     </section>
 
     <div class="section-grid">
-      <!-- Left: Reinvestment Scenario -->
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h2>💹 배당 재투자 복리 성장 시나리오 (DRIP)</h2>
-            <p>배당 수익률과 자산 가치가 일정하며 분배 배당금 전액을 원형에 재복리 매수 투입한다고 가정한 성장 예측입니다.</p>
+      <!-- Left: Reinvestment Scenario & Living Expense Simulator -->
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>💹 배당 재투자 복리 성장 시나리오 (DRIP)</h2>
+              <p>배당 수익률과 자산 가치가 일정하며 분배 배당금 전액을 원형에 재복리 매수 투입한다고 가정한 성장 예측입니다.</p>
+            </div>
           </div>
-        </div>
-        <div class="panel-body" style="padding:20px 30px;">
-          <div style="display:flex; gap:20px; align-items:flex-end; padding:10px 0;">
-            ${projBarHtml}
+          <div class="panel-body" style="padding:20px 30px;">
+            <div style="display:flex; gap:20px; align-items:flex-end; padding:10px 0;">
+              ${projBarHtml}
+            </div>
           </div>
-        </div>
-        ${renderSourceCaption("dividend_cashflow_simulator.py · monthly compound model")}
-      </section>
+          ${renderSourceCaption("dividend_cashflow_simulator.py · monthly compound model")}
+        </section>
+
+        <!-- Dividend Living Expense Simulator -->
+        ${(() => {
+          const dle = state.dividendLivingExpense || {};
+          if (!dle.monthly_target_krw) return "";
+          const targetSnapshot = dle.drip_future_snapshots || {};
+          return `
+            <section class="panel">
+              <div class="panel-header" style="padding-bottom:10px; border-bottom:1px solid var(--border);">
+                <div>
+                  <h2 style="font-size:13.5px; font-weight:700; margin:0;">🛡️ 배당 생활비 시뮬레이터 (Living Expense Simulator)</h2>
+                  <p style="font-size:11px; margin:2px 0 0 0;">월 배당 목표액 대비 현재 수입과 목표 달성 달성도를 분석하고 복리 경로를 계산합니다.</p>
+                </div>
+                <span class="status-label status-success" style="font-size:11px; font-weight:700;">${dle.achievement_rate}% 달성</span>
+              </div>
+              <div class="panel-body" style="padding-top:12px;">
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:12px;">
+                  <div style="background:var(--surface-subtle); padding:10px; border-radius:6px; border:1px solid var(--border); display:flex; flex-direction:column; justify-content:center;">
+                    <span style="font-size:11px; color:var(--muted)">목표 월 배당금</span>
+                    <strong style="font-size:16px; color:var(--text);">${pf_fmt(dle.monthly_target_krw)}원</strong>
+                  </div>
+                  <div style="background:var(--surface-subtle); padding:10px; border-radius:6px; border:1px solid var(--border); display:flex; flex-direction:column; justify-content:center;">
+                    <span style="font-size:11px; color:var(--muted)">부족 월 배당금</span>
+                    <strong style="font-size:16px; color:var(--failed);">${pf_fmt(dle.shortfall_krw)}원</strong>
+                  </div>
+                </div>
+
+                <div style="font-size:12px; line-height:1.45; color:var(--text); margin-bottom:12px;">
+                  목표 배당을 채우기 위해 필요한 추가 배당 투자금은 약 <strong>${pf_fmt(Math.round(dle.needed_additional_capital_krw / 10000))}만원</strong>입니다.<br>
+                  추가 저축 없이 배당금 재투자(DRIP)만 유지할 시 목표 도달 예상 소요 기간은 <strong>${dle.years_to_goal_via_drip != null ? dle.years_to_goal_via_drip + "년" : "계산 불가"}</strong>입니다.
+                </div>
+
+                <div style="border-top:1px dashed var(--border); padding-top:10px; margin-bottom:14px;">
+                  <h3 style="font-size:12px; font-weight:700; color:var(--text); margin:0 0 6px 0;">💡 DRIP 재투자 시 미래 예상 월 배당금</h3>
+                  <ul style="font-size:11.5px; color:var(--muted); padding-left:16px; margin:0; line-height:1.5;">
+                    <li>1년 후 월 배당: <strong>${pf_fmt(Math.round(targetSnapshot["1yr_monthly_dividend"] || 0))}원</strong></li>
+                    <li>3년 후 월 배당: <strong>${pf_fmt(Math.round(targetSnapshot["3yr_monthly_dividend"] || 0))}원</strong></li>
+                    <li>5년 후 월 배당: <strong>${pf_fmt(Math.round(targetSnapshot["5yr_monthly_dividend"] || 0))}원</strong></li>
+                    <li>10년 후 월 배당: <strong>${pf_fmt(Math.round(targetSnapshot["10yr_monthly_dividend"] || 0))}원</strong></li>
+                  </ul>
+                </div>
+                
+                <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); display:flex; gap:8px; align-items:flex-end;">
+                  <div style="flex:1;">
+                    <label style="display:block; font-size:10px; color:var(--muted); margin-bottom:3px;">목표 월 배당금 변경 (원)</label>
+                    <input id="pf-dle-target-input" type="number" value="${dle.monthly_target_krw}" style="width:100%; min-height:28px; padding:3px 6px; border:1px solid var(--border-strong); border-radius:4px; font-size:11.5px;">
+                  </div>
+                  <button id="pf-dle-target-save" class="button button-primary" style="min-height:28px; font-size:11px; padding:2px 8px;">목표 저장</button>
+                </div>
+              </div>
+            </section>
+          `;
+        })()}
+      </div>
 
       <!-- Right: Holdings Table -->
       <section class="panel">
@@ -576,6 +685,24 @@ function renderDividendSim() {
       </section>
     </div>
   `;
+
+  // Bind Target Save Event
+  document.querySelector("#pf-dle-target-save")?.addEventListener("click", async () => {
+    const inputVal = parseFloat(document.querySelector("#pf-dle-target-input")?.value) || 0;
+    if (inputVal <= 0) return alert("유효한 목표 금액을 입력하십시오.");
+    try {
+      const res = await fetch("/api/v1/dividend-living-expense-simulator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ monthly_target_krw: inputVal })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      state.dividendLivingExpense = null;
+      navigate("dividend-sim");
+    } catch (e) {
+      alert(`배당 목표 저장에 실패했습니다: ${e.message}`);
+    }
+  });
 }
 
 // ──────────────────────────────────────────────
@@ -653,8 +780,126 @@ function renderInvestorCoach() {
   }
 
   // Coaching Score logic
-  const score = bi.coaching_score || 85;
+  const scoreData = state.personalScore || {};
+  const score = scoreData.total_score != null ? scoreData.total_score : (bi.coaching_score || 85);
   const scoreStatus = score >= 90 ? "success" : (score >= 70 ? "warning" : "failed");
+  const grade = scoreData.grade || (score >= 90 ? "A" : (score >= 70 ? "B" : "C"));
+
+  let scorePanelHtml = "";
+  if (scoreData.total_score != null) {
+    const bd = scoreData.breakdown || {};
+    const scoreClass = scoreData.total_score >= 80 ? "success" : (scoreData.total_score >= 70 ? "warning" : "failed");
+    scorePanelHtml = `
+      <section class="panel" style="margin-bottom:14px;">
+        <div class="panel-header">
+          <div>
+            <h2>🎯 개인 투자 점수판 세부 분석 (Scorecard Detail)</h2>
+            <p>다차원 정량 매매 행동 진단입니다. 각 부문별 배점 대비 감점 요인을 보여줍니다.</p>
+          </div>
+          <span class="status-label status-${scoreClass}" style="font-size:12px; font-weight:700;">${grade} (${scoreData.total_score}점)</span>
+        </div>
+        <div class="panel-body">
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px;">
+            <div style="background:var(--surface-subtle); padding:10px; border-radius:6px; border:1px solid var(--border);">
+              <div style="display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:4px;">
+                <strong>🛡️ 리스크 준수율</strong>
+                <span>${bd.risk_compliance_score} / 25</span>
+              </div>
+              <div style="background:var(--border); border-radius:3px; height:6px; overflow:hidden;">
+                <div style="width:${(bd.risk_compliance_score / 25 * 100)}%; height:100%; background:var(--success); border-radius:3px;"></div>
+              </div>
+            </div>
+            <div style="background:var(--surface-subtle); padding:10px; border-radius:6px; border:1px solid var(--border);">
+              <div style="display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:4px;">
+                <strong>😰 손실 회피 준수</strong>
+                <span>${bd.loss_avoidance_score} / 25</span>
+              </div>
+              <div style="background:var(--border); border-radius:3px; height:6px; overflow:hidden;">
+                <div style="width:${(bd.loss_avoidance_score / 25 * 100)}%; height:100%; background:var(--success); border-radius:3px;"></div>
+              </div>
+            </div>
+            <div style="background:var(--surface-subtle); padding:10px; border-radius:6px; border:1px solid var(--border);">
+              <div style="display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:4px;">
+                <strong>🔄 거래 빈도 조절</strong>
+                <span>${bd.trading_frequency_score} / 20</span>
+              </div>
+              <div style="background:var(--border); border-radius:3px; height:6px; overflow:hidden;">
+                <div style="width:${(bd.trading_frequency_score / 20 * 100)}%; height:100%; background:var(--success); border-radius:3px;"></div>
+              </div>
+            </div>
+            <div style="background:var(--surface-subtle); padding:10px; border-radius:6px; border:1px solid var(--border);">
+              <div style="display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:4px;">
+                <strong>💵 자금 관리 평단</strong>
+                <span>${bd.cash_management_score} / 15</span>
+              </div>
+              <div style="background:var(--border); border-radius:3px; height:6px; overflow:hidden;">
+                <div style="width:${(bd.cash_management_score / 15 * 100)}%; height:100%; background:var(--success); border-radius:3px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  const journalData = state.journals || {};
+  const journalEntries = journalData.journals || [];
+  
+  const journalRows = journalEntries.length === 0
+    ? `<tr><td colspan="8" style="text-align:center; padding:20px; color:var(--muted);">등록된 투자 일지 기록이 없습니다. 신호 승인/보류 시의 사유가 자동으로 기록됩니다.</td></tr>`
+    : journalEntries.map(j => {
+        const perf5 = j.return_5d_pct != null ? `${j.return_5d_pct >= 0 ? "+" : ""}${j.return_5d_pct}%` : "대기 중";
+        const perf20 = j.return_20d_pct != null ? `${j.return_20d_pct >= 0 ? "+" : ""}${j.return_20d_pct}%` : "대기 중";
+        const color5 = j.return_5d_pct != null ? (j.return_5d_pct >= 0 ? "var(--success)" : "var(--failed)") : "var(--muted)";
+        const color20 = j.return_20d_pct != null ? (j.return_20d_pct >= 0 ? "var(--success)" : "var(--failed)") : "var(--muted)";
+        
+        return `
+          <tr>
+            <td class="nowrap">${formatDate(j.created_at)}</td>
+            <td class="ticker-cell">${renderTicker(j.ticker)}</td>
+            <td><span class="status-label status-${j.action_type === "approve" ? "success" : j.action_type === "hold" ? "warning" : "not-evaluated"}">${j.action_type === "approve" ? "승인" : j.action_type === "hold" ? "보류" : "무시"}</span></td>
+            <td class="numeric">$${pf_fmt(j.entry_price, 2)}</td>
+            <td class="numeric" style="color:${color5}; font-weight:700;">${perf5}</td>
+            <td class="numeric" style="color:${color20}; font-weight:700;">${perf20}</td>
+            <td style="max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pf_esc(j.note)}">${pf_esc(j.note)}</td>
+            <td>
+              <button class="button" data-delete-journal="${pf_esc(j.entry_id)}" style="min-height:24px; padding:1px 6px; font-size:10px; color:var(--failed); border-color:#e9958e; background:#feeceb;">삭제</button>
+            </td>
+          </tr>
+        `;
+      }).join("");
+
+  const journalPanelHtml = `
+    <section class="panel" style="margin-top:20px; width:100%;">
+      <div class="panel-header">
+        <div>
+          <h2>📋 의사결정 투자 일지 &amp; 사후 복기 (Decision Journal &amp; Retro)</h2>
+          <p>수동 의사결정 시 입력된 메모가 일지로 저장되며, 결정 5일/20일 뒤의 실제 종목 수익률을 자동 역산하여 판단의 정확성을 복기합니다.</p>
+        </div>
+        <span class="muted">${journalEntries.length}개 일지 존재</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>작성일시</th>
+              <th>종목</th>
+              <th>의사결정</th>
+              <th class="numeric">결정 시가</th>
+              <th class="numeric">5일 후 성과</th>
+              <th class="numeric">20일 후 성과</th>
+              <th>의사결정 사유 및 근거</th>
+              <th>관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${journalRows}
+          </tbody>
+        </table>
+      </div>
+      ${renderSourceCaption("state/investment_journal.json · yfinance outcomes tracking")}
+    </section>
+  `;
 
   els.root.innerHTML = `
     <div class="page-heading">
@@ -672,6 +917,8 @@ function renderInvestorCoach() {
       ${metricCard("감지된 편향", `${biases.length}개 편향`, biases.length ? "warning" : "success", "심리학적 편향 징후 감지 수")}
       ${metricCard("다이어트 종목", `${pruneList.length + redundancies.length}개 대상`, (pruneList.length + redundancies.length) ? "warning" : "success", "정리 또는 축소 권장 종목")}
     </section>
+
+    ${scorePanelHtml}
 
     <div class="section-grid">
       <!-- Left: Behavior Insights -->
@@ -702,7 +949,25 @@ function renderInvestorCoach() {
         ${renderSourceCaption("portfolio_diet_mode.py · toss_portfolio.csv")}
       </section>
     </div>
+
+    ${journalPanelHtml}
   `;
+
+  // Bind delete journal events
+  document.querySelectorAll("[data-delete-journal]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const jid = btn.dataset.deleteJournal;
+      if (!confirm(`이 일지 기록(ID: ${jid})을 정말로 삭제하시겠습니까?`)) return;
+      try {
+        const res = await fetch(`/api/v1/investment-journals?entry_id=${encodeURIComponent(jid)}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        state.journals = null;
+        navigate("investor-coach");
+      } catch (e) {
+        alert("일지 삭제 실패: " + e.message);
+      }
+    });
+  });
 }
 
 function biasIcon(type) {

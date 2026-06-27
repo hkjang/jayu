@@ -8,6 +8,72 @@ function renderOverview() {
   const reasons = decision.top_blockers || decision.top_reasons || [];
   const actions = decision.recommended_actions || data.recommended_actions || [];
   const primaryAction = decision.recommended_next_action || actions[0] || null;
+    // Personal investment dashboard summary cards
+    let pfSummaryHtml = "";
+    const scoreData = state.personalScore;
+    const goalsData = state.investmentGoals;
+    if (scoreData || (goalsData && goalsData.goals && goalsData.goals.length > 0)) {
+      let scoreCardHtml = "";
+      if (scoreData) {
+        const scoreClass = scoreData.total_score >= 80 ? "success" : (scoreData.total_score >= 70 ? "warning" : "failed");
+        scoreCardHtml = `
+          <article class="decision-card status-${scoreClass}" style="margin:0;">
+            <div class="decision-eyebrow">
+              <span class="status-label status-${scoreClass}">${scoreData.grade}</span>
+              <span>개인 투자 점수</span>
+            </div>
+            <h2 style="font-size:22px; font-weight:800; margin:10px 0 5px 0;">🎯 ${scoreData.total_score}점</h2>
+            <p style="font-size:12px; line-height:1.4; color:var(--text);">${scoreData.description}</p>
+            <div style="font-size:10.5px; color:var(--muted); margin-top:8px; display:grid; grid-template-columns: 1fr 1fr; gap:6px; border-top:1px dashed var(--border); padding-top:6px;">
+              <span>🛡️ 리스크 준수: ${scoreData.breakdown.risk_compliance_score}/25</span>
+              <span>😰 손실 회피: ${scoreData.breakdown.loss_avoidance_score}/25</span>
+              <span>🔄 매매 빈도: ${scoreData.breakdown.trading_frequency_score}/20</span>
+              <span>💵 자금 관리: ${scoreData.breakdown.cash_management_score}/15</span>
+            </div>
+          </article>
+        `;
+      }
+      
+      let goalsCardHtml = "";
+      if (goalsData && goalsData.goals && goalsData.goals.length > 0) {
+        const firstGoal = goalsData.goals[0];
+        const shortfall = Math.max(0, firstGoal.target_amount - firstGoal.current_amount);
+        const achPercent = firstGoal.target_amount > 0 ? (firstGoal.current_amount / firstGoal.target_amount * 100) : 0;
+        goalsCardHtml = `
+          <article class="decision-card status-success" style="margin:0;">
+            <div class="decision-eyebrow">
+              <span class="status-label status-success">${achPercent.toFixed(1)}% 달성</span>
+              <span>내 투자 목표</span>
+            </div>
+            <h2 style="font-size:15px; font-weight:800; margin:10px 0 5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">🎯 ${escapeHtml(firstGoal.name)}</h2>
+            <p style="font-size:11.5px; color:var(--text); margin:4px 0; line-height:1.4;">
+              목표액: <strong>${Math.round(firstGoal.target_amount / 10000).toLocaleString()}만원</strong><br>
+              부족액: <strong style="color:var(--failed);">${Math.round(shortfall / 10000).toLocaleString()}만원</strong>
+            </p>
+            <div style="font-size:10.5px; color:var(--muted); margin-top:6px; padding-top:6px; border-top:1px dashed var(--border);">
+              <span>이번 달 필요 적립: <strong>${Math.round(firstGoal.monthly_deposit / 10000).toLocaleString()}만원</strong></span>
+            </div>
+          </article>
+        `;
+      } else {
+        goalsCardHtml = `
+          <article class="decision-card status-not-evaluated" style="margin:0; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; padding:15px;">
+            <span style="font-size:24px; margin-bottom:4px;">🎯</span>
+            <strong style="font-size:12.5px; display:block; margin-bottom:2px;">설정된 투자 목표가 없습니다</strong>
+            <button class="button button-secondary" type="button" data-go="goal-planner" style="font-size:10.5px; padding:3px 8px; min-height:auto; margin-top:4px;">목표 설정하러 가기</button>
+          </article>
+        `;
+      }
+      
+      pfSummaryHtml = `
+        <h2 style="font-size:13px; font-weight:700; margin:20px 0 10px 0; color:var(--text);">🌱 개인 투자 생활관리 요약</h2>
+        <section class="decision-grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:16px; margin-bottom:20px;">
+          ${scoreCardHtml}
+          ${goalsCardHtml}
+        </section>
+      `;
+    }
+
   els.root.innerHTML = `
     <div class="page-heading">
       <div>
@@ -32,6 +98,7 @@ function renderOverview() {
       ${renderPrimaryAction(primaryAction)}
     </section>
     ${renderNextCommandRecommendation(state.nextCommand)}
+    ${pfSummaryHtml}
     ${renderDecisionDiffCard(data.decision_diff)}
     ${renderOverviewPortfolioHub(state.portfolioHub)}
     ${renderTodayBoard(data.today_board)}

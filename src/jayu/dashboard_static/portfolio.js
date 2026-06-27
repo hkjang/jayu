@@ -159,6 +159,17 @@ function renderPortfolioHub() {
 
   const checklist = data?.today_checklist;
 
+  const tagFilterBar = `
+    <div style="background:var(--surface-subtle); padding:10px 12px; border:1px solid var(--border); border-radius:8px; margin-bottom:14px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      <span style="font-size:12.5px; font-weight:700; color:var(--text);">🏷️ 목적 태그 필터:</span>
+      <button class="button ${(!state.selectedPurposeTag || state.selectedPurposeTag === "all") ? "button-primary" : "button-secondary"}" data-tag-filter="all" style="min-height:26px; padding:2px 8px; font-size:11.5px;">전체 보기</button>
+      ${["노후", "자녀", "단기자금", "배당", "실험", "현금대기"].map(t => {
+        const isActive = state.selectedPurposeTag === t;
+        return `<button class="button ${isActive ? "button-primary" : "button-secondary"}" data-tag-filter="${t}" style="min-height:26px; padding:2px 8px; font-size:11.5px;">${t}</button>`;
+      }).join("")}
+    </div>
+  `;
+
   els.root.innerHTML = `
     <div class="page-heading">
       <div>
@@ -179,6 +190,8 @@ function renderPortfolioHub() {
         value="${escapeHtml(state.portfolioHubTickers)}">
       <small style="color:#94a3b8;font-size:11px">비워두면 portfolio_mapping.json의 종목이 자동으로 사용됩니다.</small>
     </div>
+
+    ${tagFilterBar}
 
     <div class="hub-tab-bar">${tabButtons}</div>
     <div id="hub-tab-content">${tabContent}</div>
@@ -356,6 +369,28 @@ function renderHubTickerCard(tab, item) {
     `;
   }
 
+  const tickerTags = (state.portfolioPurposeTags || {})[item.ticker] || [];
+  const tagsHtml = tickerTags.map(t => `<span class="status-label status-success" style="font-size:10px; padding:1px 4px; min-height:auto; margin-right:4px;">${escapeHtml(t)}</span>`).join("");
+  
+  const editTagsHtml = `
+    <div class="hub-tag-manager" style="margin-top:8px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; border-top:1px dashed var(--border); padding-top:6px;">
+      <span style="font-size:11px; color:var(--muted)">목적 태그:</span>
+      <div style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;">
+        ${tagsHtml || `<span style="font-size:11px; color:#94a3b8; font-style:italic;">태그 없음</span>`}
+        <select class="hub-add-tag-select" data-ticker="${item.ticker}" style="font-size:10px; min-height:22px; padding:0 4px; border:1px solid var(--border-strong); border-radius:4px; background:#fff; cursor:pointer;">
+          <option value="">+ 변경</option>
+          <option value="노후">노후</option>
+          <option value="자녀">자녀</option>
+          <option value="단기자금">단기자금</option>
+          <option value="배당">배당</option>
+          <option value="실험">실험</option>
+          <option value="현금대기">현금대기</option>
+          <option value="clear">❌ 초기화</option>
+        </select>
+      </div>
+    </div>
+  `;
+
   return `
     <div class="hub-ticker-card" style="border-top:3px solid ${d.color}">
       <div class="hub-ticker-header">
@@ -380,6 +415,7 @@ function renderHubTickerCard(tab, item) {
         <ul class="hub-reason-list">${reasons}${cautions}</ul>
       </div>` : ""}
       ${sig.stop_loss_ref ? `<div class="hub-stop-loss">📍 참고 손절가: <strong>$${Number(sig.stop_loss_ref).toFixed(2)}</strong> <small>(ATR × 1.5 기준)</small></div>` : ""}
+      ${editTagsHtml}
       ${playbookHtml}
       ${behaviorHtml}
       ${costHtml}
@@ -472,8 +508,16 @@ function renderHubDividendCashflow(cashflow) {
 function renderHubTabContent(data, tab) {
   const meta = data.portfolio_type_meta?.[tab] || {};
   const summary = data.type_summaries?.[tab] || {};
-  const items = data.type_buckets?.[tab] || [];
+  let items = data.type_buckets?.[tab] || [];
   const c = PORTFOLIO_TYPE_COLORS[tab] || {};
+
+  // Filter by tag if selected
+  if (state.selectedPurposeTag && state.selectedPurposeTag !== "all") {
+    items = items.filter(item => {
+      const tickerTags = (state.portfolioPurposeTags || {})[item.ticker] || [];
+      return tickerTags.includes(state.selectedPurposeTag);
+    });
+  }
 
   const typeDesc = `
     <div class="hub-type-card" style="border-left:4px solid ${c.border};background:${c.bg}">
@@ -653,6 +697,53 @@ function bindPortfolioHubActions() {
       localStorage.setItem("jayu.hub.tab", state.portfolioHubTab);
       renderPortfolioHub();
       bindPageActions();
+    });
+  });
+
+  // 태그 필터링 클릭
+  document.querySelectorAll("[data-tag-filter]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.selectedPurposeTag = btn.dataset.tagFilter;
+      renderPortfolioHub();
+      bindPageActions();
+    });
+  });
+
+  // 태그 추가/변경
+  document.querySelectorAll(".hub-add-tag-select").forEach(select => {
+    select.addEventListener("change", async () => {
+      const ticker = select.dataset.ticker;
+      const tagVal = select.value;
+      if (!ticker || !tagVal) return;
+      
+      let currentTags = (state.portfolioPurposeTags || {})[ticker] || [];
+      if (tagVal === "clear") {
+        currentTags = [];
+      } else {
+        if (currentTags.includes(tagVal)) {
+          currentTags = currentTags.filter(t => t !== tagVal);
+        } else {
+          currentTags.push(tagVal);
+        }
+      }
+      
+      try {
+        const res = await fetch("/api/v1/portfolio-purpose-tags", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticker, tags: currentTags })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data.status === "success") {
+          if (!state.portfolioPurposeTags) state.portfolioPurposeTags = {};
+          state.portfolioPurposeTags[ticker] = data.tags;
+          renderPortfolioHub();
+          bindPageActions();
+        }
+      } catch (err) {
+        alert("태그 수정에 실패했습니다: " + err.message);
+      }
     });
   });
 

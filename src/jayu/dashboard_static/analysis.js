@@ -578,6 +578,59 @@ function renderAnalysisBasic(container, ticker, macro, period) {
       <div class="panel-header"><div><h2>📰 뉴스 & 감성 분석</h2></div></div>
       <div class="panel-body"><div class="analysis-news-list">${newsHtml}</div>${renderSourceCaption("Finnhub / Alpha Vantage news providers")}</div>
     </section>`;
+
+  const tickerUpper = String(ticker).toUpperCase();
+  const jData = state.journals || {};
+  const jEntries = (jData.journals || []).filter(j => j.ticker === tickerUpper);
+  
+  if (jEntries.length > 0) {
+    const rows = jEntries.map(j => {
+      const perf5 = j.return_5d_pct != null ? `${j.return_5d_pct >= 0 ? "+" : ""}${j.return_5d_pct}%` : "대기 중";
+      const perf20 = j.return_20d_pct != null ? `${j.return_20d_pct >= 0 ? "+" : ""}${j.return_20d_pct}%` : "대기 중";
+      const color5 = j.return_5d_pct != null ? (j.return_5d_pct >= 0 ? "var(--success)" : "var(--failed)") : "var(--muted)";
+      const color20 = j.return_20d_pct != null ? (j.return_20d_pct >= 0 ? "var(--success)" : "var(--failed)") : "var(--muted)";
+      return `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">${new Date(j.created_at).toLocaleDateString("ko-KR")}</td>
+          <td style="padding:6px 10px"><span class="status-label status-${j.action_type === "approve" ? "success" : j.action_type === "hold" ? "warning" : "not-evaluated"}">${j.action_type === "approve" ? "승인" : j.action_type === "hold" ? "보류" : "무시"}</span></td>
+          <td style="padding:6px 10px; text-align:right;">$${j.entry_price.toFixed(2)}</td>
+          <td style="padding:6px 10px; text-align:right; color:${color5}; font-weight:700;">${perf5}</td>
+          <td style="padding:6px 10px; text-align:right; color:${color20}; font-weight:700;">${perf20}</td>
+          <td style="padding:6px 10px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(j.note)}">${escapeHtml(j.note)}</td>
+        </tr>
+      `;
+    }).join("");
+    
+    container.innerHTML += `
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div>
+            <h2>📋 ${tickerUpper} 의사결정 투자 일지</h2>
+            <p>이 종목에 대해 내린 수동 의사결정 기록 및 사후 복기 데이터입니다.</p>
+          </div>
+          <span class="muted">${jEntries.length}건 기록됨</span>
+        </div>
+        <div class="panel-body" style="overflow-x:auto">
+          <table style="width:100%; border-collapse:collapse; font-size:13px">
+            <thead>
+              <tr style="border-bottom:2px solid var(--border)">
+                <th style="text-align:left; padding:7px 10px">결정일자</th>
+                <th style="text-align:left; padding:7px 10px">결정</th>
+                <th style="text-align:right; padding:7px 10px">진입 가격</th>
+                <th style="text-align:right; padding:7px 10px">5일 후 성과</th>
+                <th style="text-align:right; padding:7px 10px">20일 후 성과</th>
+                <th style="text-align:left; padding:7px 10px">사유 및 근거</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+          ${renderSourceCaption("state/investment_journal.json")}
+        </div>
+      </section>
+    `;
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
