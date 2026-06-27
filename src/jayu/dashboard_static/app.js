@@ -186,6 +186,16 @@ async function loadPage() {
   try {
     await loadPermissionMode();
     if (!state.runs.length) await loadRuns();
+    
+    try {
+      const stockNames = await api("/api/v1/toss/stock-names");
+      if (stockNames && typeof stockNames === "object") {
+        Object.assign(TOSS_TICKER_NAMES, stockNames);
+      }
+    } catch (e) {
+      console.warn("Failed to load stock name mappings", e);
+    }
+
     const run = encodeURIComponent(state.runId);
     if (RUN_CONTEXT_OPTIONAL_PAGES.has(state.page)) {
       try {

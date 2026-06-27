@@ -3624,6 +3624,20 @@ def _dashboard_handler(
                     account = query.get("account", [None])[0]
                     self._json(build_dashboard_toss_reconciliation(paths, account=account))
                     return
+                if parsed.path == "/api/v1/toss/stock-names":
+                    from .toss_stock_metadata import TossStockMetadataManager
+                    manager = TossStockMetadataManager(paths.project_root)
+                    client = None
+                    try:
+                        settings = _load_dashboard_settings(paths)
+                        status = build_dashboard_toss_status(paths)
+                        if status["status"] == "configured":
+                            client = _dashboard_toss_client(settings)
+                    except Exception:
+                        pass
+                    mapping = manager.get_stock_names(client)
+                    self._json(mapping)
+                    return
                 if parsed.path == "/api/v1/toss/order-plan":
                     self._json(build_dashboard_toss_order_plan(paths))
                     return
