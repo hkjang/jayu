@@ -46,6 +46,11 @@ const state = {
   // 개인 투자 관리
   investmentGoals: null,
   cashflows: null,
+  cashflowSettings: null,
+  tossOrders: [],
+  tossOrdersMeta: null,
+  tossOrderDetails: {},
+  selectedTossOrderId: "",
   dividendSim: null,
   behaviorInsights: null,
   portfolioDiet: null,
@@ -298,10 +303,20 @@ async function loadPage() {
     const isPersonalPage = ["goal-planner", "cashflow", "dividend-sim", "investor-coach", "invest-calendar"].includes(state.page);
     if (isPersonalPage) {
       try {
-        const res = await api("/api/v1/toss/orders");
-        state.tossOrders = res.orders || [];
+        const orderParams = new URLSearchParams();
+        if (state.selectedTossAccount) orderParams.set("account", state.selectedTossAccount);
+        const ordersPath = `/api/v1/toss/orders${orderParams.toString() ? `?${orderParams.toString()}` : ""}`;
+        const [resOrders, resCfSettings] = await Promise.all([
+          api(ordersPath),
+          api("/api/v1/cashflows/settings")
+        ]);
+        state.tossOrders = resOrders.orders || [];
+        state.tossOrdersMeta = resOrders;
+        state.cashflowSettings = resCfSettings || { default_salary_krw: 6500000.0 };
       } catch (e) {
         state.tossOrders = [];
+        state.tossOrdersMeta = null;
+        state.cashflowSettings = { default_salary_krw: 6500000.0 };
       }
     }
 
@@ -484,6 +499,29 @@ function bindPageActions() {
       localStorage.setItem("jayu.toss.subTab", state.tossSubTab);
       renderTossAccountDashboard();
       bindPageActions();
+    });
+  });
+  document.querySelectorAll("[data-toss-order-detail]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const orderId = button.dataset.tossOrderDetail || "";
+      if (!orderId) return;
+      const originalText = button.textContent;
+      button.disabled = true;
+      button.textContent = "상세 조회 중...";
+      try {
+        const params = new URLSearchParams();
+        if (state.selectedTossAccount) params.set("account", state.selectedTossAccount);
+        const path = `/api/v1/toss/orders/${encodeURIComponent(orderId)}${params.toString() ? `?${params.toString()}` : ""}`;
+        const detail = await api(path);
+        state.tossOrderDetails = { ...(state.tossOrderDetails || {}), [orderId]: detail };
+        state.selectedTossOrderId = orderId;
+        els.liveRegion.textContent = `Toss 주문 상세를 조회했습니다: ${orderId}`;
+        render();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = originalText;
+        els.liveRegion.textContent = error.message || "Toss 주문 상세 조회에 실패했습니다.";
+      }
     });
   });
   const tossForm = document.querySelector("#toss-market-form");

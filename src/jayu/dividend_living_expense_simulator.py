@@ -14,15 +14,15 @@ class DividendLivingExpenseSimulator:
         self.simulator = DividendCashflowSimulator(project_root)
 
     def load_target(self) -> float:
-        """Load target monthly dividend in KRW. Default is 2,000,000 KRW."""
+        """Load target monthly dividend in KRW. Default is 3,000,000 KRW."""
         if not self.target_file.exists():
-            return 2000000.0
+            return 3000000.0
         try:
             with open(self.target_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return float(data.get("monthly_target_krw", 2000000.0))
+                return float(data.get("monthly_target_krw", 3000000.0))
         except Exception:
-            return 2000000.0
+            return 3000000.0
 
     def save_target(self, target_krw: float) -> float:
         """Save target monthly dividend in KRW."""

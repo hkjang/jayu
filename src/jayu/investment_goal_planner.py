@@ -15,7 +15,16 @@ class InvestmentGoalPlanner:
 
     def load_goals(self) -> list[dict[str, Any]]:
         if not self.goals_file.exists():
-            return []
+            return [{
+                "goal_id": "default_retirement",
+                "name": "10억 은퇴 자금",
+                "target_amount": 1000000000.0,
+                "target_date": "2046-06-27",
+                "current_amount": 50000000.0,
+                "monthly_deposit": 1000000.0,
+                "expected_return": 0.08,
+                "updated_at": datetime.now().isoformat()
+            }]
         try:
             with open(self.goals_file, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -37,7 +46,13 @@ class InvestmentGoalPlanner:
         monthly_deposit: float,
         expected_return: float,  # Annualized rate, e.g., 0.08 for 8%
     ) -> dict[str, Any]:
-        goals = self.load_goals()
+        goals = []
+        if self.goals_file.exists():
+            try:
+                with open(self.goals_file, "r", encoding="utf-8") as f:
+                    goals = json.load(f)
+            except Exception:
+                goals = []
         # Find and remove existing goal with same ID
         goals = [g for g in goals if g["goal_id"] != goal_id]
         
@@ -56,7 +71,13 @@ class InvestmentGoalPlanner:
         return goal
 
     def delete_goal(self, goal_id: str) -> bool:
-        goals = self.load_goals()
+        goals = []
+        if self.goals_file.exists():
+            try:
+                with open(self.goals_file, "r", encoding="utf-8") as f:
+                    goals = json.load(f)
+            except Exception:
+                goals = []
         filtered = [g for g in goals if g["goal_id"] != goal_id]
         if len(filtered) == len(goals):
             return False

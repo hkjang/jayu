@@ -4,6 +4,23 @@
  * 디자인 일관성 고도화 버전 (Jayu 디자인 규격 준수)
  * ============================================================ */
 
+const TOSS_TICKER_NAMES = {
+  "AAPL": "애플",
+  "TSLA": "테슬라",
+  "MSFT": "마이크로소프트",
+  "005930": "삼성전자",
+  "SCHD": "SCHD (배당성장 ETF)",
+  "O": "리얼티 인컴 (월배당 리츠)",
+  "JEPI": "JEPI (고배당 커버드콜)",
+  "TQQQ": "TQQQ (나스닥 3배 레버리지)",
+  "SOXL": "SOXL (반도체 3배 레버리지)",
+  "AMZN": "아마존",
+  "GOOGL": "구글",
+  "META": "메타",
+  "NVDA": "엔비디아",
+  "IONQ": "아이온큐"
+};
+
 // ──────────────────────────────────────────────
 // 공통 포맷 헬퍼
 // ──────────────────────────────────────────────
@@ -23,6 +40,131 @@ function pf_esc(s) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function pf_order_amount(order) {
+  const exec = order?.execution || {};
+  const filled = Number(exec.filledAmount ?? order?.filledAmount);
+  if (Number.isFinite(filled) && filled > 0) return filled;
+  const direct = Number(order?.orderAmount);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const price = Number(exec.averageFilledPrice ?? order?.price);
+  const quantity = Number(exec.filledQuantity ?? order?.quantity);
+  return Number.isFinite(price) && Number.isFinite(quantity) ? price * quantity : null;
+}
+
+function pf_money(value, currency = "KRW") {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  const digits = currency === "USD" ? 2 : 0;
+  return `${pf_fmt(n, digits)} ${pf_esc(currency || "")}`.trim();
+}
+
+function renderTossOrderDetailCard() {
+  const orderId = state.selectedTossOrderId;
+  if (!orderId) {
+    return `
+      <div style="border-top:1px dashed var(--border); padding-top:10px; color:var(--muted); font-size:11.5px;">
+        주문 행의 상세 버튼을 누르면 Toss getOrder 응답의 체결가, 수수료, 세금, 결제일을 여기서 확인합니다.
+      </div>
+      ${renderSourceCaption("Toss Order History getOrder · GET /api/v1/orders/{orderId}")}
+    `;
+  }
+  const payload = state.tossOrderDetails?.[orderId] || {};
+  const order = payload.order || {};
+  if (!order || Object.keys(order).length === 0) {
+    return `
+      <div style="border-top:1px dashed var(--border); padding-top:10px; color:var(--warning); font-size:11.5px;">
+        선택한 주문의 상세 캐시가 없습니다. 상세 버튼을 다시 눌러 조회하세요.
+      </div>
+      ${renderSourceCaption(payload.source || "Toss Order History getOrder · GET /api/v1/orders/{orderId}")}
+    `;
+  }
+  const exec = order.execution || {};
+  const rows = [
+    ["주문 ID", order.orderId || orderId],
+    ["종목", order.symbol],
+    ["방향 / 유형", `${order.side || "-"} · ${order.orderType || "-"}`],
+    ["상태", order.status],
+    ["주문가 / 수량", `${pf_money(order.price, order.currency)} · ${pf_esc(order.quantity || "-")}`],
+    ["주문 시각", order.orderedAt],
+    ["체결 수량", exec.filledQuantity],
+    ["평균 체결가", pf_money(exec.averageFilledPrice, order.currency)],
+    ["체결 금액", pf_money(exec.filledAmount, order.currency)],
+    ["수수료 / 세금", `${pf_money(exec.commission, order.currency)} · ${pf_money(exec.tax, order.currency)}`],
+    ["체결 시각", exec.filledAt],
+    ["결제일", exec.settlementDate],
+  ];
+  return `
+    <div style="border-top:1px dashed var(--border); padding-top:10px;">
+      <div style="display:flex; justify-content:space-between; gap:10px; align-items:center; margin-bottom:8px;">
+        <strong style="font-size:12.5px;">주문 상세</strong>
+        <span class="status-label status-${order.status === "FILLED" ? "success" : "not_evaluated"}">${pf_esc(order.status || "-")}</span>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:7px; font-size:11.5px;">
+        ${rows.map(([label, value]) => `
+          <div style="border-bottom:1px solid #eef2f7; padding-bottom:4px;">
+            <span style="display:block; color:var(--muted);">${pf_esc(label)}</span>
+            <strong style="word-break:break-word;">${pf_esc(value ?? "-")}</strong>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+    ${renderSourceCaption(payload.source || "Toss Order History getOrder · GET /api/v1/orders/{orderId}")}
+  `;
+}
+
+function renderTossOrderHistoryPanel(orders) {
+  const source = state.tossOrdersMeta?.source || "Toss Order History getOrders · GET /api/v1/orders";
+  const fetch = state.tossOrdersMeta?.fetch_result;
+  const caption = fetch?.from && fetch?.to
+    ? `${source} · orderedAt KST ${fetch.from}~${fetch.to}`
+    : source;
+  const recent = (orders || []).slice(0, 8);
+  const rows = recent.length === 0
+    ? `<tr><td colspan="6" style="text-align:center; padding:18px; color:var(--muted);">저장된 Toss 주문 내역이 없습니다.</td></tr>`
+    : recent.map((order) => {
+        const orderId = order.orderId || "";
+        const selected = state.selectedTossOrderId === orderId;
+        const amount = pf_order_amount(order);
+        return `
+          <tr style="${selected ? "background:#f8fafc;" : ""}">
+            <td class="nowrap">${pf_esc((order.orderedAt || "").slice(0, 16).replace("T", " "))}</td>
+            <td class="nowrap"><strong>${pf_esc(order.symbol || "-")}</strong></td>
+            <td class="nowrap">${pf_esc(order.side || "-")}</td>
+            <td class="nowrap">${pf_esc(order.status || order.historyStatus || "-")}</td>
+            <td class="nowrap" style="text-align:right;">${pf_money(amount, order.currency || "KRW")}</td>
+            <td class="nowrap" style="text-align:right;">
+              ${orderId ? `<button class="button button-secondary" type="button" data-toss-order-detail="${pf_esc(orderId)}" style="min-height:26px; padding:2px 8px; font-size:11px;">상세</button>` : "-"}
+            </td>
+          </tr>
+        `;
+      }).join("");
+  return `
+    <section class="panel" style="margin-top:14px; align-self:flex-start; width:100%;">
+      <div class="panel-header" style="padding-bottom:10px; border-bottom:1px solid var(--border);">
+        <div>
+          <h2 style="font-size:13.5px; font-weight:700; margin:0;">Toss 최근 1년 주문 내역</h2>
+          <p style="font-size:11px; margin:2px 0 0 0;">CLOSED 주문은 cursor 페이징, OPEN 주문은 별도 조회로 합칩니다.</p>
+        </div>
+        <span class="status-label status-${recent.length ? "success" : "not_evaluated"}">${recent.length}건</span>
+      </div>
+      <div class="panel-body" style="padding-top:12px;">
+        <div style="overflow:auto;">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th>주문시각</th><th>종목</th><th>방향</th><th>상태</th><th style="text-align:right;">금액</th><th style="text-align:right;">상세</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${renderSourceCaption(caption)}
+        ${renderTossOrderDetailCard()}
+      </div>
+    </section>
+  `;
 }
 
 // ──────────────────────────────────────────────
@@ -167,6 +309,7 @@ function renderGoalPlanner() {
   let tossTotalSell = 0;
   let tossBuyCount = 0;
   let tossSellCount = 0;
+  const tickerCounts = {};
   
   orders.forEach(o => {
     const status = o.status;
@@ -178,6 +321,9 @@ function renderGoalPlanner() {
       const rate = (currency === "USD") ? 1350.0 : 1.0;
       const amtKrw = amt * rate;
       
+      const t = o.symbol.toUpperCase();
+      tickerCounts[t] = (tickerCounts[t] || 0) + 1;
+      
       if (side === "BUY") {
         tossTotalBuy += amtKrw;
         tossBuyCount++;
@@ -188,6 +334,12 @@ function renderGoalPlanner() {
     }
   });
   const tossNetInvested = tossTotalBuy - tossTotalSell;
+
+  const topTickers = Object.entries(tickerCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([ticker, count]) => `${TOSS_TICKER_NAMES[ticker] || ticker} (${count}회)`)
+    .join(", ") || "없음";
 
   const tossTradeStatsPanel = `
     <section class="panel" style="margin-top:14px; align-self: flex-start; width:100%;">
@@ -206,14 +358,19 @@ function renderGoalPlanner() {
           <span style="color:var(--muted)">누적 총 매도 (${tossSellCount}건)</span>
           <strong style="color:var(--failed)">${pf_fmt(Math.round(tossTotalSell))}원</strong>
         </div>
+        <div style="display:flex; justify-content:space-between; font-size:12px;">
+          <span style="color:var(--muted)">주요 거래 종목 (TOP 3)</span>
+          <strong style="color:var(--text)">${topTickers}</strong>
+        </div>
         <div style="border-top:1px dashed var(--border); padding-top:8px; display:flex; justify-content:space-between; font-size:12.5px; font-weight:700;">
           <span>순자산 투입금 (Net Input)</span>
           <strong style="color:var(--text)">${pf_fmt(Math.round(tossNetInvested))}원</strong>
         </div>
       </div>
-      ${renderSourceCaption("state/toss_orders.json")}
+      ${renderSourceCaption(state.tossOrdersMeta?.source || "Toss Order History getOrders · GET /api/v1/orders")}
     </section>
   `;
+  const tossOrderHistoryPanel = renderTossOrderHistoryPanel(orders);
 
   els.root.innerHTML = `
     <div class="page-heading">
@@ -290,6 +447,7 @@ function renderGoalPlanner() {
           ${renderSourceCaption("state/investment_goals.json")}
         </section>
         ${tossTradeStatsPanel}
+        ${tossOrderHistoryPanel}
       </div>
     </div>
   `;
@@ -449,7 +607,7 @@ function renderCashflow() {
       <tr>
         <td><strong>${ym}</strong></td>
         <td class="numeric" style="color:var(--success)">+${pf_fmt(Math.round(flow.sell))}원</td>
-        <td class="numeric" style="color:var(--failed)">-${pf_fmt(Math.round(flow.buy))}원</td>
+        <td class="numeric" style="color:var(--failed)">${pf_fmt(Math.round(flow.buy))}원</td>
         <td class="numeric" style="color:${netColor}; font-weight:700;">${net >= 0 ? "+" : ""}${pf_fmt(Math.round(net))}원</td>
       </tr>
     `;
@@ -588,6 +746,25 @@ function renderCashflow() {
           </div>
           ${renderSourceCaption("state/cashflows.json")}
         </section>
+
+        <!-- default salary settings card -->
+        <section class="panel" style="margin-top:14px; align-self: flex-start; width:100%;">
+          <div class="panel-header" style="padding-bottom:10px; border-bottom:1px solid var(--border);">
+            <div>
+              <h2 style="font-size:13px; font-weight:700; margin:0;">⚙️ 기본 월 급여 설정 (Salary Configuration)</h2>
+              <p style="font-size:11px; margin:2px 0 0 0;">새 예산 계획 시 적용할 기본 월 급여 기준 액수입니다.</p>
+            </div>
+          </div>
+          <div class="panel-body" style="padding-top:12px; display:flex; flex-direction:column; gap:10px;">
+            <div>
+              <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">기본 급여액 (원화)</label>
+              <input id="pf-cf-default-salary" type="number" value="${state.cashflowSettings ? state.cashflowSettings.default_salary_krw : 6500000}" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
+            </div>
+            <button id="pf-cf-settings-save" class="button button-primary" style="width:100%;">기본 설정 저장</button>
+            <p id="pf-cf-settings-msg" style="font-size:11px; margin:4px 0 0 0; color:var(--success);" class="nowrap"></p>
+          </div>
+          ${renderSourceCaption("state/cashflow_settings.json")}
+        </section>
       </div>
     </div>
   `;
@@ -597,6 +774,44 @@ function renderCashflow() {
     document.querySelector("#pf-cf-label").value = "";
     document.querySelector("#pf-cf-amount").value = "";
     document.querySelector("#pf-cf-msg").textContent = "";
+  });
+
+  // Auto populate on category change
+  document.querySelector("#pf-cf-cat")?.addEventListener("change", (e) => {
+    const cat = e.target.value;
+    const amountInput = document.querySelector("#pf-cf-amount");
+    const labelInput = document.querySelector("#pf-cf-label");
+    if (cat === "salary") {
+      amountInput.value = state.cashflowSettings ? state.cashflowSettings.default_salary_krw : 6500000;
+      labelInput.value = "월 정기 급여 유입";
+    }
+  });
+
+  // Save Settings Event
+  document.querySelector("#pf-cf-settings-save")?.addEventListener("click", async () => {
+    const msg = document.querySelector("#pf-cf-settings-msg");
+    const val = parseFloat(document.querySelector("#pf-cf-default-salary").value) || 0;
+    if (val <= 0) { msg.textContent = "⚠️ 올바른 금액을 입력하세요."; msg.style.color = "var(--failed)"; return; }
+    try {
+      msg.textContent = "저장 중..."; msg.style.color = "var(--muted)";
+      const res = await fetch("/api/v1/cashflows/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ default_salary_krw: val })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      state.cashflowSettings = { default_salary_krw: val };
+      msg.textContent = "✅ 기본 설정이 정상 반영되었습니다.";
+      msg.style.color = "var(--success)";
+      
+      // Auto update amount input value if salary cat is selected
+      if (document.querySelector("#pf-cf-cat").value === "salary") {
+        document.querySelector("#pf-cf-amount").value = val;
+      }
+    } catch (e) {
+      msg.textContent = `❌ 오류: ${e.message}`;
+      msg.style.color = "var(--failed)";
+    }
   });
 
   document.querySelector("#pf-cf-save")?.addEventListener("click", async () => {
@@ -713,7 +928,7 @@ function renderDividendSim() {
   const estimatedHoldings = [];
   Object.entries(symbolShares).forEach(([ticker, shares]) => {
     if (shares > 0) {
-      const profile = defaultDividendProfiles[ticker] || { yield: 0.015, name: ticker, price: 100.0 };
+      const profile = defaultDividendProfiles[ticker] || { yield: 0.015, name: TOSS_TICKER_NAMES[ticker] || ticker, price: 100.0 };
       const isUs = !ticker.match(/^\d+$/);
       const rate = isUs ? 1350.0 : 1.0;
       const valueKrw = shares * profile.price * rate;
@@ -721,7 +936,7 @@ function renderDividendSim() {
       
       estimatedHoldings.push({
         ticker,
-        name: profile.name,
+        name: TOSS_TICKER_NAMES[ticker] || profile.name,
         shares,
         valueKrw,
         yieldPct: profile.yield * 100,
@@ -1172,6 +1387,45 @@ function renderInvestorCoach() {
          </div>
        </div>`;
 
+  const hasLeveraged = coachOrders.some(o => ["TQQQ", "SOXL", "NVDL", "NVDX", "MSTX"].includes(o.symbol.toUpperCase()));
+  const leveragedBanner = hasLeveraged
+    ? `<div class="status-banner status-warning" style="margin-bottom:10px; padding:10px; grid-template-columns:auto 1fr; border-left-width:3px;">
+         <div style="font-size:16px; margin-right:8px;">⚠️</div>
+         <div>
+           <strong style="font-size:12.5px; display:block;">고위험 레버리지 포지션 감지 (TQQQ, SOXL 등)</strong>
+           <p style="font-size:11.5px; margin:2px 0 0 0; color:var(--text); line-height:1.4;">거래 이력 중 레버리지 상품이 확인됩니다. 3배 레버리지는 횡보 장세에서 변동성 끌림(Volatility Drag)으로 인해 원금이 깎이므로, 중장기 보유 비중을 줄이고 패시브 지수로의 이동을 권고합니다.</p>
+         </div>
+       </div>`
+    : "";
+
+  const hasDividends = coachOrders.some(o => ["SCHD", "O", "JEPI"].includes(o.symbol.toUpperCase()));
+  const dividendBanner = hasDividends
+    ? `<div class="status-banner status-success" style="margin-bottom:10px; padding:10px; grid-template-columns:auto 1fr; border-left-width:3px;">
+         <div style="font-size:16px; margin-right:8px;">🌱</div>
+         <div>
+           <strong style="font-size:12.5px; display:block;">우량 배당 연계 거래 확인 (SCHD, Realty Income)</strong>
+           <p style="font-size:11.5px; margin:2px 0 0 0; color:var(--text); line-height:1.4;">SCHD, Realty Income 등 안정적인 연 배당형 자산 거래가 감지되었습니다. 장기적 복리 재투자(DRIP) 전략을 연계해 나가는 습관은 우수합니다.</p>
+         </div>
+       </div>`
+    : "";
+
+  const sellRatio = numSell / (numBuy + numSell || 1);
+  const sellPatternBanner = (sellRatio > 0.4)
+    ? `<div class="status-banner status-failed" style="margin-bottom:10px; padding:10px; grid-template-columns:auto 1fr; border-left-width:3px;">
+         <div style="font-size:16px; margin-right:8px;">🏃</div>
+         <div>
+           <strong style="font-size:12.5px; display:block;">높은 매도 회전율 감지 (매도 비중 ${(sellRatio * 100).toFixed(1)}%)</strong>
+           <p style="font-size:11.5px; margin:2px 0 0 0; color:var(--text); line-height:1.4;">매수 후 장기 보유하기보다는 잦은 매도를 통해 실현 손익을 조기 확정하고 있습니다. 이는 주식 복리 성장을 방해하므로 매매 템포를 늦추십시오.</p>
+         </div>
+       </div>`
+    : `<div class="status-banner status-success" style="margin-bottom:10px; padding:10px; grid-template-columns:auto 1fr; border-left-width:3px;">
+         <div style="font-size:16px; margin-right:8px;">🧘</div>
+         <div>
+           <strong style="font-size:12.5px; display:block;">장기 인내형 포지션 유지 (매도 비중 ${(sellRatio * 100).toFixed(1)}%)</strong>
+           <p style="font-size:11.5px; margin:2px 0 0 0; color:var(--text); line-height:1.4;">매도 회전율이 매우 낮습니다. 불필요한 시장 진입/퇴출 수수료를 차단하고 장기 자산 가치 복리 상승을 유도하는 우수한 태도입니다.</p>
+         </div>
+       </div>`;
+
   const tossCoachPanel = `
     <section class="panel" style="margin-top:14px;">
       <div class="panel-header" style="padding-bottom:10px; border-bottom:1px solid var(--border);">
@@ -1183,6 +1437,9 @@ function renderInvestorCoach() {
       <div class="panel-body" style="padding-top:12px;">
         ${overtradingBanner}
         ${cancelBanner}
+        ${leveragedBanner}
+        ${dividendBanner}
+        ${sellPatternBanner}
         <div style="background:var(--surface-subtle); padding:10px; border-radius:6px; border:1px solid var(--border); font-size:11.5px; line-height:1.45;">
           <strong>💡 실계좌 피드백 코칭</strong><br>
           6년 누적 매수 ${numBuy}회, 매도 ${numSell}회, 주문 취소 ${numCancel}회가 분석되었습니다. 거래량이 급증하는 장 초반 30분에 뇌동매매를 하지 않는 것만으로도 행동 등급을 추가로 높일 수 있습니다.
@@ -1300,11 +1557,12 @@ function renderInvestCalendar() {
     const avgPrice = exec.averageFilledPrice || o.price;
     const commission = exec.commission || "0";
     const currency = o.currency || "KRW";
+    const stockName = TOSS_TICKER_NAMES[o.symbol.toUpperCase()] || o.symbol;
     
     return {
       date: (o.orderedAt || "").slice(0, 10),
       type: "toss_order",
-      title: `${side === "BUY" ? "🟢 Toss 실계좌 매수 체결" : "🔴 Toss 실계좌 매도 체결"}`,
+      title: `${side === "BUY" ? "🟢 Toss 매수 체결" : "🔴 Toss 매도 체결"} [${stockName}]`,
       description: `${filledQty}주 체결 @ 평균 ${avgPrice} ${currency} (수수료: ${commission} ${currency})`,
       ticker: o.symbol
     };

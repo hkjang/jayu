@@ -13,9 +13,36 @@ class CashflowPlanner:
         self.project_root = project_root
         self.cashflow_file = project_root / "state" / "cashflows.json"
 
+    def load_default_salary(self) -> float:
+        settings_file = self.project_root / "state" / "cashflow_settings.json"
+        if not settings_file.exists():
+            return 6500000.0
+        try:
+            with open(settings_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return float(data.get("default_salary_krw", 6500000.0))
+        except Exception:
+            return 6500000.0
+
+    def save_default_salary(self, salary: float) -> float:
+        settings_file = self.project_root / "state" / "cashflow_settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(settings_file, "w", encoding="utf-8") as f:
+            json.dump({"default_salary_krw": salary}, f, indent=2, ensure_ascii=False)
+        return salary
+
     def load_cashflows(self) -> list[dict[str, Any]]:
         if not self.cashflow_file.exists():
-            return []
+            default_month = datetime.now().strftime("%Y-%m")
+            return [{
+                "month": default_month,
+                "salary_deposit": self.load_default_salary(),
+                "expected_dividends": 0.0,
+                "extra_deposits": 0.0,
+                "planned_buys": 0.0,
+                "reserved_cash": 0.0,
+                "created_at": datetime.now().isoformat()
+            }]
         try:
             with open(self.cashflow_file, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -36,7 +63,13 @@ class CashflowPlanner:
         planned_buys: float,
         reserved_cash: float,
     ) -> dict[str, Any]:
-        cashflows = self.load_cashflows()
+        cashflows = []
+        if self.cashflow_file.exists():
+            try:
+                with open(self.cashflow_file, "r", encoding="utf-8") as f:
+                    cashflows = json.load(f)
+            except Exception:
+                cashflows = []
         # Filter out existing month
         cashflows = [c for c in cashflows if c["month"] != month]
 
@@ -54,7 +87,13 @@ class CashflowPlanner:
         return record
 
     def delete_cashflow(self, month: str) -> bool:
-        cashflows = self.load_cashflows()
+        cashflows = []
+        if self.cashflow_file.exists():
+            try:
+                with open(self.cashflow_file, "r", encoding="utf-8") as f:
+                    cashflows = json.load(f)
+            except Exception:
+                cashflows = []
         filtered = [c for c in cashflows if c["month"] != month]
         if len(filtered) == len(cashflows):
             return False

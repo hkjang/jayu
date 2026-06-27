@@ -2914,6 +2914,11 @@ def _dashboard_handler(
                     analyses = [planner.calculate_analysis(g) for g in goals]
                     self._json({"goals": analyses})
                     return
+                if parsed.path == "/api/v1/cashflows/settings":
+                    from .cashflow_planner import CashflowPlanner
+                    planner = CashflowPlanner(paths.project_root)
+                    self._json({"default_salary_krw": planner.load_default_salary()})
+                    return
                 if parsed.path == "/api/v1/cashflows":
                     from .cashflow_planner import CashflowPlanner
                     planner = CashflowPlanner(paths.project_root)
@@ -3358,10 +3363,38 @@ def _dashboard_handler(
                     from .toss_orders import TossOrdersManager
                     mgr = TossOrdersManager(paths.project_root)
                     query = parse_qs(parsed.query)
+                    fetch_result = None
+                    account = query.get("account", [None])[0]
                     if query.get("refresh", ["false"])[0].lower() == "true" or not mgr.orders_file.exists():
-                        mgr.fetch_and_save(paths)
+                        fetch_result = mgr.fetch_and_save(paths, account=account)
                     orders = mgr.load_orders()
-                    self._json({"orders": orders})
+                    self._json(
+                        {
+                            "orders": orders,
+                            "fetch_result": fetch_result,
+                            "source": "Toss Order History getOrders · GET /api/v1/orders",
+                        }
+                    )
+                    return
+                if parsed.path.startswith("/api/v1/toss/orders/"):
+                    from .toss_orders import TossOrdersManager
+                    mgr = TossOrdersManager(paths.project_root)
+                    query = parse_qs(parsed.query)
+                    order_id = unquote(parsed.path.removeprefix("/api/v1/toss/orders/"))
+                    account = query.get("account", [None])[0]
+                    if query.get("refresh", ["false"])[0].lower() == "true":
+                        self._json(mgr.fetch_order_detail(paths, order_id, account=account))
+                    else:
+                        order = mgr.load_order_detail(order_id)
+                        if order is None:
+                            detail = mgr.fetch_order_detail(paths, order_id, account=account)
+                        else:
+                            detail = {
+                                "status": "cached",
+                                "order": order,
+                                "source": "state/toss_order_details.json · cached Toss getOrder detail",
+                            }
+                        self._json(detail)
                     return
                 if parsed.path == "/api/v1/toss/accounts":
                     self._json(build_dashboard_toss_accounts(paths))
@@ -3431,6 +3464,7 @@ def _dashboard_handler(
                     "/api/v1/llm-explain": "view",
                     "/api/v1/investment-goals": "modify_settings",
                     "/api/v1/cashflows": "modify_settings",
+                    "/api/v1/cashflows/settings": "modify_settings",
                     "/api/v1/portfolio-purpose-tags": "write_memo",
                     "/api/v1/investment-journals": "write_memo",
                     "/api/v1/dividend-living-expense-simulator": "modify_settings",
@@ -3501,6 +3535,14 @@ def _dashboard_handler(
                         expected_return=expected_return
                     )
                     self._json({"status": "success", "goal": goal})
+                    return
+
+                if parsed.path == "/api/v1/cashflows/settings":
+                    salary = float(payload.get("default_salary_krw", 6500000.0))
+                    from .cashflow_planner import CashflowPlanner
+                    planner = CashflowPlanner(paths.project_root)
+                    val = planner.save_default_salary(salary)
+                    self._json({"status": "success", "default_salary_krw": val})
                     return
 
                 if parsed.path == "/api/v1/cashflows":

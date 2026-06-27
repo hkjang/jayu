@@ -131,6 +131,12 @@ class TestCashflowPlanner:
         assert planner.delete_cashflow("2026-08") is True
         assert planner.load_cashflows() == []
 
+    def test_default_salary(self, tmp_path: Path) -> None:
+        planner = self._planner(tmp_path)
+        assert planner.load_default_salary() == 6500000.0
+        planner.save_default_salary(7200000.0)
+        assert planner.load_default_salary() == 7200000.0
+
     def test_budget_allocation_positive_net(self, tmp_path: Path) -> None:
         planner = self._planner(tmp_path)
         record = {
