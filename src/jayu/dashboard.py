@@ -3354,6 +3354,15 @@ def _dashboard_handler(
                 if parsed.path == "/api/v1/toss/status":
                     self._json(build_dashboard_toss_status(paths))
                     return
+                if parsed.path == "/api/v1/toss/orders":
+                    from .toss_orders import TossOrdersManager
+                    mgr = TossOrdersManager(paths.project_root)
+                    query = parse_qs(parsed.query)
+                    if query.get("refresh", ["false"])[0].lower() == "true" or not mgr.orders_file.exists():
+                        mgr.fetch_and_save(paths)
+                    orders = mgr.load_orders()
+                    self._json({"orders": orders})
+                    return
                 if parsed.path == "/api/v1/toss/accounts":
                     self._json(build_dashboard_toss_accounts(paths))
                     return

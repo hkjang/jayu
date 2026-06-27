@@ -295,6 +295,16 @@ async function loadPage() {
       state.simulationLog = res.logs || "";
       state.simulationStatus = res.status || "idle";
     }
+    const isPersonalPage = ["goal-planner", "cashflow", "dividend-sim", "investor-coach", "invest-calendar"].includes(state.page);
+    if (isPersonalPage) {
+      try {
+        const res = await api("/api/v1/toss/orders");
+        state.tossOrders = res.orders || [];
+      } catch (e) {
+        state.tossOrders = [];
+      }
+    }
+
     if (state.page === "goal-planner") {
       try { state.investmentGoals = await api("/api/v1/investment-goals"); } catch(e) { state.investmentGoals = { goals: [] }; }
       try { state.lossRecovery = await api("/api/v1/loss-recovery-planner?loss_pct=0.20"); } catch(e) { state.lossRecovery = null; }

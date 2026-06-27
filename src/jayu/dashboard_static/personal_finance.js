@@ -162,6 +162,59 @@ function renderGoalPlanner() {
     `;
   }
 
+  const orders = state.tossOrders || [];
+  let tossTotalBuy = 0;
+  let tossTotalSell = 0;
+  let tossBuyCount = 0;
+  let tossSellCount = 0;
+  
+  orders.forEach(o => {
+    const status = o.status;
+    if (status === "FILLED" || status === "PARTIAL_FILLED") {
+      const exec = o.execution || {};
+      const amt = parseFloat(exec.filledAmount || 0);
+      const side = o.side;
+      const currency = o.currency || "KRW";
+      const rate = (currency === "USD") ? 1350.0 : 1.0;
+      const amtKrw = amt * rate;
+      
+      if (side === "BUY") {
+        tossTotalBuy += amtKrw;
+        tossBuyCount++;
+      } else if (side === "SELL") {
+        tossTotalSell += amtKrw;
+        tossSellCount++;
+      }
+    }
+  });
+  const tossNetInvested = tossTotalBuy - tossTotalSell;
+
+  const tossTradeStatsPanel = `
+    <section class="panel" style="margin-top:14px; align-self: flex-start; width:100%;">
+      <div class="panel-header" style="padding-bottom:10px; border-bottom:1px solid var(--border);">
+        <div>
+          <h2 style="font-size:13.5px; font-weight:700; margin:0;">🏷️ Toss 6개년 누적 거래 실적</h2>
+          <p style="font-size:11px; margin:2px 0 0 0;">실계좌 주문 이력(최근 6년)을 기반으로 집계된 총 투자 투입금 명세입니다.</p>
+        </div>
+      </div>
+      <div class="panel-body" style="padding-top:12px; display:flex; flex-direction:column; gap:10px;">
+        <div style="display:flex; justify-content:space-between; font-size:12px;">
+          <span style="color:var(--muted)">누적 총 매수 (${tossBuyCount}건)</span>
+          <strong style="color:var(--success)">${pf_fmt(Math.round(tossTotalBuy))}원</strong>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:12px;">
+          <span style="color:var(--muted)">누적 총 매도 (${tossSellCount}건)</span>
+          <strong style="color:var(--failed)">${pf_fmt(Math.round(tossTotalSell))}원</strong>
+        </div>
+        <div style="border-top:1px dashed var(--border); padding-top:8px; display:flex; justify-content:space-between; font-size:12.5px; font-weight:700;">
+          <span>순자산 투입금 (Net Input)</span>
+          <strong style="color:var(--text)">${pf_fmt(Math.round(tossNetInvested))}원</strong>
+        </div>
+      </div>
+      ${renderSourceCaption("state/toss_orders.json")}
+    </section>
+  `;
+
   els.root.innerHTML = `
     <div class="page-heading">
       <div>
@@ -182,59 +235,62 @@ function renderGoalPlanner() {
     <div class="section-grid">
       <!-- Left side: Goals list -->
       <div style="display:flex; flex-direction:column;">
-        <h2 style="font-size:14px; font-weight:700; margin:0 0 10px 0; color:var(--text);">📋 등록된 투자 목표 목록</h2>
+        <h2 style="font-size:14px; font-weight:700; margin:0 God 10px 0; color:var(--text);">📋 등록된 투자 목표 목록</h2>
         ${goalListHtml}
         ${lrHtml}
       </div>
 
-      <!-- Right side: Add Goal Form -->
-      <section class="panel" style="align-self: flex-start;">
-        <div class="panel-header">
-          <div>
-            <h2>➕ 새 투자 목표 추가</h2>
-            <p>달성하려는 재무 목표를 설정하세요.</p>
+      <!-- Right side: Add Goal Form & Trade stats -->
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <section class="panel" style="align-self: flex-start; width:100%;">
+          <div class="panel-header">
+            <div>
+              <h2>➕ 새 투자 목표 추가</h2>
+              <p>달성하려는 재무 목표를 설정하세요.</p>
+            </div>
           </div>
-        </div>
-        <div class="panel-body" style="display:flex; flex-direction:column; gap:12px;">
-          <div>
-            <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">목표 명칭</label>
-            <input id="pf-goal-name" type="text" placeholder="예: 10억 은퇴 자금" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
+          <div class="panel-body" style="display:flex; flex-direction:column; gap:12px;">
+            <div>
+              <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">목표 명칭</label>
+              <input id="pf-goal-name" type="text" placeholder="예: 10억 은퇴 자금" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
+            </div>
+            <div>
+              <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">유형 (Goal Type)</label>
+              <select id="pf-goal-type" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
+                <option value="retirement">🌱 retirement (은퇴 자금)</option>
+                <option value="house">🏠 house (주택 구입)</option>
+                <option value="education">🎓 education (자녀 학자금)</option>
+                <option value="emergency">🛡️ emergency (비상금)</option>
+                <option value="other">🎯 other (기타 목표)</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">현재 자산 (PV, 원화)</label>
+              <input id="pf-goal-pv" type="number" placeholder="50000000" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
+            </div>
+            <div>
+              <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">목표 자산 (FV, 원화)</label>
+              <input id="pf-goal-fv" type="number" placeholder="1000000000" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
+            </div>
+            <div>
+              <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">월 정기 적립액 (PMT, 원화)</label>
+              <input id="pf-goal-pmt" type="number" placeholder="1000000" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
+            </div>
+            <div>
+              <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">달성 목표 기간 (개월수)</label>
+              <input id="pf-goal-months" type="number" placeholder="240" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
+            </div>
+            
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              <button id="pf-goal-save" class="button button-primary" style="flex:1;">목표 저장</button>
+              <button id="pf-goal-cancel" class="button button-secondary" style="flex:0 0 70px;">초기화</button>
+            </div>
+            <p id="pf-goal-msg" style="font-size:11px; margin:4px 0 0 0; color:var(--failed);" class="nowrap"></p>
           </div>
-          <div>
-            <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">유형 (Goal Type)</label>
-            <select id="pf-goal-type" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
-              <option value="retirement">🌱 retirement (은퇴 자금)</option>
-              <option value="house">🏠 house (주택 구입)</option>
-              <option value="education">🎓 education (자녀 학자금)</option>
-              <option value="emergency">🛡️ emergency (비상금)</option>
-              <option value="other">🎯 other (기타 목표)</option>
-            </select>
-          </div>
-          <div>
-            <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">현재 자산 (PV, 원화)</label>
-            <input id="pf-goal-pv" type="number" placeholder="50000000" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
-          </div>
-          <div>
-            <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">목표 자산 (FV, 원화)</label>
-            <input id="pf-goal-fv" type="number" placeholder="1000000000" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
-          </div>
-          <div>
-            <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">월 정기 적립액 (PMT, 원화)</label>
-            <input id="pf-goal-pmt" type="number" placeholder="1000000" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
-          </div>
-          <div>
-            <label style="display:block; font-size:11px; color:var(--muted); margin-bottom:4px;">달성 목표 기간 (개월수)</label>
-            <input id="pf-goal-months" type="number" placeholder="240" style="width:100%; min-height:34px; padding:6px 9px; border:1px solid var(--border-strong); border-radius:6px; font-size:12.5px;">
-          </div>
-          
-          <div style="display:flex; gap:8px; margin-top:8px;">
-            <button id="pf-goal-save" class="button button-primary" style="flex:1;">목표 저장</button>
-            <button id="pf-goal-cancel" class="button button-secondary" style="flex:0 0 70px;">초기화</button>
-          </div>
-          <p id="pf-goal-msg" style="font-size:11px; margin:4px 0 0 0; color:var(--failed);" class="nowrap"></p>
-        </div>
-        ${renderSourceCaption("state/investment_goals.json")}
-      </section>
+          ${renderSourceCaption("state/investment_goals.json")}
+        </section>
+        ${tossTradeStatsPanel}
+      </div>
     </div>
   `;
 
@@ -356,6 +412,76 @@ function renderCashflow() {
         `;
       }).join("");
 
+  // Toss Monthly Flow Calculation
+  const orders = state.tossOrders || [];
+  const monthlyFlows = {};
+  orders.forEach(o => {
+    const status = o.status;
+    if (status === "FILLED" || status === "PARTIAL_FILLED") {
+      const exec = o.execution || {};
+      const amt = parseFloat(exec.filledAmount || 0);
+      const side = o.side;
+      const currency = o.currency || "KRW";
+      const rate = (currency === "USD") ? 1350.0 : 1.0;
+      const amtKrw = amt * rate;
+      
+      const dateStr = o.orderedAt || "";
+      if (dateStr.length >= 7) {
+        const ym = dateStr.slice(0, 7);
+        if (!monthlyFlows[ym]) {
+          monthlyFlows[ym] = { buy: 0, sell: 0 };
+        }
+        if (side === "BUY") {
+          monthlyFlows[ym].buy += amtKrw;
+        } else if (side === "SELL") {
+          monthlyFlows[ym].sell += amtKrw;
+        }
+      }
+    }
+  });
+
+  const sortedMonths = Object.keys(monthlyFlows).sort().reverse().slice(0, 6);
+  const monthlyRows = sortedMonths.map(ym => {
+    const flow = monthlyFlows[ym];
+    const net = flow.sell - flow.buy;
+    const netColor = net >= 0 ? "var(--success)" : "var(--failed)";
+    return `
+      <tr>
+        <td><strong>${ym}</strong></td>
+        <td class="numeric" style="color:var(--success)">+${pf_fmt(Math.round(flow.sell))}원</td>
+        <td class="numeric" style="color:var(--failed)">-${pf_fmt(Math.round(flow.buy))}원</td>
+        <td class="numeric" style="color:${netColor}; font-weight:700;">${net >= 0 ? "+" : ""}${pf_fmt(Math.round(net))}원</td>
+      </tr>
+    `;
+  }).join("") || `<tr><td colspan="4" style="text-align:center; padding:10px; color:var(--muted);">Toss 실계좌 거래 이력이 없습니다.</td></tr>`;
+
+  const tossFlowsPanel = `
+    <section class="panel" style="margin-top:14px;">
+      <div class="panel-header" style="padding-bottom:10px; border-bottom:1px solid var(--border);">
+        <div>
+          <h2 style="font-size:13.5px; font-weight:700; margin:0;">📊 Toss 실계좌 월별 매매 흐름 (최근 6개월)</h2>
+          <p style="font-size:11px; margin:2px 0 0 0;">주문 체결 기록에서 집계된 월별 매수 및 매도 규모 흐름입니다.</p>
+        </div>
+      </div>
+      <div class="table-wrap" style="padding-top:10px;">
+        <table>
+          <thead>
+            <tr>
+              <th>연월</th>
+              <th class="numeric">총 매도액 (회수)</th>
+              <th class="numeric">총 매수액 (투입)</th>
+              <th class="numeric">순 현금흐름</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${monthlyRows}
+          </tbody>
+        </table>
+      </div>
+      ${renderSourceCaption("state/toss_orders.json")}
+    </section>
+  `;
+
   els.root.innerHTML = `
     <div class="page-heading">
       <div>
@@ -374,32 +500,35 @@ function renderCashflow() {
     </section>
 
     <div class="section-grid">
-      <!-- Left: Table of Cashflow Items -->
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h2>📋 현금흐름 항목 내역</h2>
-            <p>최근 유입되거나 유출된 자금의 역사적 흐름 기록입니다.</p>
+      <!-- Left: Table of Cashflow Items & Toss Trade Cash Flows -->
+      <div style="display:flex; flex-direction:column;">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>📋 현금흐름 항목 내역</h2>
+              <p>최근 유입되거나 유출된 자금의 역사적 흐름 기록입니다.</p>
+            </div>
+            <span class="muted">${entries.length}건 기록됨</span>
           </div>
-          <span class="muted">${entries.length}건 기록됨</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>날짜</th>
-                <th>카테고리</th>
-                <th>설명</th>
-                <th class="numeric">금액</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${tableRows}
-            </tbody>
-          </table>
-        </div>
-        ${renderSourceCaption("state/cashflows.json")}
-      </section>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>날짜</th>
+                  <th>카테고리</th>
+                  <th>설명</th>
+                  <th class="numeric">금액</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${tableRows}
+              </tbody>
+            </table>
+          </div>
+          ${renderSourceCaption("state/cashflows.json")}
+        </section>
+        ${tossFlowsPanel}
+      </div>
 
       <!-- Right: Allocations & Form -->
       <div style="display:flex; flex-direction:column; gap:14px;">
@@ -550,6 +679,92 @@ function renderDividendSim() {
     `;
   }).join("");
 
+  // Toss Trade-derived Dividend Estimation
+  const orders = state.tossOrders || [];
+  const symbolShares = {};
+  orders.forEach(o => {
+    const status = o.status;
+    if (status === "FILLED" || status === "PARTIAL_FILLED") {
+      const ticker = o.symbol.toUpperCase();
+      const exec = o.execution || {};
+      const qty = parseFloat(exec.filledQuantity || 0);
+      const side = o.side;
+      
+      if (!symbolShares[ticker]) {
+        symbolShares[ticker] = 0.0;
+      }
+      if (side === "BUY") {
+        symbolShares[ticker] += qty;
+      } else if (side === "SELL") {
+        symbolShares[ticker] -= qty;
+      }
+    }
+  });
+
+  const defaultDividendProfiles = {
+    "SCHD": { yield: 0.034, name: "Schwab US Dividend Equity ETF", price: 80.0 },
+    "O": { yield: 0.055, name: "Realty Income Corp", price: 58.0 },
+    "JEPI": { yield: 0.072, name: "JPMorgan Equity Premium Income ETF", price: 56.0 },
+    "AAPL": { yield: 0.005, name: "Apple Inc.", price: 185.0 },
+    "MSFT": { yield: 0.007, name: "Microsoft Corp.", price: 420.0 },
+    "005930": { yield: 0.021, name: "삼성전자", price: 72000.0 }
+  };
+
+  const estimatedHoldings = [];
+  Object.entries(symbolShares).forEach(([ticker, shares]) => {
+    if (shares > 0) {
+      const profile = defaultDividendProfiles[ticker] || { yield: 0.015, name: ticker, price: 100.0 };
+      const isUs = !ticker.match(/^\d+$/);
+      const rate = isUs ? 1350.0 : 1.0;
+      const valueKrw = shares * profile.price * rate;
+      const annualPayoutKrw = valueKrw * profile.yield;
+      
+      estimatedHoldings.push({
+        ticker,
+        name: profile.name,
+        shares,
+        valueKrw,
+        yieldPct: profile.yield * 100,
+        annualPayoutKrw
+      });
+    }
+  });
+
+  const estRows = estimatedHoldings.map(h => `
+    <tr>
+      <td><strong>${renderTicker(h.ticker)}</strong></td>
+      <td><span style="font-size:11.5px; color:var(--muted);">${pf_esc(h.name)}</span></td>
+      <td class="numeric">${h.shares}주</td>
+      <td class="numeric" style="color:var(--success); font-weight:700;">+${pf_fmt(Math.round(h.annualPayoutKrw))}원</td>
+    </tr>
+  `).join("");
+  
+  const tossEstDividendPanel = `
+    <section class="panel">
+      <div class="panel-header" style="padding-bottom:10px; border-bottom:1px solid var(--border);">
+        <div>
+          <h2 style="font-size:13.5px; font-weight:700; margin:0;">💰 Toss 매매 이력 추정 배당 분석</h2>
+          <p style="font-size:11px; margin:2px 0 0 0;">과거 체결된 순 매수 물량(매수-매도) 기준 추정 배당 연간 수입입니다.</p>
+        </div>
+      </div>
+      <div class="table-wrap" style="padding-top:10px;">
+        <table>
+          <thead>
+            <tr>
+              <th>티커</th>
+              <th>종목명</th>
+              <th class="numeric">보유 수량</th>
+              <th class="numeric">연 추정 배당</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${estRows || `<tr><td colspan="4" style="text-align:center; padding:10px; color:var(--muted);">배당 매칭 종목이 없습니다.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
   // Table rows
   const holdingRows = holdings.length === 0
     ? `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--muted);">배당을 지급하는 보유 종목이 감지되지 않았습니다.</td></tr>`
@@ -585,13 +800,13 @@ function renderDividendSim() {
     </section>
 
     <div class="section-grid">
-      <!-- Left: Reinvestment Scenario & Living Expense Simulator -->
+      <!-- Left: Reinvestment Scenario & Living Expense Simulator & Toss estimation -->
       <div style="display:flex; flex-direction:column; gap:14px;">
         <section class="panel">
           <div class="panel-header">
             <div>
               <h2>💹 배당 재투자 복리 성장 시나리오 (DRIP)</h2>
-              <p>배당 수익률과 자산 가치가 일정하며 분배 배당금 전액을 원형에 재복리 매수 투입한다고 가정한 성장 예측입니다.</p>
+              <p>배당 수익률 and 자산 가치가 일정하며 분배 배당금 전액을 원형에 재복리 매수 투입한다고 가정한 성장 예측입니다.</p>
             </div>
           </div>
           <div class="panel-body" style="padding:20px 30px;">
@@ -601,6 +816,7 @@ function renderDividendSim() {
           </div>
           ${renderSourceCaption("dividend_cashflow_simulator.py · monthly compound model")}
         </section>
+        ${tossEstDividendPanel}
 
         <!-- Dividend Living Expense Simulator -->
         ${(() => {
@@ -901,6 +1117,81 @@ function renderInvestorCoach() {
     </section>
   `;
 
+  // Toss Habits Coaching Calculations
+  const coachOrders = state.tossOrders || [];
+  let numCancel = coachOrders.filter(o => o.status === "CANCELED").length;
+  let numBuy = coachOrders.filter(o => o.side === "BUY" && (o.status === "FILLED" || o.status === "PARTIAL_FILLED")).length;
+  let numSell = coachOrders.filter(o => o.side === "SELL" && (o.status === "FILLED" || o.status === "PARTIAL_FILLED")).length;
+  
+  const tradeCountsByMonth = {};
+  coachOrders.forEach(o => {
+    if (o.status === "FILLED" || o.status === "PARTIAL_FILLED") {
+      const ym = (o.orderedAt || "").slice(0, 7);
+      if (ym) {
+        tradeCountsByMonth[ym] = (tradeCountsByMonth[ym] || 0) + 1;
+      }
+    }
+  });
+  
+  const peakTradeMonth = Object.entries(tradeCountsByMonth).reduce((peak, [ym, count]) => {
+    return count > peak.count ? { ym, count } : peak;
+  }, { ym: "N/A", count: 0 });
+  
+  const overtradingFlag = peakTradeMonth.count > 10;
+
+  const overtradingBanner = overtradingFlag 
+    ? `<div class="status-banner status-failed" style="margin-bottom:10px; padding:10px; grid-template-columns:auto 1fr; border-left-width:3px;">
+         <div style="font-size:16px; margin-right:8px;">🔄</div>
+         <div>
+           <strong style="font-size:12.5px; display:block;">과잉 거래 경고 (${peakTradeMonth.ym}월 기준 ${peakTradeMonth.count}회 체결)</strong>
+           <p style="font-size:11.5px; margin:2px 0 0 0; color:var(--text); line-height:1.4;">한 달에 10회 이상의 잦은 실계좌 거래는 불필요한 거래 수수료를 발생시키며 매매 원칙을 해치기 쉽습니다.</p>
+         </div>
+       </div>`
+    : `<div class="status-banner status-success" style="margin-bottom:10px; padding:10px; grid-template-columns:auto 1fr; border-left-width:3px;">
+         <div style="font-size:16px; margin-right:8px;">✅</div>
+         <div>
+           <strong style="font-size:12.5px; display:block;">적정 거래 빈도 유지</strong>
+           <p style="font-size:11.5px; margin:2px 0 0 0; color:var(--text); line-height:1.4;">월별 거래 빈도가 안정적이며 감정적인 거래 유혹을 잘 통제하고 있습니다.</p>
+         </div>
+       </div>`;
+
+  const cancelRatio = numCancel / (numBuy + numSell + numCancel || 1);
+  const cancelBanner = (cancelRatio > 0.3)
+    ? `<div class="status-banner status-warning" style="margin-bottom:10px; padding:10px; grid-template-columns:auto 1fr; border-left-width:3px;">
+         <div style="font-size:16px; margin-right:8px;">⚠️</div>
+         <div>
+           <strong style="font-size:12.5px; display:block;">잦은 주문 정정/취소 경고 (취소율 ${(cancelRatio * 100).toFixed(1)}%)</strong>
+           <p style="font-size:11.5px; margin:2px 0 0 0; color:var(--text); line-height:1.4;">주문 취소 비중이 상대적으로 높습니다. 호가 변동에 뇌동 반응하기보다 신중히 진입가를 판단한 후 예약매매 위주로 집행하십시오.</p>
+         </div>
+       </div>`
+    : `<div class="status-banner status-success" style="margin-bottom:10px; padding:10px; grid-template-columns:auto 1fr; border-left-width:3px;">
+         <div style="font-size:16px; margin-right:8px;">✅</div>
+         <div>
+           <strong style="font-size:12.5px; display:block;">주문 집행 일관성 우수</strong>
+           <p style="font-size:11.5px; margin:2px 0 0 0; color:var(--text); line-height:1.4;">한 번 내려진 매매 주문이 취소되거나 흔들리지 않고 원칙대로 잘 실행되고 있습니다.</p>
+         </div>
+       </div>`;
+
+  const tossCoachPanel = `
+    <section class="panel" style="margin-top:14px;">
+      <div class="panel-header" style="padding-bottom:10px; border-bottom:1px solid var(--border);">
+        <div>
+          <h2 style="font-size:13.5px; font-weight:700; margin:0;">🤖 Toss 실계좌 거래 습관 진단 (Trade Habit Audit)</h2>
+          <p style="font-size:11px; margin:2px 0 0 0;">6개년 실계좌 거래 이력을 바탕으로 한 심리적 행동 피드백입니다.</p>
+        </div>
+      </div>
+      <div class="panel-body" style="padding-top:12px;">
+        ${overtradingBanner}
+        ${cancelBanner}
+        <div style="background:var(--surface-subtle); padding:10px; border-radius:6px; border:1px solid var(--border); font-size:11.5px; line-height:1.45;">
+          <strong>💡 실계좌 피드백 코칭</strong><br>
+          6년 누적 매수 ${numBuy}회, 매도 ${numSell}회, 주문 취소 ${numCancel}회가 분석되었습니다. 거래량이 급증하는 장 초반 30분에 뇌동매매를 하지 않는 것만으로도 행동 등급을 추가로 높일 수 있습니다.
+        </div>
+      </div>
+      ${renderSourceCaption("state/toss_orders.json")}
+    </section>
+  `;
+
   els.root.innerHTML = `
     <div class="page-heading">
       <div>
@@ -935,19 +1226,22 @@ function renderInvestorCoach() {
         ${renderSourceCaption("state/user_approval_audit.jsonl · investor_behavior_insights.py")}
       </section>
 
-      <!-- Right: Diet Mode -->
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h2>✂️ 포트폴리오 다이어트 가이드 (Portfolio Diet)</h2>
-            <p>비중 1% 미만 미세 자산 및 중복 테크/레버리지 제거 권고사항입니다.</p>
+      <!-- Right: Diet Mode & Toss Habit Audit -->
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>✂️ 포트폴리오 다이어트 가이드 (Portfolio Diet)</h2>
+              <p>비중 1% 미만 미세 자산 및 중복 테크/레버리지 제거 권고사항입니다.</p>
+            </div>
           </div>
-        </div>
-        <div class="panel-body">
-          ${dietHtml}
-        </div>
-        ${renderSourceCaption("portfolio_diet_mode.py · toss_portfolio.csv")}
-      </section>
+          <div class="panel-body">
+            ${dietHtml}
+          </div>
+          ${renderSourceCaption("portfolio_diet_mode.py · toss_portfolio.csv")}
+        </section>
+        ${tossCoachPanel}
+      </div>
     </div>
 
     ${journalPanelHtml}
@@ -996,17 +1290,38 @@ function renderInvestCalendar() {
   }
 
   const events = d.events || [];
+  const orders = state.tossOrders || [];
+  
+  // Parse Toss orders into calendar events
+  const tossEvents = orders.filter(o => o.status === "FILLED" || o.status === "PARTIAL_FILLED").map(o => {
+    const side = o.side;
+    const exec = o.execution || {};
+    const filledQty = exec.filledQuantity || "0";
+    const avgPrice = exec.averageFilledPrice || o.price;
+    const commission = exec.commission || "0";
+    const currency = o.currency || "KRW";
+    
+    return {
+      date: (o.orderedAt || "").slice(0, 10),
+      type: "toss_order",
+      title: `${side === "BUY" ? "🟢 Toss 실계좌 매수 체결" : "🔴 Toss 실계좌 매도 체결"}`,
+      description: `${filledQty}주 체결 @ 평균 ${avgPrice} ${currency} (수수료: ${commission} ${currency})`,
+      ticker: o.symbol
+    };
+  });
+
+  const allEvents = [...events, ...tossEvents];
   const today = new Date().toISOString().slice(0, 10);
 
   // Group by date
   const grouped = {};
-  events.forEach(e => {
+  allEvents.forEach(e => {
     const dt = e.date || "unknown";
     if (!grouped[dt]) grouped[dt] = [];
     grouped[dt].push(e);
   });
 
-  const sortedDates = Object.keys(grouped).sort();
+  const sortedDates = Object.keys(grouped).sort().reverse(); // Show newest dates first so historical transactions are accessible
 
   const eventTypeStyle = {
     ex_dividend: { class: "success", icon: "🌱", label: "배당락 (Ex-Div)" },
@@ -1014,6 +1329,7 @@ function renderInvestCalendar() {
     macro: { class: "warning", icon: "🏛️", label: "거시 지표 (Macro)" },
     salary: { class: "success", icon: "💵", label: "급여 유입 (Salary)" },
     fomc: { class: "failed", icon: "🏦", label: "FOMC 결정" },
+    toss_order: { class: "eligible", icon: "💸", label: "Toss 체결 이력" }
   };
   const defaultStyle = { class: "not-evaluated", icon: "📌", label: "기타 일정" };
 
@@ -1029,7 +1345,7 @@ function renderInvestCalendar() {
         const dayEvts = grouped[dt];
         
         return `
-          <div style="display:flex; gap:16px; margin-bottom:12px; opacity:${isPast ? "0.5" : "1"};">
+          <div style="display:flex; gap:16px; margin-bottom:12px; opacity:${isPast ? "0.85" : "1"};">
             <div style="min-width:76px; text-align:right; padding-top:4px;">
               <div style="font-size:14px; font-weight:800; color:${isToday ? "var(--accent)" : "var(--text)"};">${dt.slice(5)}</div>
               <div style="font-size:10px; color:var(--muted);">${dt.slice(0, 4)}</div>
@@ -1064,7 +1380,7 @@ function renderInvestCalendar() {
     <div class="page-heading">
       <div>
         <h1>투자 캘린더</h1>
-        <p>미국/한국 증시의 주요 배당락일(Ex-Dividend Date), 대형 빅테크 실적 공시(Earnings Call), CPI/FOMC 거시 경제 일정 및 개인 월급 적립 일정을 결합하여 보여줍니다.</p>
+        <p>미국/한국 증시의 주요 배당락일(Ex-Dividend Date), 대형 빅테크 실적 공시(Earnings Call), CPI/FOMC 거시 경제 일정 및 개인 월급 적립 일정과 Toss 실계좌 매매 내역을 결합하여 보여줍니다.</p>
       </div>
       ${statusBadge("success")}
     </div>
@@ -1075,12 +1391,12 @@ function renderInvestCalendar() {
         <div style="display:flex; flex-wrap:wrap; gap:4px;">
           ${legendHtml}
         </div>
-        <span class="muted">${events.length}개 일정 통합</span>
+        <span class="muted">${allEvents.length}개 일정 통합</span>
       </div>
       <div class="panel-body" style="padding:10px 14px;">
         ${calHtml}
       </div>
-      ${renderSourceCaption("investment_calendar.py · FRED economic releases")}
+      ${renderSourceCaption("investment_calendar.py · FRED economic releases · state/toss_orders.json")}
     </section>
   `;
 }

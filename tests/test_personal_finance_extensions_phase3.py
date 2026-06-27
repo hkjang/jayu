@@ -188,3 +188,27 @@ class TestLossRecoveryPlanner:
         assert "recovery_months_by_return" in plan
         assert "deposit_scenarios_recovery_months_at_15pct" in plan
         assert len(plan["risk_reduction_advices"]) > 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Toss Orders Manager Tests
+# ──────────────────────────────────────────────────────────────────────────────
+class TestTossOrdersManager:
+    def test_toss_orders(self, tmp_path: Path) -> None:
+        from jayu.toss_orders import TossOrdersManager
+        from jayu.paths import RuntimePaths
+
+        mgr = TossOrdersManager(tmp_path)
+        
+        # Test loading from empty/non-existent file generates mock orders
+        orders = mgr.load_orders()
+        assert len(orders) > 0
+        assert orders[0]["orderId"].startswith("mock_oid_")
+
+        # Test save and load back
+        custom_orders = [{"orderId": "custom_1", "symbol": "AAPL", "side": "BUY"}]
+        mgr._save_orders(custom_orders)
+        
+        orders2 = mgr.load_orders()
+        assert orders2 == custom_orders
+
