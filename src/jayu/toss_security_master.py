@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import hashlib
 from pathlib import Path
 from typing import Any, Sequence
 from dataclasses import dataclass, asdict
@@ -14,10 +15,13 @@ class StandardizedSecurity:
     market: str
     currency: str
     security_type: str  # STOCK, ETF, ETN, etc.
+    is_etf: bool
+    is_leverage: bool
     leverage_factor: float  # 1.0, 2.0, 3.0, -1.0, etc.
     warnings: dict[str, Any]  # marketWarning, administrative, delistingCaution, tradingSuspended
     is_tradable: bool
     updated_at: float
+    source_hash: str
 
 class TossSecurityMaster:
     def __init__(self, project_root: Path | str):
@@ -37,17 +41,22 @@ class TossSecurityMaster:
                 with open(old_cache_file, "r", encoding="utf-8") as f:
                     old_data = json.load(f)
                     for sym, val in old_data.items():
+                        sec_type = val.get("securityType") or "STOCK"
+                        lev = float(val.get("leverageFactor") or 1.0)
                         cache[sym] = {
                             "symbol": val.get("symbol") or sym,
                             "name": val.get("name") or sym,
                             "english_name": val.get("englishName") or "",
                             "market": val.get("market") or "UNKNOWN",
                             "currency": val.get("currency") or "USD",
-                            "security_type": val.get("securityType") or "STOCK",
-                            "leverage_factor": float(val.get("leverageFactor") or 1.0),
+                            "security_type": sec_type,
+                            "is_etf": sec_type == "ETF",
+                            "is_leverage": lev > 1.0 or lev < -1.0,
+                            "leverage_factor": lev,
                             "warnings": val.get("warnings") or {},
                             "is_tradable": val.get("status", "ACTIVE") == "ACTIVE",
-                            "updated_at": 0.0  # Mark as expired so it updates if client is available
+                            "updated_at": 0.0,
+                            "source_hash": "legacy_cache"
                         }
             except Exception:
                 pass
@@ -103,7 +112,7 @@ class TossSecurityMaster:
         symbols = self.get_all_symbols_from_user_data()
         
         # Add default fallbacks to ensure we have base list
-        fallbacks = ["AAPL", "TSLA", "MSFT", "005930", "SCHD", "O", "JEPI", "TQQQ", "SOXL", "NVDA", "VOO", "JEPQ", "ROBO"]
+        fallbacks = ["AAPL", "TSLA", "MSFT", "005930", "SCHD", "O", "JEPI", "TQQQ", "SOXL", "NVDA", "VOO", "JEPQ", "ROBO", "QQQ", "QLD"]
         for f in fallbacks:
             symbols.add(f)
 
@@ -162,6 +171,10 @@ class TossSecurityMaster:
                         if warnings_info.get("tradingSuspended") or stock_info.get("status") == "DELISTED":
                             is_tradable = False
 
+                        # Calculate source hash
+                        raw_data_str = json.dumps({"stock": stock_info, "warnings": warnings_info}, sort_keys=True)
+                        source_hash = hashlib.sha256(raw_data_str.encode("utf-8")).hexdigest()
+
                         standardized = StandardizedSecurity(
                             symbol=sym,
                             name=stock_info.get("name") or stock_info.get("englishName") or sym,
@@ -169,10 +182,13 @@ class TossSecurityMaster:
                             market=str(stock_info.get("market") or "UNKNOWN").upper(),
                             currency=str(stock_info.get("currency") or "KRW").upper(),
                             security_type=sec_type,
+                            is_etf=sec_type == "ETF",
+                            is_leverage=leverage > 1.0 or leverage < -1.0,
                             leverage_factor=leverage,
                             warnings=warnings_info,
                             is_tradable=is_tradable,
-                            updated_at=now
+                            updated_at=now,
+                            source_hash=source_hash
                         )
                         cache[sym] = asdict(standardized)
                 except Exception:
@@ -206,6 +222,8 @@ class TossSecurityMaster:
                     "market": fb["market"],
                     "currency": fb["currency"],
                     "security_type": fb["security_type"],
+                    "is_etf": fb["security_type"] == "ETF",
+                    "is_leverage": fb["leverage_factor"] > 1.0,
                     "leverage_factor": fb["leverage_factor"],
                     "warnings": {
                         "symbol": sym,
@@ -215,7 +233,8 @@ class TossSecurityMaster:
                         "tradingSuspended": False,
                     },
                     "is_tradable": True,
-                    "updated_at": now
+                    "updated_at": now,
+                    "source_hash": "offline_fallback"
                 }
 
         self.save_cache(cache)

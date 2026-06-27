@@ -3,9 +3,9 @@ import time
 from pathlib import Path
 from typing import Any
 from .toss_security_master import TossSecurityMaster
-from .security_data_quality import SecurityDataQuality
-from .order_security_reconciliation import OrderSecurityReconciler
-from .security_exposure_analyzer import SecurityExposureAnalyzer
+from .security_decision_gate import SecurityDecisionGate
+from .toss_reference_reconciliation import TossReferenceReconciler
+from .portfolio_security_exposure import PortfolioSecurityExposure
 
 class TossReferenceDataReport:
     def __init__(self, project_root: Path | str):
@@ -13,15 +13,26 @@ class TossReferenceDataReport:
         self.state_dir = self.project_root / "state"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         
-        self.quality = SecurityDataQuality(self.project_root)
-        self.reconciler = OrderSecurityReconciler(self.project_root)
-        self.exposure = SecurityExposureAnalyzer(self.project_root)
+        self.gate = SecurityDecisionGate(self.project_root)
+        self.reconciler = TossReferenceReconciler(self.project_root)
+        self.exposure = PortfolioSecurityExposure(self.project_root)
 
     def generate_report(self) -> dict[str, Any]:
-        q_res = self.quality.check_quality()
         r_res = self.reconciler.reconcile()
         e_res = self.exposure.calculate_exposure()
         
+        # Check all symbols for gate pass
+        master = TossSecurityMaster(self.project_root).get_security_master()
+        anomalies = []
+        for sym in master.keys():
+            eval_res = self.gate.evaluate_gate(sym)
+            if not eval_res["allow"]:
+                anomalies.append({
+                    "symbol": sym,
+                    "field": eval_res.get("category", "general"),
+                    "issue": eval_res["reason"]
+                })
+
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         
         # Build Markdown
@@ -30,18 +41,17 @@ class TossReferenceDataReport:
             f"Generated At: {timestamp}",
             f"",
             f"## 1. Summary Metrics",
-            f"- **Metadata Quality Score**: {q_res['score']}/100",
             f"- **Reconciliation Score**: {r_res['score']}/100",
-            f"- **Total Checked Securities**: {q_res['total_securities_checked']}",
+            f"- **Total Checked Securities**: {len(master)}",
             f"- **Total Portfolio Value**: {e_res['total_value_krw']:,.0f} KRW",
             f"",
             f"## 2. Security Warnings & Anomalies",
         ]
         
-        if q_res["anomalies"]:
+        if anomalies:
             md_lines.append("| Symbol | Field | Issue |")
             md_lines.append("| --- | --- | --- |")
-            for a in q_res["anomalies"][:15]:
+            for a in anomalies[:15]:
                 md_lines.append(f"| {a['symbol']} | {a['field']} | {a['issue']} |")
         else:
             md_lines.append("No metadata anomalies detected.")
@@ -104,12 +114,11 @@ class TossReferenceDataReport:
     <p>Generated At: {timestamp}</p>
     
     <h2>1. Summary Scores</h2>
-    <p>Metadata Quality Score: <span class="score">{q_res['score']}/100</span></p>
     <p>Reconciliation Score: <span class="score">{r_res['score']}/100</span></p>
     <p>Total Portfolio Value: <strong>{e_res['total_value_krw']:,.0f} KRW</strong></p>
     
     <h2>2. Metadata Anomalies</h2>
-    {"<table><tr><th>Symbol</th><th>Field</th><th>Issue</th></tr>" + "".join(f"<tr><td>{a['symbol']}</td><td>{a['field']}</td><td>{a['issue']}</td></tr>" for a in q_res['anomalies']) + "</table>" if q_res['anomalies'] else "<p>No metadata anomalies detected.</p>"}
+    {"<table><tr><th>Symbol</th><th>Field</th><th>Issue</th></tr>" + "".join(f"<tr><td>{a['symbol']}</td><td>{a['field']}</td><td>{a['issue']}</td></tr>" for a in anomalies) + "</table>" if anomalies else "<p>No metadata anomalies detected.</p>"}
     
     <h2>3. Reconciliation Details</h2>
     <p>Unmapped Symbols: <strong>{', '.join(r_res['unmapped_symbols']) or 'None'}</strong></p>
@@ -136,7 +145,13 @@ class TossReferenceDataReport:
             "timestamp": timestamp,
             "markdown_path": str(self.state_dir / "toss_reference_data_report.md"),
             "html_path": str(self.state_dir / "toss_reference_data_report.html"),
-            "quality": q_res,
+            "quality": {
+                "score": 100 - len(anomalies) * 5 if len(master) > 0 else 100,
+                "total_securities_checked": len(master),
+                "missing_fields_count": len(anomalies),
+                "stale_securities_count": 0,
+                "anomalies": anomalies
+            },
             "reconciliation": r_res,
             "exposure": e_res
         }

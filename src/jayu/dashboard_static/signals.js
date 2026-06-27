@@ -46,6 +46,113 @@ function renderApprovalAuditHistoryPanel(history) {
   `;
 }
 
+function renderSignalContextCards(signals) {
+  const rows = signals.rows || [];
+  const activeRows = rows.filter(r => r.signal && r.signal !== "hold" && r.signal !== "none");
+  if (activeRows.length === 0) return "";
+
+  const cardsHtml = activeRows.map(row => {
+    const ticker = row.ticker;
+    const sec = (window.state.tossSecurityMaster && window.state.tossSecurityMaster[ticker]) || {};
+    const market = sec.market || "-";
+    const currency = sec.currency || "-";
+    const type = sec.security_type || "STOCK";
+    const leverage = sec.leverage_factor || 1.0;
+    
+    // Memory score
+    let memoryScore = 80;
+    let pnl = 0;
+    let winRate = null;
+    let tradeCount = 0;
+    
+    if (window.state.orderHistorySummary && window.state.orderHistorySummary.by_symbol) {
+      const hist = window.state.orderHistorySummary.by_symbol.find(s => s.symbol === ticker);
+      if (hist) {
+        pnl = hist.realized_pnl_krw || 0;
+        winRate = hist.win_rate_pct;
+        tradeCount = (hist.buy_count || 0) + (hist.sell_count || 0);
+        
+        let score = 80;
+        if (winRate !== null) score += (winRate - 50) * 0.4;
+        if (pnl < 0) score -= Math.abs(pnl) / 100000;
+        else score += pnl / 200000;
+        memoryScore = Math.max(10, Math.min(100, Math.round(score)));
+      }
+    }
+    
+    // Autotrade Allowed status
+    let autotradeStatus = "allow";
+    let autotradeLabel = "허용";
+    let autotradeReason = "가이드라인 통과";
+    
+    const warnings = sec.warnings || {};
+    if (warnings.tradingSuspended || sec.is_tradable === false) {
+      autotradeStatus = "blocked";
+      autotradeLabel = "차단";
+      autotradeReason = "거래정지 종목";
+    } else if (warnings.administrative) {
+      autotradeStatus = "blocked";
+      autotradeLabel = "차단";
+      autotradeReason = "관리종목 지정";
+    } else if (warnings.delistingCaution) {
+      autotradeStatus = "blocked";
+      autotradeLabel = "차단";
+      autotradeReason = "상장폐지 우려";
+    } else if (["INVESTMENT_DANGER", "DANGER"].includes(String(warnings.marketWarning).toUpperCase())) {
+      autotradeStatus = "blocked";
+      autotradeLabel = "차단";
+      autotradeReason = "투자위험 종목";
+    } else if (leverage > 1.0) {
+      autotradeStatus = "warning";
+      autotradeLabel = "축소";
+      autotradeReason = `${leverage}x 레버리지`;
+    } else if (pnl < -1000000) {
+      autotradeStatus = "warning";
+      autotradeLabel = "축소";
+      autotradeReason = "과거 누적 손실 극심";
+    }
+    
+    return `
+      <article class="signal-context-card status-${autotradeStatus}" style="background:var(--surface-subtle); border-left:4px solid var(--${autotradeStatus === "allow" ? "success" : autotradeStatus === "warning" ? "warning" : "failed"}); padding:12px; border-radius:6px; border:1px solid var(--border); border-left-width:4px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <strong>${renderTicker(ticker)} <span style="font-size:12px;color:var(--muted);font-weight:normal;">(${escapeHtml(getStockName(ticker))})</span></strong>
+          ${renderSecurityBadge(ticker)}
+        </div>
+        <div style="font-size:11.5px; color:var(--text); line-height:1.6;">
+          <div>🌐 시장/통화: <span class="code">${escapeHtml(market)} / ${escapeHtml(currency)}</span></div>
+          <div>🏷️ 상품유형: <strong>${escapeHtml(type)}</strong> ${leverage > 1.0 ? `<span class="status-label status-warning">${leverage}x 레버리지</span>` : ""}</div>
+          <div style="margin-top:4px; padding-top:4px; border-top:1px solid var(--border); display:flex; justify-content:space-between;">
+            <span>🧠 매매 기억 점수:</span>
+            <strong style="color:var(--accent);">${memoryScore}점</strong>
+          </div>
+          ${tradeCount > 0 ? `
+            <div class="muted" style="font-size:10.5px; text-align:right; margin-top:2px;">
+              과거 ${tradeCount}회 거래 · 승률 ${winRate !== null ? winRate + "%" : "-"} · 손익 ${formatCurrency(pnl, "KRW")}
+            </div>` : ""}
+          <div style="margin-top:6px; padding:4px 8px; background:rgba(0,0,0,0.03); border-radius:4px; display:flex; justify-content:space-between; align-items:center;">
+            <span>🤖 자동매매:</span>
+            <strong class="status-label status-${autotradeStatus === "allow" ? "success" : autotradeStatus === "warning" ? "warning" : "failed"}">${escapeHtml(autotradeLabel)} (${escapeHtml(autotradeReason)})</strong>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  return `
+    <section class="panel" style="margin-top:20px; width:100%;">
+      <div class="panel-header">
+        <div>
+          <h2>💡 오늘 신호 종목 투자 컨텍스트 카드 (Signal Context Cards)</h2>
+          <p>오늘 진입 신호가 포착된 종목들의 기본 정보, 리스크 상태, 그리고 과거 매매 성과를 종합 분석한 안전 진단입니다.</p>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap:12px; margin-top:12px;">
+        ${cardsHtml}
+      </div>
+    </section>
+  `;
+}
+
 function renderSignals() {
   const data = state.signals;
   
@@ -59,6 +166,7 @@ function renderSignals() {
     </div>
     ${renderDataSourceNote("signals")}
     ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "signals")}
+    ${renderSignalContextCards(data)}
     <section class="panel">
       <div class="panel-header">
         <div><h2>전체 투자 신호 상세 (All Signals)</h2><p>선택한 실행(Run)에서 생성된 전체 매수/매도/관망 신호 목록입니다.</p></div>

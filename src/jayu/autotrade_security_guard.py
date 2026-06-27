@@ -2,9 +2,9 @@ import json
 from pathlib import Path
 from typing import Any
 from .toss_security_master import TossSecurityMaster
-from .toss_order_feature_store import build_toss_order_feature_store
+from .toss_trade_feature_store import build_toss_order_feature_store
 
-class AutotradeSecurityPolicy:
+class AutotradeSecurityGuard:
     def __init__(self, project_root: Path | str):
         self.project_root = Path(project_root)
         self.security_master = TossSecurityMaster(self.project_root)
@@ -78,12 +78,7 @@ class AutotradeSecurityPolicy:
             # Scale down order size by leverage factor
             multiplier = 1.0 / leverage
 
-        # 4. Currency alignment (warning only, but can reduce or block)
-        # Assumed default currency is USD/KRW based on market
-        market = str(sec_info.get("market") or "").upper()
-        sec_currency = str(sec_info.get("currency") or "KRW").upper()
-        
-        # 5. Past chronic losses from feature store
+        # 4. Past chronic losses from feature store
         chronic_loss_reason = None
         if self.orders_file.exists():
             try:

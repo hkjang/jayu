@@ -2201,11 +2201,11 @@ def _intent_approval_lock_check() -> dict[str, Any]:
     )
 
 def _intent_security_guard_check(intent: OrderIntent, paths: RuntimePaths) -> dict[str, Any]:
-    from .autotrade_security_policy import AutotradeSecurityPolicy
+    from .autotrade_security_guard import AutotradeSecurityGuard
     
-    policy = AutotradeSecurityPolicy(paths.project_root)
+    guard = AutotradeSecurityGuard(paths.project_root)
     proposed_amount = intent.quantity * intent.decision_price
-    eval_res = policy.evaluate_order(intent.ticker, proposed_amount)
+    eval_res = guard.evaluate_order(intent.ticker, proposed_amount)
     
     verdict = eval_res["verdict"]
     reason = eval_res["reason"]
@@ -2219,7 +2219,7 @@ def _intent_security_guard_check(intent: OrderIntent, paths: RuntimePaths) -> di
             status="blocked",
             value="차단 (Block)",
             message=reason or "보안관 정책에 의해 차단되었습니다.",
-            source="autotrade_security_policy.py",
+            source="autotrade_security_guard.py",
         )
     elif verdict == "reduce":
         return _quality_check(
@@ -2230,7 +2230,7 @@ def _intent_security_guard_check(intent: OrderIntent, paths: RuntimePaths) -> di
             status="warning",
             value="축소 (Reduce)",
             message=reason or "주문 금액 축소가 권장됩니다.",
-            source="autotrade_security_policy.py",
+            source="autotrade_security_guard.py",
             details={"allowed_amount": eval_res["allowed_amount"]}
         )
     else:
@@ -2242,7 +2242,7 @@ def _intent_security_guard_check(intent: OrderIntent, paths: RuntimePaths) -> di
             status="success",
             value="통과 (Allow)",
             message="보안관 검증을 정상 통과했습니다.",
-            source="autotrade_security_policy.py",
+            source="autotrade_security_guard.py",
         )
 
 
@@ -3706,8 +3706,8 @@ def _dashboard_handler(
                 if parsed.path == "/api/v1/toss/trade-context":
                     query = parse_qs(parsed.query)
                     symbol = query.get("symbol", [""])[0]
-                    from .toss_trade_context import TossTradeContext
-                    builder = TossTradeContext(paths.project_root)
+                    from .security_trade_context import SecurityTradeContext
+                    builder = SecurityTradeContext(paths.project_root)
                     client = None
                     try:
                         settings = _load_dashboard_settings(paths)
@@ -3719,18 +3719,17 @@ def _dashboard_handler(
                     self._json(builder.build_context(symbol, client))
                     return
                 if parsed.path == "/api/v1/toss/security-exposure":
-                    from .security_exposure_analyzer import SecurityExposureAnalyzer
-                    exposure = SecurityExposureAnalyzer(paths.project_root)
+                    from .portfolio_security_exposure import PortfolioSecurityExposure
+                    exposure = PortfolioSecurityExposure(paths.project_root)
                     self._json(exposure.calculate_exposure())
                     return
                 if parsed.path == "/api/v1/toss/security-quality":
-                    from .security_data_quality import SecurityDataQuality
-                    from .order_security_reconciliation import OrderSecurityReconciler
-                    checker = SecurityDataQuality(paths.project_root)
-                    reconciler = OrderSecurityReconciler(paths.project_root)
+                    from .toss_reference_data_report import TossReferenceDataReport
+                    report = TossReferenceDataReport(paths.project_root)
+                    rep_res = report.generate_report()
                     self._json({
-                        "quality": checker.check_quality(),
-                        "reconciliation": reconciler.reconcile()
+                        "quality": rep_res["quality"],
+                        "reconciliation": rep_res["reconciliation"]
                     })
                     return
                 if parsed.path == "/api/v1/toss/reference-data-report":

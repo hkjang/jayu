@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 from typing import Any
 from .toss_security_master import TossSecurityMaster
-from .toss_order_feature_store import build_toss_order_feature_store
+from .toss_trade_feature_store import build_toss_order_feature_store
 
-class TossTradeContext:
+class SecurityTradeContext:
     def __init__(self, project_root: Path | str):
         self.project_root = Path(project_root)
         self.security_master = TossSecurityMaster(self.project_root)
@@ -25,6 +25,8 @@ class TossTradeContext:
             "market": "UNKNOWN",
             "currency": "USD",
             "security_type": "STOCK",
+            "is_etf": False,
+            "is_leverage": False,
             "leverage_factor": 1.0,
             "warnings": {
                 "symbol": symbol,
@@ -33,7 +35,8 @@ class TossTradeContext:
                 "delistingCaution": False,
                 "tradingSuspended": False,
             },
-            "is_tradable": True
+            "is_tradable": True,
+            "source_hash": "dynamic_fallback"
         }
 
         # 2. Risk evaluation
@@ -171,5 +174,6 @@ class TossTradeContext:
             "holding": holding,
             "orders": orders_list,
             "performance": performance,
-            "signal": sig_info
+            "signal": sig_info,
+            "autotrade_allowed": autotrade_allowed
         }

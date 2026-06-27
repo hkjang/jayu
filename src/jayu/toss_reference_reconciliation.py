@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any
 from .toss_security_master import TossSecurityMaster
 
-class OrderSecurityReconciler:
+class TossReferenceReconciler:
     def __init__(self, project_root: Path | str):
         self.project_root = Path(project_root)
         self.security_master = TossSecurityMaster(self.project_root)
@@ -11,8 +11,8 @@ class OrderSecurityReconciler:
 
     def reconcile(self) -> dict[str, Any]:
         """
-        Reconciles symbols in order history against the security master.
-        Identifies unmapped, delisted, or suspended symbols.
+        Reconciles symbols in order history and portfolio against the security master.
+        Identifies unmapped, delisted, suspended, or currency-mismatched symbols.
         """
         master = self.security_master.get_security_master()
         
@@ -20,6 +20,8 @@ class OrderSecurityReconciler:
         delisted_symbols = []
         suspended_symbols = []
         currency_mismatches = []
+        stale_symbols = []
+        warning_query_failures = []
         
         order_symbols = set()
         
@@ -54,6 +56,8 @@ class OrderSecurityReconciler:
                 unmapped_symbols.add(sym)
             else:
                 warnings = sec.get("warnings") or {}
+                if "marketWarning" not in warnings:
+                    warning_query_failures.append(sym)
                 if warnings.get("tradingSuspended"):
                     suspended_symbols.append({
                         "symbol": sym,
@@ -81,5 +85,7 @@ class OrderSecurityReconciler:
             "unmapped_symbols": sorted(list(unmapped_symbols)),
             "delisted_symbols": delisted_symbols,
             "suspended_symbols": suspended_symbols,
-            "currency_mismatches": currency_mismatches
+            "currency_mismatches": currency_mismatches,
+            "warning_query_failures": warning_query_failures,
+            "stale_symbols": stale_symbols
         }
