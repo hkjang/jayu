@@ -1140,6 +1140,49 @@ function renderDividendSim() {
 // ──────────────────────────────────────────────
 // 4. 투자 코치 & 다이어트 (investor-coach)
 // ──────────────────────────────────────────────
+function renderTradeBehaviorReviewPanel(data) {
+  if (!data) {
+    return `
+      <section class="panel">
+        <div class="panel-header"><div><h2>매매 습관 리뷰</h2><p>주문내역 기반 행동 리뷰 데이터를 불러오지 못했습니다.</p></div></div>
+        ${renderSourceCaption("GET /api/v1/trade-behavior-review")}
+      </section>
+    `;
+  }
+  const summary = data.summary || {};
+  const warnings = data.warnings || [];
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>매매 습관 리뷰</h2>
+          <p>과거 주문내역에서 과열 거래, 취소율, 레버리지 집중, 빠른 손실 확정을 점검합니다.</p>
+        </div>
+        <span class="status-label status-${data.status === "success" ? "success" : data.status === "failed" ? "failed" : "warning"}">${data.behavior_score ?? "-"}점</span>
+      </div>
+      <section class="metric-grid" style="margin-top:12px;">
+        ${metricCard("체결 거래", summary.filled_trade_count || 0, summary.filled_trade_count ? "success" : "not_evaluated", "Toss filled orders")}
+        ${metricCard("최다 거래월", summary.peak_trade_month || "-", summary.peak_trade_month_count >= 12 ? "warning" : "success", `${summary.peak_trade_month_count || 0}건`)}
+        ${metricCard("취소율", `${summary.cancel_ratio_pct ?? 0}%`, summary.cancel_ratio_pct >= 25 ? "warning" : "success", `${summary.cancel_count || 0}건 취소`)}
+        ${metricCard("레버리지 비중", `${summary.leveraged_trade_ratio_pct ?? 0}%`, summary.leveraged_trade_ratio_pct >= 35 ? "warning" : "success", `${summary.leveraged_trade_count || 0}건`)}
+      </section>
+      <div class="panel-body" style="padding-top:12px;">
+        ${warnings.length ? warnings.map(w => `
+          <div class="status-banner status-${w.severity === "failed" ? "failed" : "warning"}" style="margin-bottom:10px; grid-template-columns:auto 1fr;">
+            <div>${statusBadge(w.severity === "failed" ? "failed" : "warning")}</div>
+            <div>
+              <h2 style="font-size:12.5px;margin:0 0 4px">${pf_esc(w.code)}</h2>
+              <p style="font-size:11.5px;margin:0;color:var(--text);">${pf_esc(w.message)}</p>
+              <p style="font-size:11.5px;margin:4px 0 0;color:var(--muted);">${pf_esc(w.recommendation)}</p>
+            </div>
+          </div>
+        `).join("") : `<div class="empty-state"><strong>주요 매매 습관 경고가 없습니다.</strong><span>현재 주문내역 기준으로 과열 패턴이 크지 않습니다.</span></div>`}
+      </div>
+      ${renderSourceCaption(data.source || "state/toss_orders.json · trade_behavior_review.py")}
+    </section>
+  `;
+}
+
 function renderInvestorCoach() {
   const bi = state.behaviorInsights || {};
   const pd = state.portfolioDiet || {};
@@ -1498,6 +1541,7 @@ function renderInvestorCoach() {
           </div>
           ${renderSourceCaption("portfolio_diet_mode.py · toss_portfolio.csv")}
         </section>
+        ${renderTradeBehaviorReviewPanel(state.tradeBehaviorReview)}
         ${tossCoachPanel}
       </div>
     </div>

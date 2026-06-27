@@ -3001,6 +3001,13 @@ def _dashboard_handler(
                     insights = InvestorBehaviorInsights(paths.project_root)
                     self._json(insights.analyze_behavior())
                     return
+                if parsed.path == "/api/v1/trade-behavior-review":
+                    from .toss_orders import TossOrdersManager
+                    from .trade_behavior_review import review_trade_behavior
+
+                    mgr = TossOrdersManager(paths.project_root)
+                    self._json(review_trade_behavior(mgr.load_orders()))
+                    return
                 if parsed.path == "/api/v1/portfolio-diet":
                     from .portfolio_diet_mode import PortfolioDietMode
                     diet = PortfolioDietMode(paths.project_root)
@@ -3400,6 +3407,20 @@ def _dashboard_handler(
                                 "source": "state/toss_order_details.json · cached Toss getOrder detail",
                             }
                         self._json(detail)
+                    return
+                if parsed.path == "/api/v1/toss/order-quality":
+                    from .order_history_quality_check import check_order_history_quality
+                    from .toss_orders import TossOrdersManager
+
+                    mgr = TossOrdersManager(paths.project_root)
+                    self._json(check_order_history_quality(mgr.load_orders()))
+                    return
+                if parsed.path == "/api/v1/toss/trade-history-analytics":
+                    from .toss_orders import TossOrdersManager
+                    from .trade_history_analytics import build_trade_history_analytics
+
+                    mgr = TossOrdersManager(paths.project_root)
+                    self._json(build_trade_history_analytics(mgr.load_orders()))
                     return
                 if parsed.path == "/api/v1/toss/accounts":
                     self._json(build_dashboard_toss_accounts(paths))

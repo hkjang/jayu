@@ -27,6 +27,18 @@ features:
     status: beta
     owner: broker
     notes: Toss Order History cache and getOrder detail.
+  order_history_quality_check:
+    status: beta
+    owner: broker
+    notes: Toss order history schema and completeness audit.
+  trade_history_analytics:
+    status: beta
+    owner: personal
+    notes: Historical trade analytics and FIFO realized P/L approximation.
+  trade_behavior_review:
+    status: beta
+    owner: personal
+    notes: Trade habit review from historical orders.
   broker_interface:
     status: beta
     owner: broker

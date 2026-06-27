@@ -36,6 +36,7 @@ function renderTossAccountDashboard() {
         ${renderTossAccountCards(accounts, selected)}
         ${renderSourceCaption("Toss Open API accounts GET")}
       </section>
+      ${renderTradeHistoryAnalyticsPanel(state.tradeHistoryAnalytics)}
       <div class="visual-grid">
         <section class="panel">
           <div class="panel-header"><div><h2>Market split</h2><p>KRW 환산 기준 한국/미국/기타 비중입니다.</p></div></div>
@@ -136,6 +137,78 @@ function renderTossAccountDashboard() {
     </section>
     
     ${activeContentHtml}
+  `;
+}
+
+function renderTradeHistoryAnalyticsPanel(data) {
+  if (!data) {
+    return `
+      <section class="panel" style="margin-bottom:14px">
+        <div class="panel-header"><div><h2>거래 히스토리 요약</h2><p>Toss 주문내역 분석 데이터를 불러오지 못했습니다.</p></div></div>
+        ${renderSourceCaption("GET /api/v1/toss/trade-history-analytics")}
+      </section>
+    `;
+  }
+  const summary = data.summary || {};
+  const symbols = (data.by_symbol || []).slice(0, 5);
+  const years = data.by_year || [];
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>거래 히스토리 요약</h2>
+          <p>Toss 주문내역을 연도, 종목, FIFO 근사 실현손익 기준으로 재구성합니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <section class="metric-grid" style="margin-top:12px">
+        ${metricCard("체결 거래", summary.trade_count || 0, summary.trade_count ? "success" : "not_evaluated", `매수 ${summary.buy_count || 0} · 매도 ${summary.sell_count || 0}`)}
+        ${metricCard("총 매수", formatCurrency(summary.total_buy_krw, "KRW"), summary.total_buy_krw ? "success" : "not_evaluated", "filledAmount 기준 KRW 환산")}
+        ${metricCard("총 매도", formatCurrency(summary.total_sell_krw, "KRW"), summary.total_sell_krw ? "success" : "not_evaluated", "filledAmount 기준 KRW 환산")}
+        ${metricCard("실현손익", formatCurrency(summary.realized_pnl_krw, "KRW"), Number(summary.realized_pnl_krw || 0) < 0 ? "warning" : "success", `승률 ${summary.win_rate_pct ?? "-"}%`)}
+      </section>
+      <div class="visual-grid" style="margin-top:12px">
+        <div>
+          <h3 style="font-size:12px;margin:0 0 8px">연도별 투자 성적</h3>
+          ${renderTradeHistoryMiniTable(years, ["period", "trade_count", "buy_amount_krw", "sell_amount_krw", "realized_pnl_krw"])}
+        </div>
+        <div>
+          <h3 style="font-size:12px;margin:0 0 8px">종목별 실현손익 Top</h3>
+          ${renderTradeHistoryMiniTable(symbols, ["symbol", "trade_count", "buy_amount_krw", "sell_amount_krw", "realized_pnl_krw"])}
+        </div>
+      </div>
+      ${renderSourceCaption(data.source || "state/toss_orders.json · Toss Order History getOrders · FIFO approximation")}
+    </section>
+  `;
+}
+
+function renderTradeHistoryMiniTable(rows, fields) {
+  const labels = {
+    period: "기간",
+    symbol: "종목",
+    trade_count: "거래",
+    buy_amount_krw: "매수",
+    sell_amount_krw: "매도",
+    realized_pnl_krw: "손익",
+  };
+  if (!rows.length) return emptyTable("거래 히스토리 데이터가 없습니다.", "Toss 주문내역 캐시가 있으면 자동 계산됩니다.");
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>${fields.map(field => `<th>${labels[field] || field}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              ${fields.map(field => {
+                const value = row[field];
+                const formatted = field.endsWith("_krw") ? formatCurrency(value, "KRW") : escapeHtml(value ?? "-");
+                return `<td class="${field.endsWith("_krw") ? "numeric" : ""}">${formatted}</td>`;
+              }).join("")}
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 

@@ -19,6 +19,9 @@ const state = {
   tossReconciliation: null,
   tossOrderPlan: null,
   tossSubTab: localStorage.getItem("jayu.toss.subTab") || "overview",
+  orderHistoryQuality: null,
+  tradeHistoryAnalytics: null,
+  tradeBehaviorReview: null,
   apiMonitoring: null,
   tossAccountRegion: localStorage.getItem("jayu.toss.accountRegion") || "ALL",
   selectedTossAccount: localStorage.getItem("jayu.toss.selectedAccount") || "",
@@ -279,6 +282,12 @@ async function loadPage() {
         console.warn("Failed to load feature inventory", err);
         state.featureInventory = null;
       }
+      try {
+        state.orderHistoryQuality = await api("/api/v1/toss/order-quality");
+      } catch (err) {
+        console.warn("Failed to load order history quality", err);
+        state.orderHistoryQuality = null;
+      }
     }
     if (state.page === "toss") {
       state.tossStatus = await api("/api/v1/toss/status");
@@ -342,6 +351,7 @@ async function loadPage() {
       try { state.behaviorInsights = await api("/api/v1/behavior-insights"); } catch(e) { state.behaviorInsights = null; }
       try { state.portfolioDiet = await api("/api/v1/portfolio-diet"); } catch(e) { state.portfolioDiet = null; }
       try { state.personalScore = await api("/api/v1/personal-investment-score"); } catch(e) { state.personalScore = null; }
+      try { state.tradeBehaviorReview = await api("/api/v1/trade-behavior-review"); } catch(e) { state.tradeBehaviorReview = null; }
       try { state.journals = await api("/api/v1/investment-journals"); } catch(e) { state.journals = { journals: [] }; }
     }
     if (state.page === "invest-calendar") {
@@ -351,12 +361,14 @@ async function loadPage() {
       const params = new URLSearchParams();
       if (state.selectedTossAccount) params.set("account", state.selectedTossAccount);
       
-      const [portfolio, reconciliation, orderPlan, taxLots, taxLotsReconcile] = await Promise.all([
+      const [portfolio, reconciliation, orderPlan, taxLots, taxLotsReconcile, tradeHistoryAnalytics, orderHistoryQuality] = await Promise.all([
         api(`/api/v1/toss/portfolio${params.toString() ? `?${params.toString()}` : ""}`),
         api(`/api/v1/toss/reconciliation${params.toString() ? `?${params.toString()}` : ""}`),
         api("/api/v1/toss/order-plan"),
         api("/api/v1/tax-lots"),
-        api("/api/v1/tax-lots/reconcile")
+        api("/api/v1/tax-lots/reconcile"),
+        api("/api/v1/toss/trade-history-analytics"),
+        api("/api/v1/toss/order-quality")
       ]);
 
       state.tossPortfolio = portfolio;
@@ -364,6 +376,8 @@ async function loadPage() {
       state.tossOrderPlan = orderPlan;
       state.taxLots = taxLots.lots || [];
       state.taxLotsReconcile = taxLotsReconcile || {};
+      state.tradeHistoryAnalytics = tradeHistoryAnalytics || null;
+      state.orderHistoryQuality = orderHistoryQuality || null;
 
       state.tossAccounts = {
         status: state.tossPortfolio.status,

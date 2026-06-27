@@ -37,6 +37,7 @@ function renderSettingsValidation() {
     </section>
     
     ${renderFeatureInventorySection(state.featureInventory)}
+    ${renderOrderHistoryQualitySection(state.orderHistoryQuality)}
     <section class="panel" style="margin-top: 1.5rem;" id="backup-restore-panel">
       ${renderBackupRestoreSection()}
     </section>
@@ -103,6 +104,52 @@ function renderFeatureInventorySection(data) {
         stable ${statusCounts.stable || 0} · beta ${statusCounts.beta || 0} · experimental ${statusCounts.experimental || 0} · deprecated ${statusCounts.deprecated || 0}
       </p>
       ${renderSourceCaption("GET /api/v1/features · configs/feature_status.yaml · src/jayu")}
+    </section>
+  `;
+}
+
+function renderOrderHistoryQualitySection(data) {
+  if (!data) {
+    return `
+      <section class="panel" style="margin-top:1.5rem;">
+        <div class="panel-header"><div><h2>주문내역 품질 검사</h2><p>Toss 주문내역 품질 데이터를 불러오지 못했습니다.</p></div></div>
+        ${renderSourceCaption("GET /api/v1/toss/order-quality")}
+      </section>
+    `;
+  }
+  const summary = data.summary || {};
+  const issues = (data.issues || []).slice(0, 8);
+  return `
+    <section class="panel" style="margin-top:1.5rem;">
+      <div class="panel-header">
+        <div>
+          <h2>주문내역 품질 검사</h2>
+          <p>중복 주문, 필수 필드 누락, 체결 수량/금액 이상, 통화/비용 이상을 점검합니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated")}
+      </div>
+      <section class="metric-grid" style="margin-top:12px;">
+        ${metricCard("품질 점수", `${data.quality_score ?? "-"}점`, data.status || "not_evaluated", "100점 기준")}
+        ${metricCard("주문 수", summary.order_count || 0, summary.order_count ? "success" : "not_evaluated", `고유 ${summary.unique_order_count || 0}`)}
+        ${metricCard("중복", summary.duplicate_order_count || 0, summary.duplicate_order_count ? "warning" : "success", "orderId 기준")}
+        ${metricCard("이슈", `${summary.failed_issue_count || 0}/${summary.warning_issue_count || 0}`, summary.failed_issue_count ? "failed" : summary.warning_issue_count ? "warning" : "success", "실패/경고")}
+      </section>
+      <div class="table-wrap" style="margin-top:12px;">
+        <table>
+          <thead><tr><th>Severity</th><th>Code</th><th>Ref</th><th>Message</th></tr></thead>
+          <tbody>
+            ${issues.length ? issues.map(issue => `
+              <tr>
+                <td><span class="status-label status-${issue.severity === "failed" ? "failed" : "warning"}">${escapeHtml(issue.severity)}</span></td>
+                <td class="code">${escapeHtml(issue.code || "-")}</td>
+                <td class="code">${escapeHtml(issue.ref || "-")}</td>
+                <td>${escapeHtml(issue.message || "-")}</td>
+              </tr>
+            `).join("") : `<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px;">주요 품질 이슈가 없습니다.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      ${renderSourceCaption(data.source || "state/toss_orders.json · Toss Order History getOrders")}
     </section>
   `;
 }

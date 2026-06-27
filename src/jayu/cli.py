@@ -1557,6 +1557,57 @@ def report_stock_lifecycle(
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+@report_app.command("order-quality")
+def report_order_quality(
+    orders_json: Annotated[Path | None, typer.Option("--orders-json", exists=True)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Check Toss order history completeness and schema quality."""
+    _, paths = _load(config)
+    selected_orders = orders_json or (paths.state_dir / "toss_orders.json")
+    orders_data = read_json(selected_orders, default=[])
+    from .order_history_quality_check import check_order_history_quality
+
+    report = check_order_history_quality(orders_data)
+    atomic_write_json(output or (paths.state_dir / "order_history_quality.json"), report)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("trade-history")
+def report_trade_history(
+    orders_json: Annotated[Path | None, typer.Option("--orders-json", exists=True)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Analyze Toss order history by year, month, symbol, and realized P/L."""
+    _, paths = _load(config)
+    selected_orders = orders_json or (paths.state_dir / "toss_orders.json")
+    orders_data = read_json(selected_orders, default=[])
+    from .trade_history_analytics import build_trade_history_analytics
+
+    report = build_trade_history_analytics(orders_data)
+    atomic_write_json(output or (paths.state_dir / "trade_history_analytics.json"), report)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@report_app.command("trade-behavior")
+def report_trade_behavior(
+    orders_json: Annotated[Path | None, typer.Option("--orders-json", exists=True)] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Review order history for overtrading, leverage, and fast loss patterns."""
+    _, paths = _load(config)
+    selected_orders = orders_json or (paths.state_dir / "toss_orders.json")
+    orders_data = read_json(selected_orders, default=[])
+    from .trade_behavior_review import review_trade_behavior
+
+    report = review_trade_behavior(orders_data)
+    atomic_write_json(output or (paths.state_dir / "trade_behavior_review.json"), report)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+
+
 @report_app.command("signal-stability")
 def report_signal_stability(
     output: Annotated[Path | None, typer.Option("--output")] = None,
