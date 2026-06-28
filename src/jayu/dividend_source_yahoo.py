@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
 import yfinance as yf
 
 from .yahoo import get_yahoo_session
@@ -17,13 +19,14 @@ class DividendSourceYahoo:
         self.cache_dir = self.project_root / "state" / "dividend_yahoo_cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.cache_ttl = cache_ttl_seconds
+        self.updating_tickers = set()
 
     def _get_cache_path(self, ticker: str) -> Path:
         # Avoid invalid characters in filename
         safe_ticker = ticker.replace("^", "_").replace("=", "_")
         return self.cache_dir / f"{safe_ticker.lower()}.json"
 
-    def load_cache(self, ticker: str) -> dict[str, Any] | None:
+    def load_cache(self, ticker: str, *, allow_stale: bool = False) -> dict[str, Any] | None:
         cache_path = self._get_cache_path(ticker)
         if not cache_path.exists():
             return None
@@ -33,8 +36,11 @@ class DividendSourceYahoo:
             
             # Check TTL
             fetched_at = data.get("fetched_at", 0)
-            if time.time() - fetched_at > self.cache_ttl:
+            age_seconds = time.time() - fetched_at
+            if age_seconds > self.cache_ttl and not allow_stale:
                 return None
+            data["cache_status"] = "stale_hit" if age_seconds > self.cache_ttl else "hit"
+            data["cache_age_seconds"] = round(max(0.0, age_seconds), 2)
             return data
         except Exception:
             return None
@@ -47,27 +53,48 @@ class DividendSourceYahoo:
         except Exception:
             pass
 
-    def fetch_dividend_history(self, yahoo_ticker: str, force: bool = False) -> dict[str, Any]:
+    def fetch_dividend_history(
+        self,
+        yahoo_ticker: str,
+        force: bool = False,
+        *,
+        allow_stale: bool = False,
+    ) -> dict[str, Any]:
         """
         Fetches historical dividends and splits from Yahoo Finance.
         Returns a normalized dictionary.
         """
         if not force:
-            cached = self.load_cache(yahoo_ticker)
+            cached = self.load_cache(yahoo_ticker, allow_stale=allow_stale)
             if cached:
+                # If it's a stale hit, trigger a background update
+                if cached.get("cache_status") == "stale_hit" and yahoo_ticker not in self.updating_tickers:
+                    import threading
+                    self.updating_tickers.add(yahoo_ticker)
+                    def bg_update():
+                        try:
+                            self.fetch_dividend_history(yahoo_ticker, force=True)
+                        except Exception:
+                            pass
+                        finally:
+                            self.updating_tickers.discard(yahoo_ticker)
+                    threading.Thread(target=bg_update, daemon=True).start()
                 return cached
 
         session = get_yahoo_session()
         ticker_obj = yf.Ticker(yahoo_ticker, session=session)
 
+        error_message = None
+
         # Get historical dividends & actions
         try:
             actions = ticker_obj.get_actions() # returns DataFrame with Dividends and Stock Splits
             dividends_series = ticker_obj.get_dividends()
-        except Exception as e:
+        except Exception as exc:
             # Fallback if get_actions fails
             actions = None
             dividends_series = None
+            error_message = str(exc)
 
         raw_dividends = []
         raw_splits = []
@@ -76,7 +103,9 @@ class DividendSourceYahoo:
             for timestamp, amount in dividends_series.items():
                 raw_dividends.append({
                     "date": timestamp.strftime("%Y-%m-%d"),
-                    "amount": float(amount)
+                    "amount": float(amount),
+                    "source": "yahoo_finance",
+                    "source_role": "fast_history"
                 })
 
         if actions is not None and not actions.empty:
@@ -85,7 +114,8 @@ class DividendSourceYahoo:
                 if split_val and split_val != 0:
                     raw_splits.append({
                         "date": timestamp.strftime("%Y-%m-%d"),
-                        "ratio": str(split_val) # e.g. "2:1" or "0.5"
+                        "ratio": str(split_val), # e.g. "2:1" or "0.5"
+                        "source": "yahoo_finance",
                     })
 
         # Try to fetch some metadata (yield, trailing rate) from info
@@ -109,12 +139,19 @@ class DividendSourceYahoo:
         payload = {
             "ticker": yahoo_ticker,
             "fetched_at": time.time(),
+            "fetched_at_iso": datetime.now(timezone.utc).isoformat(),
             "info_yield_pct": info_yield,
             "info_annual_rate": info_rate,
             "dividends": raw_dividends,
             "splits": raw_splits,
-            "source": "yahoo_finance"
+            "source": "yahoo_finance",
+            "source_role": "fast_history_not_final",
+            "raw_payload_path": str(self._get_cache_path(yahoo_ticker)),
+            "cache_status": "refreshed",
+            "cache_age_seconds": 0.0,
         }
+        if error_message:
+            payload["warning"] = error_message
 
         # Calculate a hash of the dividend data to detect changes
         data_str = json.dumps(raw_dividends, sort_keys=True)
@@ -123,20 +160,29 @@ class DividendSourceYahoo:
         self.save_cache(yahoo_ticker, payload)
         return payload
 
-    def fetch_batch(self, tickers: list[str], force: bool = False) -> dict[str, dict[str, Any]]:
+    def fetch_batch(
+        self,
+        tickers: list[str],
+        force: bool = False,
+        *,
+        allow_stale: bool = False,
+    ) -> dict[str, dict[str, Any]]:
         results = {}
         for t in tickers:
             try:
-                results[t] = self.fetch_dividend_history(t, force=force)
+                results[t] = self.fetch_dividend_history(t, force=force, allow_stale=allow_stale)
             except Exception:
                 results[t] = {
                     "ticker": t,
                     "fetched_at": time.time(),
+                    "fetched_at_iso": datetime.now(timezone.utc).isoformat(),
                     "info_yield_pct": 0.0,
                     "info_annual_rate": 0.0,
                     "dividends": [],
                     "splits": [],
                     "source": "yahoo_finance",
+                    "source_role": "fast_history_not_final",
+                    "cache_status": "error",
                     "error": "Failed to fetch"
                 }
         return results

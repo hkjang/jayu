@@ -8,6 +8,7 @@ from datetime import datetime
 
 from .dividend_security_mapper import DividendSecurityMapper
 from .dividend_source_yahoo import DividendSourceYahoo
+from .dividend_source_supplemental import DividendSupplementalSource
 from .dividend_event_master import DividendEventMaster
 from .dividend_data_quality_gate import DividendDataQualityGate
 from .dividend_forecast_engine import DividendForecastEngine, DividendForecast
@@ -20,6 +21,7 @@ class DividendCashflowSimulator:
         self.project_root = project_root
         self.mapper = DividendSecurityMapper(project_root)
         self.yahoo_source = DividendSourceYahoo(project_root)
+        self.supplemental_source = DividendSupplementalSource(project_root)
         self.event_master = DividendEventMaster(project_root)
         self.quality_gate = DividendDataQualityGate(project_root)
         self.forecast_engine = DividendForecastEngine(project_root)
@@ -40,13 +42,17 @@ class DividendCashflowSimulator:
                     qty = row_lower.get("qty") or row_lower.get("quantity") or row_lower.get("보유 수량") or "0"
                     price = row_lower.get("price") or row_lower.get("current_price") or row_lower.get("현재가") or "0"
                     avg_cost = row_lower.get("average_cost") or row_lower.get("avg_price") or row_lower.get("매수 평단가") or "0"
+                    market = row_lower.get("market") or row_lower.get("exchange")
+                    currency = row_lower.get("currency")
                     
                     if symbol:
                         holdings.append({
                             "symbol": symbol.strip().upper(),
-                            "quantity": float(qty) if qty else 0.0,
-                            "price": float(price) if price else 0.0,
-                            "average_cost": float(avg_cost) if avg_cost else 0.0
+                            "quantity": _to_float(qty),
+                            "price": _to_float(price),
+                            "average_cost": _to_float(avg_cost),
+                            "market": market,
+                            "currency": currency,
                         })
         except Exception:
             pass
@@ -56,7 +62,9 @@ class DividendCashflowSimulator:
         self,
         holdings: list[dict[str, Any]] | None = None,
         fx_rate: float | None = None,
-        scenario: dict[str, Any] | None = None
+        scenario: dict[str, Any] | None = None,
+        force_history_refresh: bool = False,
+        allow_stale_history: bool = True,
     ) -> dict[str, Any]:
         """
         Runs the dividend simulation pipeline using real-time Yahoo Finance data.
@@ -76,15 +84,23 @@ class DividendCashflowSimulator:
         # Determine start date
         start_date = datetime.now()
 
-        for h in mapped_holdings:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def process_holding(h):
             symbol = h["symbol"]
             yahoo_ticker = h["yahoo_ticker"]
             
             # Fetch Yahoo dividend history
             try:
-                yahoo_payload = self.yahoo_source.fetch_dividend_history(yahoo_ticker)
+                yahoo_payload = self.yahoo_source.fetch_dividend_history(
+                    yahoo_ticker,
+                    force=force_history_refresh,
+                    allow_stale=allow_stale_history,
+                )
             except Exception:
-                yahoo_payload = {"dividends": [], "fetched_at": 0}
+                yahoo_payload = {"dividends": [], "fetched_at": 0, "cache_status": "error"}
+
+            supplemental_events = self.supplemental_source.get_supplemental_events(symbol)
 
             # Build and merge events
             events = self.event_master.build_and_merge_events(
@@ -92,15 +108,23 @@ class DividendCashflowSimulator:
                 name=h["name"],
                 market=h["market"],
                 currency=h["currency"],
-                yahoo_payload=yahoo_payload
+                yahoo_payload=yahoo_payload,
+                supplemental_events=supplemental_events,
             )
 
             # Quality gate evaluation
             quality = self.quality_gate.evaluate_symbol(symbol, events, yahoo_payload)
-            quality_map[symbol] = quality
-
+            
             # Forecast
             forecasts = self.forecast_engine.forecast_symbol(symbol, events, quality, start_date=start_date)
+            
+            return symbol, quality, forecasts
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(process_holding, mapped_holdings))
+
+        for symbol, quality, forecasts in results:
+            quality_map[symbol] = quality
             all_forecasts.extend(forecasts)
 
         # 3. Apply Tax and FX Engine
@@ -112,7 +136,7 @@ class DividendCashflowSimulator:
             all_forecasts = self._apply_scenario_adjustments(all_forecasts, scenario)
 
         # Run tax & fx conversion
-        self.tax_fx_engine.apply_tax_and_fx(all_forecasts, holdings_by_symbol)
+        self.tax_fx_engine.apply_tax_and_fx(all_forecasts, holdings_by_symbol, fx_rate=usd_krw)
 
         # 4. Aggregate results
         portfolio_value_krw = 0.0
@@ -168,6 +192,7 @@ class DividendCashflowSimulator:
             q = quality_map.get(symbol)
             trust_score = q.trust_score if q else 0.0
             decision = q.decision if q else "exclude"
+            data_sources = q.data_sources if q else []
 
             # Find next ex/pay dates from events
             sym_events = self.event_master.get_events_for_symbol(symbol)
@@ -195,6 +220,7 @@ class DividendCashflowSimulator:
                 "net_annual_payout_krw": round(sym_net_annual_krw, 2),
                 "trust_score": trust_score,
                 "decision": decision,
+                "data_sources": data_sources,
                 "next_ex_date": next_ex,
                 "next_pay_date": next_pay,
                 "growth_rate_3y_pct": growth_rate,
@@ -232,6 +258,7 @@ class DividendCashflowSimulator:
             "aggregate_yield_pct": round(aggregate_yield * 100.0, 2),
             "monthly_payouts_krw": [round(val, 2) for val in monthly_payouts],
             "monthly_net_payouts_krw": [round(val, 2) for val in monthly_net_payouts],
+            "months": target_months,
             "holdings": holdings_detail,
             "reinvestment_projections": projections,
             "target_goal": {
@@ -240,7 +267,17 @@ class DividendCashflowSimulator:
                 "achievement_rate_pct": achievement_rate,
                 "shortfall_krw": round(max(0.0, target_krw - avg_monthly_net), 2)
             },
-            "usd_krw_rate": usd_krw
+            "usd_krw_rate": usd_krw,
+            "source_summary": {
+                "price_and_history": "Yahoo Finance dividend history",
+                "holdings": "Toss holdings CSV/API when available",
+                "supplemental": "state/dividend_supplements.json or external dividend sources",
+                "quality_gate": "DividendDataQualityGate",
+            },
+            "history_cache_policy": {
+                "allow_stale_history": allow_stale_history,
+                "force_history_refresh": force_history_refresh,
+            },
         }
 
     def _apply_scenario_adjustments(
@@ -263,3 +300,13 @@ class DividendCashflowSimulator:
                 f.expected_amount *= (1.0 + growth_rate)
 
         return forecasts
+
+
+def _to_float(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    text = str(value).replace(",", "").replace("₩", "").replace("$", "").strip()
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0

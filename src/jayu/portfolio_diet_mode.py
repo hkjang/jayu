@@ -27,9 +27,11 @@ class PortfolioDietMode:
         parsed_holdings = []
 
         for h in holdings:
-            ticker = h["ticker"]
-            qty = h["quantity"]
-            price = h["price"]
+            ticker = h.get("ticker") or h.get("symbol")
+            qty = h.get("quantity") or h.get("qty") or 0.0
+            price = h.get("price") or h.get("current_price") or 0.0
+            if not ticker:
+                continue
             is_us = not ticker.isdigit() and not (ticker.endswith(".KS") or ticker.endswith(".KQ"))
             val_krw = qty * price * (fx_rate if is_us else 1.0)
             total_value_krw += val_krw
