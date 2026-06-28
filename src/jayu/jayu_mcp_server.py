@@ -99,6 +99,19 @@ class JayuMcpServer:
         """Execute a tool and return an MCP content response containing both a Korean summary and raw JSON."""
         log_err(f"Calling tool: {name} with args {arguments}")
         
+        from .agent_guardrail import AgentGuardrail
+        is_valid, err_msg = AgentGuardrail.validate_tool_invocation(name, arguments)
+        if not is_valid:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"⚠️ 보안 에러: {err_msg}"
+                    }
+                ],
+                "isError": True
+            }
+            
         try:
             if name == "validate_config":
                 raw_data = {"config_file": str(self.paths.config_file), "valid": True}

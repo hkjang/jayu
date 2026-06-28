@@ -3039,6 +3039,60 @@ def _dashboard_handler(
                     diff_calc = AccountChangeDiff(paths.project_root)
                     self._json(diff_calc.calculate_diff())
                     return
+                if parsed.path == "/api/v1/order-intelligence":
+                    from .order_history_intelligence import OrderHistoryIntelligence
+                    intel = OrderHistoryIntelligence(paths.project_root)
+                    self._json(intel.analyze_trades())
+                    return
+                if parsed.path == "/api/v1/portfolio-decision-hub":
+                    from .portfolio_decision_hub import PortfolioDecisionHub
+                    hub = PortfolioDecisionHub(paths.project_root)
+                    self._json(hub.evaluate_portfolio())
+                    return
+                if parsed.path == "/api/v1/signal-outcome-tracker":
+                    from .signal_outcome_tracker import SignalOutcomeTracker
+                    tracker = SignalOutcomeTracker(paths.project_root)
+                    self._json(tracker.track_new_signals())
+                    return
+                if parsed.path == "/api/v1/dividend-reconciliation":
+                    from .dividend_reconciliation import DividendReconciler
+                    from .dividend_cashflow_simulator import DividendCashflowSimulator
+                    from .dividend_forecast_engine import DividendForecastEngine
+                    
+                    simulator = DividendCashflowSimulator(paths.project_root)
+                    sim_res = simulator.simulate_cashflow()
+                    
+                    events = []
+                    for h in sim_res.get("holdings", []):
+                        sym = h["symbol"]
+                        events.extend(simulator.event_master.get_events_for_symbol(sym))
+                    
+                    engine = DividendForecastEngine(paths.project_root)
+                    forecasts = []
+                    for h in sim_res.get("holdings", []):
+                        sym = h["symbol"]
+                        sym_events = [e for e in events if e.symbol == sym]
+                        quality = simulator.quality_gate.evaluate_symbol(sym, sym_events)
+                        forecasts.extend(engine.forecast_symbol(sym, sym_events, quality))
+                        
+                    reconciler = DividendReconciler(paths.project_root)
+                    receipts = reconciler.load_actual_receipts()
+                    reconciled = reconciler.reconcile(forecasts, receipts)
+                    
+                    self._json({
+                        "reconciled_items": [
+                            {
+                                "symbol": r.symbol,
+                                "forecast_month": r.forecast_month,
+                                "expected": r.expected_amount_krw,
+                                "actual": r.actual_amount_krw,
+                                "diff": r.diff,
+                                "status": r.status
+                            }
+                            for r in reconciled
+                        ]
+                    })
+                    return
                 if parsed.path == "/api/v1/permission-mode":
                     self._json({"mode": permission_mgr.get_mode()})
                     return

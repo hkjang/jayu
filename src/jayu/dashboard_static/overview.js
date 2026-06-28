@@ -9,16 +9,35 @@ function renderOverview() {
   const actions = decision.recommended_actions || data.recommended_actions || [];
   const primaryAction = decision.recommended_next_action || actions[0] || null;
 
-  // Reactively load Home Briefing and Account Change Diff data if not present
-  if (state.homeBriefing === undefined || state.accountDiff === undefined) {
+  // Reactively load all OS API data if not present
+  if (
+    state.homeBriefing === undefined ||
+    state.accountDiff === undefined ||
+    state.decisionHub === undefined ||
+    state.orderIntel === undefined ||
+    state.signalOutcome === undefined ||
+    state.divRecon === undefined
+  ) {
     state.homeBriefing = null;
     state.accountDiff = null;
+    state.decisionHub = null;
+    state.orderIntel = null;
+    state.signalOutcome = null;
+    state.divRecon = null;
     Promise.all([
       fetch("/api/v1/home-briefing").then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch("/api/v1/account-diff").then(r => r.ok ? r.json() : null).catch(() => null)
-    ]).then(([briefing, diff]) => {
+      fetch("/api/v1/account-diff").then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch("/api/v1/portfolio-decision-hub").then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch("/api/v1/order-intelligence").then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch("/api/v1/signal-outcome-tracker").then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch("/api/v1/dividend-reconciliation").then(r => r.ok ? r.json() : null).catch(() => null)
+    ]).then(([briefing, diff, hub, intel, outcome, recon]) => {
       state.homeBriefing = briefing;
       state.accountDiff = diff;
+      state.decisionHub = hub;
+      state.orderIntel = intel;
+      state.signalOutcome = outcome;
+      state.divRecon = recon;
       renderOverview();
     });
   }
