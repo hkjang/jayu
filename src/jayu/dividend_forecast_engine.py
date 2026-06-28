@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from .dividend_data_quality_gate import DividendQuality
 from .dividend_event_master import DividendEvent

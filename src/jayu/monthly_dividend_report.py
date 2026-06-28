@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +22,7 @@ class MonthlyDividendReport:
         """
         # Run simulation
         sim_data = self.simulator.simulate_cashflow()
+        usd_krw = float(sim_data.get("usd_krw_rate") or 1350.0)
         
         # Get actual receipts and reconcile
         receipts = self.reconciler.load_actual_receipts()
@@ -30,13 +30,6 @@ class MonthlyDividendReport:
         # Filter forecasts for this specific month
         month_str = f"{year}-{month:02d}"
         
-        # Reconcile all
-        # To get forecasts, we can run simulation
-        # In a real run, we would have the exact forecasts stored or simulated
-        # Let's rebuild forecasts for reconciliation
-        forecasts = []
-        # Create dummy forecasts from monthly payouts for simplicity or run detailed forecast
-        # Actually, let's extract the holdings and build reconciliation for this month
         holdings = sim_data.get("holdings", [])
         
         reconciled_items = []
@@ -57,7 +50,11 @@ class MonthlyDividendReport:
             expected = h["annual_payout_krw"] / 12.0 # simplified monthly average if no specific month forecast
             
             # Find actual
-            actual = sum(r["amount"] for r in month_receipts if r["symbol"] == symbol)
+            actual = sum(
+                _receipt_amount_krw(r, usd_krw)
+                for r in month_receipts
+                if r["symbol"] == symbol
+            )
             
             total_expected += expected
             total_actual += actual
@@ -153,7 +150,6 @@ class MonthlyDividendReport:
         total_expected: float,
         total_actual: float
     ) -> str:
-        md = self._build_markdown(year, month, sim_data, reconciled_items, total_expected, total_actual)
         # Simple HTML wrapper
         html = f"""<!DOCTYPE html>
 <html>
@@ -210,3 +206,21 @@ class MonthlyDividendReport:
 </html>
 """
         return html
+
+
+def _receipt_amount_krw(receipt: dict[str, Any], fx_rate: float) -> float:
+    amount = _to_float(receipt.get("amount", 0.0))
+    currency = str(receipt.get("currency", "KRW")).upper()
+    if currency == "USD":
+        return round(amount * fx_rate, 2)
+    return round(amount, 2)
+
+
+def _to_float(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    text = str(value).replace(",", "").replace("₩", "").replace("$", "").strip()
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0

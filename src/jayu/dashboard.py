@@ -3103,7 +3103,14 @@ def _dashboard_handler(
                     return
                 if parsed.path == "/api/v1/dividend-dashboard":
                     from .dividend_dashboard_api import build_dividend_dashboard
-                    self._json(build_dividend_dashboard(paths.project_root))
+                    query = parse_qs(parsed.query)
+                    force_refresh = query.get("refresh", ["0"])[0] in {"1", "true", "yes"} or query.get("force", ["0"])[0] in {"1", "true", "yes"}
+                    cache_ttl = int(query["cache_ttl"][0]) if query.get("cache_ttl") else None
+                    self._json(build_dividend_dashboard(
+                        paths.project_root,
+                        force_refresh=force_refresh,
+                        cache_ttl_seconds=cache_ttl,
+                    ))
                     return
                 if parsed.path == "/api/v1/personal-investment-score":
                     from .personal_investment_score import PersonalInvestmentScore

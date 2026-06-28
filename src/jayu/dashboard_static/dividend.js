@@ -139,11 +139,13 @@ function renderDividendPage() {
   }).join("");
 
   // Target Goal Calculations
-  const targetKrw = overview.monthly_target_krw || 3000000.0;
-  const currentMonthlyNet = overview.this_month_net || 0.0;
-  const shortfall = Math.max(0.0, targetKrw - currentMonthlyNet);
-  const achievementRate = ((currentMonthlyNet / targetKrw) * 100.0).toFixed(1);
-  const neededCapital = (shortfall * 12.0) / (annualYield > 0 ? annualYield : 0.04); // Proxy at yield or 4%
+  const goalBridge = data.goal_bridge || {};
+  const targetKrw = goalBridge.monthly_target_krw || overview.monthly_target_krw || 3000000.0;
+  const currentMonthlyNet = goalBridge.current_monthly_net_krw || overview.this_month_net || 0.0;
+  const shortfall = goalBridge.monthly_shortfall_krw ?? Math.max(0.0, targetKrw - currentMonthlyNet);
+  const achievementRate = Number(goalBridge.achievement_rate_pct ?? ((currentMonthlyNet / targetKrw) * 100.0)).toFixed(1);
+  const neededCapital = goalBridge.needed_additional_capital_krw ?? ((shortfall * 12.0) / (annualYield > 0 ? annualYield : 0.04));
+  const requiredMonthlyInvestment = goalBridge.required_monthly_investment || {};
 
   root.innerHTML = `
     <div class="page-heading">
@@ -236,6 +238,20 @@ function renderDividendPage() {
             <div style="font-size:12px; line-height:1.45; color:var(--text); margin-bottom:12px;">
               목표 배당을 채우기 위해 필요한 추가 배당 투자금은 약 <strong>${div_fmt(Math.round(neededCapital / 10000))}만원</strong>입니다. (배당수익률 기준)<br>
               추가 저축 없이 배당금 재투자(DRIP)만 유지할 경우 복리 성장을 통해 목표치에 근접해 나갈 수 있습니다.
+            </div>
+            <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; font-size:11px; margin-bottom:12px;">
+              <div style="background:var(--surface-subtle); border:1px solid var(--border); border-radius:6px; padding:8px;">
+                <span style="display:block; color:var(--muted);">1년 목표 월투자</span>
+                <strong>${div_fmt(requiredMonthlyInvestment["1_year"] || 0)}원</strong>
+              </div>
+              <div style="background:var(--surface-subtle); border:1px solid var(--border); border-radius:6px; padding:8px;">
+                <span style="display:block; color:var(--muted);">3년 목표 월투자</span>
+                <strong>${div_fmt(requiredMonthlyInvestment["3_year"] || 0)}원</strong>
+              </div>
+              <div style="background:var(--surface-subtle); border:1px solid var(--border); border-radius:6px; padding:8px;">
+                <span style="display:block; color:var(--muted);">5년 목표 월투자</span>
+                <strong>${div_fmt(requiredMonthlyInvestment["5_year"] || 0)}원</strong>
+              </div>
             </div>
             
             <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); display:flex; gap:8px; align-items:flex-end;">

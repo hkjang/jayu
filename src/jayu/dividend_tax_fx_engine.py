@@ -28,7 +28,7 @@ class DividendTaxFxEngine:
             return 0.154
         return 0.154
 
-    def get_live_fx_rate(self, toss_client: Any = None) -> float:
+    def get_live_fx_rate(self, toss_client: Any = None, fallback_rate: float = 1350.0) -> float:
         """
         Fetches the USD/KRW exchange rate.
         Checks cache first, then calls Toss API if client is provided, otherwise falls back.
@@ -40,11 +40,11 @@ class DividendTaxFxEngine:
                     cache = json.load(f)
                 # TTL 1 hour (3600 seconds)
                 if time.time() - cache.get("timestamp", 0) < 3600:
-                    return float(cache.get("usd_krw", 1350.0))
+                    return float(cache.get("usd_krw", fallback_rate))
             except Exception:
                 pass
 
-        rate = 1350.0
+        rate = fallback_rate
         # 2. Try to fetch from Toss API
         if toss_client:
             try:
@@ -79,16 +79,17 @@ class DividendTaxFxEngine:
         self,
         forecasts: list[DividendForecast],
         holdings_by_symbol: dict[str, dict[str, Any]],
-        toss_client: Any = None
+        toss_client: Any = None,
+        fx_rate: float | None = None,
     ) -> list[DividendForecast]:
         """
         Enriches forecasts with KRW converted amounts and estimated taxes.
         """
-        usd_krw = self.get_live_fx_rate(toss_client)
+        usd_krw = fx_rate if fx_rate is not None else self.get_live_fx_rate(toss_client)
 
         for f in forecasts:
             holding = holdings_by_symbol.get(f.symbol, {})
-            qty = float(holding.get("quantity", 0))
+            qty = _to_float(holding.get("quantity", 0))
             market = holding.get("market", "US")
             currency = holding.get("currency", "USD")
 
@@ -109,3 +110,12 @@ class DividendTaxFxEngine:
             f.net_amount = round(total_net * rate, 2)
 
         return forecasts
+
+
+def _to_float(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0

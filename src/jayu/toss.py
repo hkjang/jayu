@@ -365,18 +365,28 @@ class TossInvestClient:
         return self._get("/api/v1/market-calendar/US", params={"date": date})
 
     def accounts(self) -> Any:
+        import hashlib
         import json
         import time
         from pathlib import Path
         
-        cache_dir = Path.home() / ".gemini" / "antigravity"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / "toss_accounts_cache.json"
+        use_disk_cache = (
+            isinstance(self.client, HttpJsonClient)
+            and self.base_url == TossInvestClient.base_url
+        )
+        cache_file: Path | None = None
+        if use_disk_cache:
+            cache_dir = Path.home() / ".gemini" / "antigravity"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_key = hashlib.sha256(
+                f"{self.base_url}:{self.api_key}".encode("utf-8")
+            ).hexdigest()[:16]
+            cache_file = cache_dir / f"toss_accounts_cache_{cache_key}.json"
         
         now = time.time()
         
         # 1. Try to load from fresh cache (24 hours)
-        if cache_file.exists():
+        if cache_file and cache_file.exists():
             try:
                 with open(cache_file, "r", encoding="utf-8") as f:
                     cache_data = json.load(f)
@@ -390,16 +400,17 @@ class TossInvestClient:
             res = self._get("/api/v1/accounts")
             
             # Save to cache on success
-            try:
-                with open(cache_file, "w", encoding="utf-8") as f:
-                    json.dump({"updated_at": now, "response": res}, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
+            if cache_file:
+                try:
+                    with open(cache_file, "w", encoding="utf-8") as f:
+                        json.dump({"updated_at": now, "response": res}, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
                 
             return res
         except Exception as exc:
             # 3. Fallback to stale cache if API fails
-            if cache_file.exists():
+            if cache_file and cache_file.exists():
                 try:
                     with open(cache_file, "r", encoding="utf-8") as f:
                         cache_data = json.load(f)

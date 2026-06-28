@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,7 @@ class DividendReconciliation:
     expected_amount: float
     actual_amount: float | None
     diff: float | None
-    status: str                  # "matched", "missing", "excess", "delayed", "amount_diff"
+    status: str                  # "matched", "missing", "excess", "estimated", "amount_diff"
     reason: str | None
 
 class DividendReconciler:
@@ -52,7 +52,7 @@ class DividendReconciler:
                         receipts.append({
                             "symbol": symbol,
                             "date": date_str,
-                            "amount": float(amount) if amount else 0.0,
+                            "amount": _to_float(amount),
                             "currency": row_lower.get("currency", "USD").upper(),
                             "source": row_lower.get("source", "manual")
                         })
@@ -85,7 +85,8 @@ class DividendReconciler:
     def reconcile(
         self,
         forecasts: list[Any], # list of DividendForecast
-        receipts: list[dict[str, Any]]
+        receipts: list[dict[str, Any]],
+        fx_rate: float = 1350.0,
     ) -> list[DividendReconciliation]:
         """
         Compares expected forecasts against actual receipts.
@@ -124,10 +125,8 @@ class DividendReconciler:
 
             if matched_rec:
                 matched_receipt_indices.add(matched_idx)
-                actual_amount = matched_rec["amount"]
+                actual_amount = self._receipt_amount_krw(matched_rec, fx_rate)
                 
-                # Check for amount difference (assume receipts are in KRW for comparison, or normalize)
-                # For simplicity, if currency differs we'll convert, but here we assume raw compare
                 diff = actual_amount - expected_amount
                 diff_pct = abs(diff) / expected_amount if expected_amount > 0 else 0.0
                 
@@ -135,7 +134,10 @@ class DividendReconciler:
                 reason = None
                 if diff_pct > 0.05:
                     status = "amount_diff"
-                    reason = f"금액 차이 초과: 예상 {round(expected_amount, 1)} 대비 실제 {round(actual_amount, 1)}"
+                    reason = (
+                        f"금액 차이 초과: 예상 {round(expected_amount, 1)}원 대비 "
+                        f"실제 {round(actual_amount, 1)}원"
+                    )
 
                 reconciled.append(DividendReconciliation(
                     symbol=symbol,
@@ -167,15 +169,34 @@ class DividendReconciler:
         # Check for excess receipts (Received but not expected)
         for idx, r in enumerate(receipts):
             if idx not in matched_receipt_indices:
+                actual_amount = self._receipt_amount_krw(r, fx_rate)
                 reconciled.append(DividendReconciliation(
                     symbol=r["symbol"],
                     expected_pay_date="N/A",
                     actual_pay_date=r["date"],
                     expected_amount=0.0,
-                    actual_amount=r["amount"],
-                    diff=r["amount"],
+                    actual_amount=actual_amount,
+                    diff=actual_amount,
                     status="excess",
                     reason="예상치 못한 배당 입금입니다."
                 ))
 
         return reconciled
+
+    @staticmethod
+    def _receipt_amount_krw(receipt: dict[str, Any], fx_rate: float) -> float:
+        amount = _to_float(receipt.get("amount", 0.0))
+        currency = str(receipt.get("currency", "KRW")).upper()
+        if currency == "USD":
+            return round(amount * fx_rate, 2)
+        return round(amount, 2)
+
+
+def _to_float(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    text = str(value).replace(",", "").replace("₩", "").replace("$", "").strip()
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0

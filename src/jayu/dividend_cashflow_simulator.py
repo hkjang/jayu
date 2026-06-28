@@ -13,6 +13,7 @@ from .dividend_event_master import DividendEventMaster
 from .dividend_data_quality_gate import DividendDataQualityGate
 from .dividend_forecast_engine import DividendForecastEngine, DividendForecast
 from .dividend_tax_fx_engine import DividendTaxFxEngine
+from .dividend_goal_bridge import DividendGoalBridge
 
 class DividendCashflowSimulator:
     """Estimates expected monthly/quarterly dividend cashflow and projects reinvestment scenarios using real data."""
@@ -26,6 +27,118 @@ class DividendCashflowSimulator:
         self.quality_gate = DividendDataQualityGate(project_root)
         self.forecast_engine = DividendForecastEngine(project_root)
         self.tax_fx_engine = DividendTaxFxEngine(project_root)
+        self.goal_bridge = DividendGoalBridge(project_root)
+
+    def load_holdings_snapshot(self) -> list[dict[str, Any]]:
+        snapshot_path = self.project_root / "state" / "toss_account_snapshot.json"
+        if not snapshot_path.exists():
+            return []
+        try:
+            payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+
+        raw_holdings = _extract_rows(
+            payload.get("holdings", payload),
+            keys=(
+                "holdings",
+                "positions",
+                "stockBalances",
+                "stock_balances",
+                "stocks",
+                "assets",
+                "items",
+                "balances",
+                "result",
+            ),
+        )
+        holdings = []
+        for row in raw_holdings:
+            if not isinstance(row, dict):
+                continue
+            symbol = _first_text(
+                row,
+                "symbol",
+                "stockCode",
+                "stock_code",
+                "symbolCode",
+                "symbol_code",
+                "ticker",
+                "securityCode",
+                "security_code",
+                "code",
+            )
+            quantity = _first_number(
+                row,
+                "quantity",
+                "qty",
+                "holdingQuantity",
+                "holding_quantity",
+                "balanceQuantity",
+                "balance_quantity",
+            )
+            price = _first_number(
+                row,
+                "currentPrice",
+                "current_price",
+                "marketPrice",
+                "market_price",
+                "lastPrice",
+                "last_price",
+                "close",
+                "price",
+            )
+            avg_cost = _first_number(
+                row,
+                "averagePrice",
+                "average_price",
+                "avgPrice",
+                "avg_price",
+                "purchasePrice",
+                "purchase_price",
+                "unitCost",
+                "unit_cost",
+            )
+            market_value = _first_number(
+                row,
+                "marketValue",
+                "market_value",
+                "valuationAmount",
+                "valuation_amount",
+                "evaluatedAmount",
+                "evaluated_amount",
+                "evaluationAmount",
+                "evaluation_amount",
+            )
+            if price is None and quantity and market_value is not None:
+                price = market_value / quantity
+            if not symbol or not quantity or quantity <= 0:
+                continue
+            currency = _first_text(row, "currency", "currencyCode", "currency_code")
+            exchange = _first_text(row, "exchange", "market", "marketCode", "market_code")
+            holdings.append(
+                {
+                    "symbol": symbol.strip().upper(),
+                    "name": _first_text(
+                        row,
+                        "name",
+                        "stockName",
+                        "stock_name",
+                        "securityName",
+                        "security_name",
+                        "displayName",
+                        "display_name",
+                    )
+                    or symbol.strip().upper(),
+                    "quantity": quantity,
+                    "price": price or avg_cost or 0.0,
+                    "average_cost": avg_cost or 0.0,
+                    "market": exchange,
+                    "currency": currency,
+                    "source": "state/toss_account_snapshot.json",
+                }
+            )
+        return holdings
 
     def load_holdings_from_csv(self, csv_path: Path) -> list[dict[str, Any]]:
         if not csv_path.exists():
@@ -69,9 +182,14 @@ class DividendCashflowSimulator:
         """
         Runs the dividend simulation pipeline using real-time Yahoo Finance data.
         """
+        holdings_source = "argument"
         if holdings is None:
-            csv_path = self.project_root / "toss_portfolio.csv"
-            holdings = self.load_holdings_from_csv(csv_path)
+            holdings = self.load_holdings_snapshot()
+            holdings_source = "state/toss_account_snapshot.json"
+            if not holdings:
+                csv_path = self.project_root / "toss_portfolio.csv"
+                holdings = self.load_holdings_from_csv(csv_path)
+                holdings_source = "toss_portfolio.csv"
 
         # 1. Map holdings to Yahoo tickers
         mapped_holdings = self.mapper.map_all_holdings(holdings)
@@ -238,20 +356,7 @@ class DividendCashflowSimulator:
             "5_year_value_krw": round(compound_projection(5), 2),
         }
 
-        # Target Goal achievements
-        target_path = self.project_root / "state" / "dividend_target.json"
-        target_krw = 3000000.0 # Default 3,000,000 KRW monthly
-        if target_path.exists():
-            try:
-                with open(target_path, "r") as f:
-                    target_krw = json.load(f).get("target_krw", 3000000.0)
-            except Exception:
-                pass
-
-        avg_monthly_net = annual_net_dividend_krw / 12.0
-        achievement_rate = round((avg_monthly_net / target_krw) * 100.0, 2) if target_krw > 0 else 0.0
-
-        return {
+        result = {
             "portfolio_value_krw": round(portfolio_value_krw, 2),
             "annual_dividend_krw": round(annual_dividend_krw, 2),
             "annual_net_dividend_krw": round(annual_net_dividend_krw, 2),
@@ -262,23 +367,33 @@ class DividendCashflowSimulator:
             "holdings": holdings_detail,
             "reinvestment_projections": projections,
             "target_goal": {
-                "monthly_target_krw": target_krw,
-                "current_monthly_net_krw": round(avg_monthly_net, 2),
-                "achievement_rate_pct": achievement_rate,
-                "shortfall_krw": round(max(0.0, target_krw - avg_monthly_net), 2)
+                "monthly_target_krw": self.goal_bridge.load_monthly_target(),
+                "current_monthly_net_krw": round(annual_net_dividend_krw / 12.0, 2),
+                "achievement_rate_pct": 0.0,
+                "shortfall_krw": 0.0,
             },
             "usd_krw_rate": usd_krw,
             "source_summary": {
                 "price_and_history": "Yahoo Finance dividend history",
-                "holdings": "Toss holdings CSV/API when available",
+                "holdings": holdings_source,
                 "supplemental": "state/dividend_supplements.json or external dividend sources",
                 "quality_gate": "DividendDataQualityGate",
             },
+            "holdings_source": holdings_source,
             "history_cache_policy": {
                 "allow_stale_history": allow_stale_history,
                 "force_history_refresh": force_history_refresh,
             },
         }
+        goal_bridge = self.goal_bridge.build(result)
+        result["goal_bridge"] = goal_bridge
+        result["target_goal"] = {
+            "monthly_target_krw": goal_bridge["monthly_target_krw"],
+            "current_monthly_net_krw": goal_bridge["current_monthly_net_krw"],
+            "achievement_rate_pct": goal_bridge["achievement_rate_pct"],
+            "shortfall_krw": goal_bridge["monthly_shortfall_krw"],
+        }
+        return result
 
     def _apply_scenario_adjustments(
         self,
@@ -310,3 +425,37 @@ def _to_float(value: Any) -> float:
         return float(text)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _first_text(row: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = row.get(key)
+        if value is None or value == "":
+            continue
+        return str(value).strip()
+    return None
+
+
+def _first_number(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = row.get(key)
+        parsed = _to_float(value)
+        if parsed != 0.0 or value in (0, 0.0, "0"):
+            return parsed
+    return None
+
+
+def _extract_rows(payload: Any, *, keys: tuple[str, ...]) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            nested = _extract_rows(value, keys=keys)
+            if nested:
+                return nested
+    return []

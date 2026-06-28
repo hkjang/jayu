@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,7 @@ class DividendDataQualityGate:
         """
         missing_fields = []
         stale_fields = []
-        data_sources = list(set(getattr(e, "source", "unknown") for e in events)) if events else []
+        data_sources = sorted(set(getattr(e, "source", "unknown") for e in events)) if events else []
         
         # 1. Amount Validity (0.25)
         # Check if amounts are > 0 and consistent
@@ -61,14 +61,17 @@ class DividendDataQualityGate:
             date_score = 0.0
             missing_fields.extend(["ex_date", "pay_date", "record_date"])
         else:
+            missing_ex_date = sum(1 for e in events if not getattr(e, "ex_date", None))
             missing_pay_date = sum(1 for e in events if not getattr(e, "pay_date", None))
             missing_record_date = sum(1 for e in events if not getattr(e, "record_date", None))
             
-            total_missing = missing_pay_date + missing_record_date
+            total_missing = missing_ex_date + missing_pay_date + missing_record_date
             if total_missing > 0:
                 # Deduct points for missing dates
-                penalty = (total_missing / (len(events) * 2)) * 100.0
+                penalty = (total_missing / (len(events) * 3)) * 100.0
                 date_score = max(0.0, 100.0 - penalty)
+                if missing_ex_date > 0:
+                    missing_fields.append("ex_date")
                 if missing_pay_date > 0:
                     missing_fields.append("pay_date")
                 if missing_record_date > 0:
@@ -84,9 +87,11 @@ class DividendDataQualityGate:
             if low_confidence_events > 0:
                 disagreements = low_confidence_events
                 agreement_score = max(0.0, 100.0 - (low_confidence_events / len(events)) * 50.0)
-            elif len(data_sources) >= 2:
+            elif len(data_sources) >= 2 or any("+" in source for source in data_sources):
                 # Multiple sources agreeing
                 agreement_score = 100.0
+            elif data_sources == ["yahoo"]:
+                agreement_score = 70.0
 
         # 4. Freshness (0.15)
         # Check when the data was last fetched
@@ -163,6 +168,12 @@ class DividendDataQualityGate:
         if not events:
             decision = "exclude"
             block_reason = "No dividend events found"
+        elif amount_score <= 0:
+            decision = "exclude"
+            block_reason = "No positive dividend amount found"
+        elif "ex_date" in missing_fields:
+            decision = "exclude"
+            block_reason = "Dividend ex-date is missing"
 
         checks = {
             "amount_score": amount_score,

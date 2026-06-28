@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 from dataclasses import dataclass, asdict
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -74,8 +75,14 @@ class DividendEventMaster:
     def save_events(self, events: list[DividendEvent]) -> None:
         raw_list = [asdict(e) for e in events]
         try:
-            with open(self.events_path, "w", encoding="utf-8") as f:
-                json.dump(raw_list, f, indent=2, ensure_ascii=False)
+            payload = json.dumps(raw_list, indent=2, ensure_ascii=False)
+            if self.events_path.exists():
+                try:
+                    if self.events_path.read_text(encoding="utf-8") == payload:
+                        return
+                except Exception:
+                    pass
+            self.events_path.write_text(payload, encoding="utf-8")
         except Exception:
             pass
 
@@ -94,14 +101,20 @@ class DividendEventMaster:
         events_by_ex_date: dict[str, DividendEvent] = {}
 
         # 1. Process Yahoo events
-        # yfinance only gives us ex_date and amount.
+        # yfinance usually gives ex_date and amount only. Treat Yahoo-only
+        # events as estimates until another source confirms payment details.
+        today = str(yahoo_payload.get("today_date") or date.today().isoformat())
         yahoo_divs = yahoo_payload.get("dividends", [])
         for item in yahoo_divs:
-            ex_date = item["date"]
-            amount = item["amount"]
+            ex_date = item.get("date")
+            amount = _to_float(item.get("amount"))
+            if not ex_date or amount <= 0:
+                continue
             
             # Simple hash
             h = hashlib.md5(f"yahoo:{symbol}:{ex_date}:{amount}".encode("utf-8")).hexdigest()
+            has_confirming_dates = bool(item.get("pay_date") or item.get("record_date"))
+            status = "confirmed" if has_confirming_dates and ex_date <= today else "estimated"
 
             events_by_ex_date[ex_date] = DividendEvent(
                 symbol=symbol,
@@ -114,9 +127,9 @@ class DividendEventMaster:
                 declared_date=None,
                 amount_per_share=amount,
                 source="yahoo",
-                source_confidence=80.0,
+                source_confidence=80.0 if status == "confirmed" else 70.0,
                 source_hash=h,
-                status="confirmed" if ex_date <= yahoo_payload.get("today_date", "9999-99-99") else "estimated",
+                status=status,
                 is_special=False,
                 frequency=None
             )
@@ -128,7 +141,9 @@ class DividendEventMaster:
                 if not ex_date:
                     continue
                 
-                amount = item.get("amount_per_share") or item.get("amount") or 0.0
+                amount = _to_float(item.get("amount_per_share") or item.get("amount"))
+                if amount <= 0:
+                    continue
                 
                 if ex_date in events_by_ex_date:
                     # Update dates
@@ -141,11 +156,24 @@ class DividendEventMaster:
                         existing.declared_date = item["declared_date"]
                     
                     # If amounts differ significantly, lower confidence
-                    if abs(existing.amount_per_share - amount) > 0.01:
+                    tolerance = max(0.01, existing.amount_per_share * 0.02)
+                    if abs(existing.amount_per_share - amount) > tolerance:
                         existing.source_confidence = max(40.0, existing.source_confidence - 20.0)
+                        existing.status = "estimated"
+                    else:
+                        existing.source_confidence = min(95.0, existing.source_confidence + 15.0)
+                        if existing.pay_date:
+                            existing.status = "confirmed"
+                    if "supplemental" not in existing.source:
+                        existing.source = f"{existing.source}+supplemental"
+                    if item.get("is_special"):
+                        existing.is_special = True
+                    if item.get("frequency"):
+                        existing.frequency = item.get("frequency")
                 else:
                     # New event from supplemental
                     h = hashlib.md5(f"supplemental:{symbol}:{ex_date}:{amount}".encode("utf-8")).hexdigest()
+                    status = "confirmed" if item.get("pay_date") else "estimated"
                     events_by_ex_date[ex_date] = DividendEvent(
                         symbol=symbol,
                         security_name=name,
@@ -157,11 +185,11 @@ class DividendEventMaster:
                         declared_date=item.get("declared_date"),
                         amount_per_share=amount,
                         source="supplemental",
-                        source_confidence=70.0,
+                        source_confidence=85.0 if status == "confirmed" else 70.0,
                         source_hash=h,
-                        status="confirmed",
-                        is_special=False,
-                        frequency=None
+                        status=status,
+                        is_special=bool(item.get("is_special", False)),
+                        frequency=item.get("frequency")
                     )
 
         # 3. Merge Manual events
@@ -173,7 +201,9 @@ class DividendEventMaster:
             if not ex_date:
                 continue
             
-            amount = item.get("amount_per_share") or item.get("amount") or 0.0
+            amount = _to_float(item.get("amount_per_share") or item.get("amount"))
+            if amount <= 0:
+                continue
             h = hashlib.md5(f"manual:{symbol}:{ex_date}:{amount}".encode("utf-8")).hexdigest()
             
             events_by_ex_date[ex_date] = DividendEvent(
@@ -294,3 +324,12 @@ class DividendEventMaster:
     def get_events_for_symbol(self, symbol: str) -> list[DividendEvent]:
         all_events = self.load_events()
         return [e for e in all_events if e.symbol == symbol]
+
+
+def _to_float(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
