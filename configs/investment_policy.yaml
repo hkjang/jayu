@@ -1,0 +1,20 @@
+# Jayu Personal Investment Policy
+# 사용자의 투자 원칙을 정량화하여 자동 감지 및 신호 차단에 활용합니다.
+
+policy:
+  # 1. 포트폴리오 자산 배분 원칙
+  asset_allocation:
+    max_leverage_ratio: 0.15          # 전체 평가금액 대비 레버리지 종목(예: SOXL, TQQQ 등)의 최대 허용 비중 (15%)
+    min_cash_ratio: 0.10              # 포트폴리오 내 최소 현금 비중 (10%)
+    max_single_position_ratio: 0.25   # 단일 종목의 최대 허용 비중 (25%)
+
+  # 2. 거래 제한 및 리스크 관리
+  trading_restrictions:
+    max_daily_trades: 5               # 하루 최대 허용 주문 횟수
+    cool_down_days_after_loss: 5     # 손절 발생 후 해당 종목의 재진입 금지 영업일 수 (5일)
+    max_monthly_loss_krw: 2000000     # 월간 누적 손실 한도 (초과 시 신규 매수 전면 차단)
+
+  # 3. 배당주 품질 가이드라인
+  dividend_quality:
+    min_dividend_trust_score: 80.0    # 배당 목적으로 매수하는 종목의 최소 데이터 신뢰도 점수 (80점)
+    exclude_special_dividend_chasing: true # 특별배당락 노린 추격 매수 차단 여부

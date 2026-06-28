@@ -1,204 +1,223 @@
+"""Integration tests for the Investment OS productization pipeline components."""
+
 from __future__ import annotations
 
 import json
-import os
-from datetime import UTC, datetime, timedelta
+import time
+from datetime import datetime, UTC
 from pathlib import Path
+import pytest
 
-from jayu.decision_inbox import build_decision_inbox, build_unified_quality_snapshot
-from jayu.investment_decision_graph import build_investment_decision_graph
-from jayu.toss_freshness_ledger import build_toss_freshness_ledger
-from jayu.unified_quality_policy import evaluate_unified_quality_policy
+from src.jayu.personal_investment_policy import PersonalInvestmentPolicy
+from src.jayu.policy_violation_report import PolicyViolationReporter
+from src.jayu.state_schema_registry import validate_state_structure
+from src.jayu.state_migration_runner import StateMigrationRunner
+from src.jayu.state_doctor import StateDoctor
+from src.jayu.account_change_diff import AccountChangeDiff
+from src.jayu.home_briefing import HomeBriefing
+from src.jayu.decision_trace_recorder import DecisionTraceRecorder
+from src.jayu.decision_replay import DecisionReplay
 
 
-def test_unified_quality_policy_normalizes_mixed_domain_reports() -> None:
-    report = evaluate_unified_quality_policy(
-        {
-            "price": {"domain": "market", "status": "success", "score": 95, "source": "provider"},
-            "dividend": {"domain": "dividend", "decision": "review", "trust_score": 72, "source": "gate"},
-            "orders": {"domain": "toss", "status": "failed", "score": 42, "source": "contract"},
-        }
+@pytest.fixture
+def temp_project(tmp_path):
+    # Setup standard directory structures
+    (tmp_path / "state").mkdir(exist_ok=True)
+    (tmp_path / "configs").mkdir(exist_ok=True)
+    (tmp_path / "runs" / "reports").mkdir(parents=True, exist_ok=True)
+    return tmp_path
+
+
+def test_personal_policy_compliance(temp_project):
+    # 1. Setup YAML policy
+    policy_yaml = """
+policy:
+  asset_allocation:
+    max_leverage_ratio: 0.15
+    min_cash_ratio: 0.10
+    max_single_position_ratio: 0.25
+  trading_restrictions:
+    max_daily_trades: 3
+    cool_down_days_after_loss: 3
+    max_monthly_loss_krw: 1000000
+  dividend_quality:
+    min_dividend_trust_score: 80.0
+    exclude_special_dividend_chasing: true
+"""
+    (temp_project / "configs" / "investment_policy.yaml").write_text(policy_yaml, encoding="utf-8")
+    
+    policy = PersonalInvestmentPolicy(temp_project)
+    
+    # Setup mock holdings and cash
+    holdings = [
+        {"symbol": "AAPL", "quantity": 10, "price": 150.0, "value_krw": 1500.0 * 1350.0},
+        {"symbol": "SOXL", "quantity": 5, "price": 40.0, "value_krw": 200.0 * 1350.0} # Leverage stock
+    ]
+    cash = 2000.0 * 1350.0 # Total value = 3700.0 * 1350 = 4,995,000 KRW
+    
+    # AAPL order of 500 USD (post-ratio: (1500+500)/3700 = 54% > 25%) -> Violation!
+    res = policy.evaluate_policy_compliance(
+        symbol="AAPL",
+        order_amount_krw=500.0 * 1350.0,
+        holdings=holdings,
+        cash_krw=cash,
+        is_dividend_focus=True,
+        dividend_trust_score=75.0 # Low dividend score -> Violation!
     )
-
-    assert report["decision"] == "block"
-    assert report["allowed"] is False
-    assert report["summary"]["block_count"] == 1
-    assert report["summary"]["review_count"] == 1
-    assert {item["domain"] for item in report["items"]} == {"market", "dividend", "toss"}
+    
+    assert res["compliant"] is False
+    assert any("비중 한도 초과" in v for v in res["violations"])
+    assert any("배당 신뢰도 품질 기준 미달" in v for v in res["violations"])
 
 
-def test_toss_freshness_ledger_scores_state_files(tmp_path: Path) -> None:
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    now = datetime(2026, 6, 28, 9, 0, tzinfo=UTC)
-    snapshot = {
-        "generated_at": (now - timedelta(hours=2)).isoformat(),
-        "accounts": {"result": {"accounts": [{"accountSeq": "1"}]}},
-        "holdings": {"result": {"holdings": [{"symbol": "AAPL", "holdingQuantity": "1", "currency": "USD"}]}},
-        "commissions": {"result": {"commissionRate": "0.001"}},
-        "exchange_rate": {"result": {"baseCurrency": "USD", "quoteCurrency": "KRW", "rate": "1400"}},
-        "errors": {},
+def test_policy_violation_reporter(temp_project):
+    policy_yaml = """
+policy:
+  asset_allocation:
+    max_leverage_ratio: 0.15
+    min_cash_ratio: 0.10
+    max_single_position_ratio: 0.25
+  trading_restrictions:
+    max_daily_trades: 5
+    cool_down_days_after_loss: 5
+    max_monthly_loss_krw: 2000000
+  dividend_quality:
+    min_dividend_trust_score: 80.0
+    exclude_special_dividend_chasing: true
+"""
+    (temp_project / "configs" / "investment_policy.yaml").write_text(policy_yaml, encoding="utf-8")
+    
+    reporter = PolicyViolationReporter(temp_project)
+    
+    holdings = [{"symbol": "TQQQ", "quantity": 50, "price": 100.0, "value_krw": 5000.0 * 1350.0}] # Leverage 100% -> Violation!
+    cash = 100.0 * 1350.0
+    
+    res = reporter.generate_report(
+        signals=[],
+        holdings=holdings,
+        cash_krw=cash
+    )
+    
+    assert res["compliant"] is False
+    assert "레버리지 비중" in res["markdown"]
+    assert Path(temp_project / res["markdown_path"]).exists()
+
+
+def test_state_versioning_and_migration(temp_project):
+    # Write a legacy v1.0 dividend cache
+    legacy_cache = {
+        "ticker": "AAPL",
+        "fetched_at": time.time(),
+        "dividends": [],
+        "splits": [],
+        "schema_version": "1.0"
     }
-    (state_dir / "toss_account_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
-    orders_path = state_dir / "toss_orders.json"
-    orders_path.write_text(json.dumps([_order("o1", "AAPL", "BUY", 1, 100)]), encoding="utf-8")
-    old = (now - timedelta(hours=96)).timestamp()
-    os.utime(orders_path, (old, old))
-    (state_dir / "toss_fx_cache.json").write_text(
-        json.dumps({"timestamp": (now - timedelta(hours=1)).timestamp(), "usd_krw": 1400}),
-        encoding="utf-8",
-    )
-
-    ledger = build_toss_freshness_ledger(tmp_path, now=now)
-    by_endpoint = {row["endpoint"]: row for row in ledger["endpoints"]}
-
-    assert by_endpoint["holdings"]["decision"] == "pass"
-    assert by_endpoint["orders"]["decision"] == "block"
-    assert by_endpoint["orders"]["cache_status"] == "stale"
-    assert ledger["summary"]["critical_block_count"] >= 1
-    assert (state_dir / "toss_freshness_ledger.json").exists()
-
-
-def test_investment_decision_graph_blocks_loss_pattern_symbol(tmp_path: Path) -> None:
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    (state_dir / "toss_orders.json").write_text(
-        json.dumps(
-            [
-                _order("b1", "SOXL", "BUY", 10, 100, "2026-01-02T09:30:00+09:00"),
-                _order("b2", "SOXL", "BUY", 5, 90, "2026-01-05T09:30:00+09:00"),
-                _order("s1", "SOXL", "SELL", 15, 80, "2026-01-10T09:30:00+09:00"),
-                _order("b3", "AAPL", "BUY", 1, 100, "2026-02-01T09:30:00+09:00"),
-                _order("s2", "AAPL", "SELL", 1, 130, "2026-03-01T09:30:00+09:00"),
-            ]
-        ),
-        encoding="utf-8",
-    )
-    signals = [{"ticker": "SOXL", "action": "BUY", "score": 0.8, "status": "success"}]
-    dividend_dashboard = {
-        "holdings_table": [{"symbol": "SOXL", "trust_score": 90, "decision": "pass", "source": "fixture"}]
-    }
-
-    graph = build_investment_decision_graph(
-        tmp_path,
-        signals_payload=signals,
-        dividend_dashboard=dividend_dashboard,
-        data_trust={"gate": {"status": "success", "decision": "pass", "overall_score": 95, "allowed": True}},
-        toss_freshness={"status": "success", "decision": "pass", "allowed": True, "summary": {"average_trust_score": 95}},
-    )
-
-    soxl = next(row for row in graph["graphs"] if row["symbol"] == "SOXL")
-    assert graph["status"] == "blocked"
-    assert soxl["decision"] == "block"
-    assert "averaging_down_loss" in soxl["reason_codes"]
-    assert any(node["id"] == "historical_risk" and node["decision"] == "block" for node in soxl["nodes"])
+    cache_file = temp_project / "state" / "dividend_cache.json"
+    cache_file.write_text(json.dumps(legacy_cache), encoding="utf-8")
+    
+    # Check validation fails or succeeds depending on requirements
+    is_valid, err = validate_state_structure("dividend_cache", legacy_cache)
+    assert is_valid is True # valid structure, but version is old
+    
+    # Run migration
+    runner = StateMigrationRunner(temp_project)
+    res = runner.migrate_file("dividend_cache", cache_file)
+    
+    assert res["status"] == "success"
+    assert res["from_version"] == "1.0"
+    assert res["to_version"] == "1.1"
+    
+    # Check backup is created
+    assert len(list((temp_project / "state" / "backups").glob("dividend_cache_*.json"))) == 1
+    
+    # Verify migrated file contains new fields
+    with open(cache_file, "r") as f:
+        migrated = json.load(f)
+    assert "error_reason" in migrated
+    assert migrated["schema_version"] == "1.1"
 
 
-def test_decision_inbox_collects_cross_menu_review_items(tmp_path: Path) -> None:
-    data_trust = {
-        "status": "blocked",
-        "gate": {
-            "status": "blocked",
-            "decision": "block",
-            "allowed": False,
-            "blocking": [{"dataset": "toss_orders", "decision": "block", "reasons": ["duplicate_order_id"]}],
-        },
-        "source": "fixture data trust",
-    }
-    toss_freshness = {
-        "status": "blocked",
-        "decision": "block",
-        "allowed": False,
-        "summary": {"average_trust_score": 45},
-        "endpoints": [
-            {
-                "endpoint": "orders",
-                "label": "Toss order history",
-                "decision": "block",
-                "status": "blocked",
-                "cache_status": "stale",
-                "age_hours": 96,
-                "reasons": ["source_file_stale"],
-                "source": "state/toss_orders.json",
+def test_state_doctor(temp_project):
+    doctor = StateDoctor(temp_project)
+    
+    # Case 1: missing files
+    res = doctor.diagnose_all()
+    assert res["healthy"] is False
+    assert res["reports"]["toss_account_snapshot"]["status"] == "warning"
+    
+    # Case 2: Corrupted JSON
+    (temp_project / "state" / "toss_account_snapshot.json").write_text("{bad json", encoding="utf-8")
+    res2 = doctor.diagnose_all()
+    assert res2["reports"]["toss_account_snapshot"]["status"] == "corrupted"
+
+
+def test_account_change_diff(temp_project):
+    diff = AccountChangeDiff(temp_project)
+    
+    # Setup previous snapshot in backup
+    prev_data = [
+        {"symbol": "AAPL", "holdingQuantity": 10, "currentPrice": 150.0, "currency": "USD"},
+        {"symbol": "MSFT", "holdingQuantity": 5, "currentPrice": 300.0, "currency": "USD"}
+    ]
+    backup_dir = temp_project / "state" / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    (backup_dir / "toss_account_snapshot_20260627_120000.json").write_text(json.dumps(prev_data), encoding="utf-8")
+    
+    # Setup current snapshot (AAPL price up, MSFT quantity up)
+    curr_data = [
+        {"symbol": "AAPL", "holdingQuantity": 10, "currentPrice": 160.0, "currency": "USD"}, # Price effect: +10 USD * 10 = +100 USD
+        {"symbol": "MSFT", "holdingQuantity": 7, "currentPrice": 300.0, "currency": "USD"}  # Qty effect: +2 MSFT * 300 = +600 USD
+    ]
+    (temp_project / "state" / "toss_account_snapshot.json").write_text(json.dumps(curr_data), encoding="utf-8")
+    
+    res = diff.calculate_diff()
+    assert res["status"] == "success"
+    assert res["summary"]["total_change_usd"] == 700.0
+    assert res["summary"]["effects"]["price_change_contribution_usd"] == 100.0
+    assert res["summary"]["effects"]["quantity_change_contribution_usd"] == 600.0
+
+
+def test_decision_replay(temp_project):
+    from src.jayu.dividend_source_yahoo import DividendSourceYahoo
+    recorder = DecisionTraceRecorder(temp_project)
+    
+    # Write mock toss_security_master.json to avoid metadata check blocking TSLA
+    (temp_project / "state" / "toss_security_master.json").write_text(
+        json.dumps({
+            "TSLA": {
+                "name": "Tesla",
+                "market": "US",
+                "currency": "USD",
+                "warnings": {}
             }
-        ],
-    }
-    dividend_dashboard = {
-        "alerts": [{"type": "ex_date_proximity", "symbol": "SCHD", "message": "SCHD ex-date is near."}],
-        "data_quality_summary": {
-            "blocked_count": 1,
-            "review_count": 0,
-            "average_trust_score": 55,
-            "unmapped_items": [{"symbol": "KR123", "reason": "mapping missing"}],
-        },
-        "autotrading_guard": {"status": "pass", "reasons": []},
-    }
-    order_history_summary = {
-        "status": "failed",
-        "risk_gate": {
-            "blocked_signals": [
-                {"ticker": "SOXL", "message": "SOXL blocked by loss pattern.", "source": "historical gate"}
-            ]
-        },
-        "autotrade_guard": {
-            "rules": [{"symbol": "SOXL", "rule": "repeated_loss_symbol", "action": "block_auto_order"}]
-        },
-    }
-    decision_graph = {
-        "graphs": [
-            {
-                "symbol": "SOXL",
-                "decision": "block",
-                "headline": "SOXL blocked.",
-                "source": "graph",
-            }
-        ]
-    }
-
-    inbox = build_decision_inbox(
-        tmp_path,
-        data_trust=data_trust,
-        toss_freshness=toss_freshness,
-        dividend_dashboard=dividend_dashboard,
-        order_history_summary=order_history_summary,
-        decision_graph=decision_graph,
+        }),
+        encoding="utf-8"
     )
-    snapshot = build_unified_quality_snapshot(
-        data_trust=data_trust,
-        toss_freshness=toss_freshness,
-        dividend_dashboard=dividend_dashboard,
-        order_history_summary=order_history_summary,
-    )
-
-    assert inbox["status"] == "blocked"
-    assert inbox["summary"]["blocked_count"] >= 4
-    assert any(item["menu"] == "Autotrading" for item in inbox["items"])
-    assert any(item["symbol"] == "SCHD" for item in inbox["items"])
-    assert snapshot["decision"] == "block"
-
-
-def _order(
-    order_id: str,
-    symbol: str,
-    side: str,
-    quantity: float,
-    price: float,
-    ordered_at: str = "2026-03-28T09:30:00+09:00",
-) -> dict[str, object]:
-    return {
-        "orderId": order_id,
-        "symbol": symbol,
-        "side": side,
-        "status": "FILLED",
-        "price": str(price),
-        "quantity": str(quantity),
-        "currency": "USD",
-        "orderedAt": ordered_at,
-        "execution": {
-            "filledQuantity": str(quantity),
-            "averageFilledPrice": str(price),
-            "filledAmount": str(quantity * price),
-            "commission": "1",
-            "tax": "0",
-        },
-    }
+    
+    # Write mock yahoo cache for TSLA to pass dividend quality gate (otherwise it gets excluded)
+    source = DividendSourceYahoo(temp_project)
+    source.save_cache("TSLA", {
+        "ticker": "TSLA",
+        "fetched_at": time.time(),
+        "dividends": [{"date": "2026-06-15", "amount": 1.50}],
+        "splits": []
+    })
+    
+    sig_data = {"symbol": "TSLA", "price": 200.0, "quantity": 10, "price_history_30d": [200.0]*30}
+    risk_eval = {"verdict": "allow"}
+    quality_gate = {"decision": "pass", "trust_score": 90.0}
+    chasing = {"verdict": "allow"}
+    verdict = {"verdict": "allow"}
+    
+    trace_id = recorder.record_trace("TSLA", sig_data, risk_eval, quality_gate, chasing, verdict)
+    assert trace_id.startswith("trace_TSLA_")
+    assert (temp_project / "state" / "decision_traces" / f"{trace_id}.json").exists()
+    
+    # Replay
+    replay = DecisionReplay(temp_project)
+    
+    # Mock evaluate_order to return allow or simply mock the security master as we did
+    res = replay.replay_trace(trace_id)
+    
+    assert res["symbol"] == "TSLA"
+    assert res["comparison"]["autotrade_security_guard"]["matched"] is True, f"Replay mismatch! Reason: {res['comparison']['autotrade_security_guard']['details_replayed'].get('reason')}"

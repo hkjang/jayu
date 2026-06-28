@@ -3029,6 +3029,16 @@ def _dashboard_handler(
             parsed = urlparse(self.path)
             try:
                 # --- 신규 고도화 API 라우트 (GET) ---
+                if parsed.path == "/api/v1/home-briefing":
+                    from .home_briefing import HomeBriefing
+                    briefing = HomeBriefing(paths.project_root)
+                    self._json(briefing.build_briefing())
+                    return
+                if parsed.path == "/api/v1/account-diff":
+                    from .account_change_diff import AccountChangeDiff
+                    diff_calc = AccountChangeDiff(paths.project_root)
+                    self._json(diff_calc.calculate_diff())
+                    return
                 if parsed.path == "/api/v1/permission-mode":
                     self._json({"mode": permission_mgr.get_mode()})
                     return

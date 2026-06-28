@@ -2499,5 +2499,18 @@ def report_dividend_simulate(
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+@report_app.command("decision-replay")
+def report_decision_replay(
+    trace_id: str = typer.Argument(..., help="The decision trace ID to replay"),
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+) -> None:
+    """Replay and audit a past trading decision against current policies."""
+    _, paths = _load(config)
+    from .decision_replay import DecisionReplay
+    replay = DecisionReplay(paths.project_root)
+    res = replay.replay_trace(trace_id)
+    typer.echo(json.dumps(res, ensure_ascii=False, indent=2))
+
+
 if __name__ == "__main__":
     app()

@@ -8,6 +8,118 @@ function renderOverview() {
   const reasons = decision.top_blockers || decision.top_reasons || [];
   const actions = decision.recommended_actions || data.recommended_actions || [];
   const primaryAction = decision.recommended_next_action || actions[0] || null;
+
+  // Reactively load Home Briefing and Account Change Diff data if not present
+  if (state.homeBriefing === undefined || state.accountDiff === undefined) {
+    state.homeBriefing = null;
+    state.accountDiff = null;
+    Promise.all([
+      fetch("/api/v1/home-briefing").then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch("/api/v1/account-diff").then(r => r.ok ? r.json() : null).catch(() => null)
+    ]).then(([briefing, diff]) => {
+      state.homeBriefing = briefing;
+      state.accountDiff = diff;
+      renderOverview();
+    });
+  }
+
+  // 1. Home Briefing Card HTML
+  let briefingHtml = "";
+  if (state.homeBriefing && state.homeBriefing.briefings) {
+    const bList = state.homeBriefing.briefings;
+    const overall = state.homeBriefing.overall_status;
+    const overallClass = overall === "정상" ? "success" : "warning";
+    
+    briefingHtml = `
+      <article class="decision-card status-${overallClass}" style="margin-bottom: 20px;">
+        <div class="decision-eyebrow">
+          <span class="status-label status-${overallClass}">오늘의 상태: ${overall}</span>
+          <span>🛡️ JAYU HOME BRIEFING</span>
+        </div>
+        <h2 style="font-size: 20px; font-weight: 800; margin: 10px 0 15px 0;">📋 오늘 확인해야 할 투자 요약 (Top ${bList.length})</h2>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          ${bList.map((b, idx) => {
+            const sevClass = b.severity === "blocked" ? "failed" : b.severity === "warning" ? "warning" : "success";
+            const badge = b.severity === "blocked" ? "🚨 차단" : b.severity === "warning" ? "⚠️ 경고" : "ℹ️ 정보";
+            return `
+              <div style="padding: 12px; background: var(--bg-card); border-left: 4px solid var(--${sevClass}); border-radius: 4px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
+                  <strong style="color: var(--${sevClass});">${badge} [${b.status}]</strong>
+                  <span style="color: var(--muted); font-size: 10px;">출처: ${b.source_module}</span>
+                </div>
+                <p style="margin: 4px 0; font-size: 12.5px; line-height: 1.4; color: var(--text); font-weight: 500;">
+                  ${escapeHtml(b.reason)}
+                </p>
+                <div style="font-size: 11px; color: var(--accent); margin-top: 2px;">
+                  <strong>💡 추천 액션:</strong> ${escapeHtml(b.next_action)}
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </article>
+    `;
+  } else if (state.homeBriefing === null) {
+    briefingHtml = `
+      <div style="padding:20px; text-align:center; background: var(--bg-card); border: 1px dashed var(--border); border-radius: 6px; margin-bottom:20px;">
+        <span class="spinner"></span> 오늘의 브리핑을 요약하는 중...
+      </div>
+    `;
+  }
+
+  // 2. Account Change Diff Card HTML
+  let diffHtml = "";
+  if (state.accountDiff && state.accountDiff.status === "success" && state.accountDiff.compare_file !== "none") {
+    const sum = state.accountDiff.summary;
+    const pct = sum.total_change_pct;
+    const changeClass = pct >= 0 ? "success" : "failed";
+    const directionSign = pct >= 0 ? "+" : "";
+    
+    diffHtml = `
+      <article class="decision-card status-${changeClass}" style="margin-bottom: 20px;">
+        <div class="decision-eyebrow">
+          <span class="status-label status-${changeClass}">변동률: ${directionSign}${pct}%</span>
+          <span>🔄 PORTFOLIO ACCOUNT DIFF</span>
+        </div>
+        <h2 style="font-size: 18px; font-weight: 800; margin: 10px 0 5px 0;">📊 자산 변동 기여도 분석 (Decomposition)</h2>
+        <p style="font-size:12px; color: var(--muted); margin-bottom: 15px;">직전 스냅샷(${state.accountDiff.compare_file}) 대비 변동 분석 결과</p>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 15px;">
+          <div style="padding: 10px; background: var(--bg-card); border-radius: 4px; border: 1px solid var(--border);">
+            <span style="font-size: 11px; color: var(--muted);">이전 자산</span>
+            <div style="font-size: 16px; font-weight: 700; margin-top: 2px;">${sum.previous_value_krw.toLocaleString()} 원</div>
+          </div>
+          <div style="padding: 10px; background: var(--bg-card); border-radius: 4px; border: 1px solid var(--border);">
+            <span style="font-size: 11px; color: var(--muted);">현재 자산</span>
+            <div style="font-size: 16px; font-weight: 700; margin-top: 2px;">${sum.current_value_krw.toLocaleString()} 원</div>
+          </div>
+          <div style="padding: 10px; background: var(--bg-card); border-radius: 4px; border: 1px solid var(--border);">
+            <span style="font-size: 11px; color: var(--muted);">전체 순변동액</span>
+            <div style="font-size: 16px; font-weight: 700; color: var(--${changeClass}); margin-top: 2px;">
+              ${directionSign}${sum.total_change_krw.toLocaleString()} 원 (${directionSign}${pct}%)
+            </div>
+          </div>
+        </div>
+        
+        <h3 style="font-size: 13px; font-weight: 700; margin: 10px 0; color: var(--text);">기여 요인 상세</h3>
+        <div style="font-size: 12px; display: flex; flex-direction: column; gap: 8px;">
+          <div style="display:flex; justify-content:space-between; border-bottom:1px dashed var(--border); padding-bottom:6px;">
+            <span>📈 <strong>시장 가격 변동 기여분 (Price Effect)</strong></span>
+            <strong style="color: ${sum.effects.price_change_contribution_usd >= 0 ? 'var(--success)' : 'var(--failed)'};">
+              ${sum.effects.price_change_contribution_krw.toLocaleString()} 원
+            </strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; border-bottom:1px dashed var(--border); padding-bottom:6px;">
+            <span>🛒 <strong>수량 변동 및 매매 기여분 (Quantity Effect)</strong></span>
+            <strong style="color: ${sum.effects.quantity_change_contribution_usd >= 0 ? 'var(--success)' : 'var(--failed)'};">
+              ${sum.effects.quantity_change_contribution_krw.toLocaleString()} 원
+            </strong>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
     // Personal investment dashboard summary cards
     let pfSummaryHtml = "";
     const scoreData = state.personalScore;
@@ -83,22 +195,10 @@ function renderOverview() {
       ${statusBadge(run.execution_status, "실행")} 
     </div>
     ${renderDataSourceNote("overview")}
+    ${briefingHtml}
+    ${diffHtml}
     ${renderDecisionInboxPanel(state.decisionInbox)}
     ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "overview")}
-    <section class="decision-grid" aria-label="오늘 결론">
-      <article class="decision-card status-${statusClass(decision.overall)}" aria-labelledby="status-title">
-        <div class="decision-eyebrow">${statusBadge(decision.overall)} <span>${escapeHtml(String(run.mode || "unknown").toUpperCase())}</span></div>
-        <h2 id="status-title">${escapeHtml(decisionHeadline(decision.overall))}</h2>
-        <p>${escapeHtml(decision.headline)}</p>
-        ${renderSourceLabel("safety_verdict.json · latest run manifest")}
-        <div class="decision-meta">
-          <span>실행 ${escapeHtml(STATUS_LABELS[run.execution_status] || run.execution_status || "미검증")}</span>
-          <span>운영 ${escapeHtml(STATUS_LABELS[run.safety_decision] || run.safety_decision || "미검증")}</span>
-          <span class="code">${escapeHtml(run.failure_code || reasons[0]?.code || "NO_BLOCKER")}</span>
-        </div>
-      </article>
-      ${renderPrimaryAction(primaryAction)}
-    </section>
     ${renderNextCommandRecommendation(state.nextCommand)}
     ${pfSummaryHtml}
     ${renderDecisionDiffCard(data.decision_diff)}
