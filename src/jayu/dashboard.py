@@ -3856,13 +3856,6 @@ def _dashboard_handler(
                     from .toss_stock_metadata import TossStockMetadataManager
                     manager = TossStockMetadataManager(paths.project_root)
                     client = None
-                    try:
-                        settings = _load_dashboard_settings(paths)
-                        status = build_dashboard_toss_status(paths)
-                        if status["status"] == "configured":
-                            client = _dashboard_toss_client(settings)
-                    except Exception:
-                        pass
                     mapping = manager.get_stock_names(client)
                     self._json(mapping)
                     return
@@ -3870,13 +3863,6 @@ def _dashboard_handler(
                     from .toss_security_master import TossSecurityMaster
                     manager = TossSecurityMaster(paths.project_root)
                     client = None
-                    try:
-                        settings = _load_dashboard_settings(paths)
-                        status = build_dashboard_toss_status(paths)
-                        if status["status"] == "configured":
-                            client = _dashboard_toss_client(settings)
-                    except Exception:
-                        pass
                     self._json(manager.get_security_master(client))
                     return
                 if parsed.path == "/api/v1/toss/trade-context":
