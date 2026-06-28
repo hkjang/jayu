@@ -3101,6 +3101,10 @@ def _dashboard_handler(
                     sim = DividendCashflowSimulator(paths.project_root)
                     self._json(sim.simulate_cashflow())
                     return
+                if parsed.path == "/api/v1/dividend-dashboard":
+                    from .dividend_dashboard_api import build_dividend_dashboard
+                    self._json(build_dividend_dashboard(paths.project_root))
+                    return
                 if parsed.path == "/api/v1/personal-investment-score":
                     from .personal_investment_score import PersonalInvestmentScore
                     scorer = PersonalInvestmentScore(paths.project_root)

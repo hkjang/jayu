@@ -61,6 +61,7 @@ const state = {
   tossOrderDetails: {},
   selectedTossOrderId: "",
   dividendSim: null,
+  dividendDashboard: null,
   behaviorInsights: null,
   portfolioDiet: null,
   investCalendar: null,
@@ -134,7 +135,7 @@ async function api(path) {
   return response.json();
 }
 
-const RUN_CONTEXT_OPTIONAL_PAGES = new Set(["analysis", "portfolio-hub", "autotrading", "goal-planner", "cashflow", "dividend-sim", "investor-coach", "invest-calendar"]);
+const RUN_CONTEXT_OPTIONAL_PAGES = new Set(["analysis", "portfolio-hub", "autotrading", "goal-planner", "cashflow", "dividend", "investor-coach", "invest-calendar"]);
 const ORDER_HISTORY_CONTEXT_PAGES = new Set(["overview", "signals", "risk", "portfolio-hub", "investor-coach", "autotrading", "goal-planner"]);
 const TERMINAL_RUN_STATUSES = new Set(["success", "failed", "error", "cancelled", "canceled"]);
 
@@ -375,7 +376,7 @@ async function loadPage() {
       state.simulationLog = res.logs || "";
       state.simulationStatus = res.status || "idle";
     }
-    const isPersonalPage = ["goal-planner", "cashflow", "dividend-sim", "investor-coach", "invest-calendar"].includes(state.page);
+    const isPersonalPage = ["goal-planner", "cashflow", "dividend", "investor-coach", "invest-calendar"].includes(state.page);
     if (isPersonalPage) {
       try {
         const orderParams = new URLSearchParams();
@@ -402,9 +403,8 @@ async function loadPage() {
     if (state.page === "cashflow") {
       try { state.cashflows = await api("/api/v1/cashflows"); } catch(e) { state.cashflows = { entries: [], budget: {} }; }
     }
-    if (state.page === "dividend-sim") {
-      try { state.dividendSim = await api("/api/v1/dividend-simulator"); } catch(e) { state.dividendSim = null; }
-      try { state.dividendLivingExpense = await api("/api/v1/dividend-living-expense-simulator"); } catch(e) { state.dividendLivingExpense = null; }
+    if (state.page === "dividend") {
+      try { state.dividendDashboard = await api("/api/v1/dividend-dashboard"); } catch(e) { state.dividendDashboard = null; }
     }
     if (state.page === "investor-coach") {
       try { state.behaviorInsights = await api("/api/v1/behavior-insights"); } catch(e) { state.behaviorInsights = null; }
@@ -520,7 +520,7 @@ function pageTitle(page) {
     "run-history": "실행 이력 & 로그",
     "goal-planner": "투자 목표 & 계획",
     cashflow: "현금흐름 배분",
-    "dividend-sim": "배당 시뮬레이션",
+    "dividend": "배당 관리",
     "investor-coach": "투자 코치 & 다이어트",
     "invest-calendar": "투자 캘린더",
   }[page] || page;
@@ -548,7 +548,7 @@ function render() {
   else if (state.page === "ask-jayu") renderAskJayu();
   else if (state.page === "goal-planner") renderGoalPlanner();
   else if (state.page === "cashflow") renderCashflow();
-  else if (state.page === "dividend-sim") renderDividendSim();
+  else if (state.page === "dividend") renderDividendPage();
   else if (state.page === "investor-coach") renderInvestorCoach();
   else if (state.page === "invest-calendar") renderInvestCalendar();
   else renderOverview();
@@ -1276,7 +1276,7 @@ function navigate(page) {
     "overview", "data-quality", "risk", "signals", "trader-lens", "promotion",
     "settings", "toss-account", "toss", "api-monitoring", "analysis",
     "portfolio-hub", "autotrading", "simulation-log", "run-history", "ask-jayu",
-    "goal-planner", "cashflow", "dividend-sim", "investor-coach", "invest-calendar"
+    "goal-planner", "cashflow", "dividend", "investor-coach", "invest-calendar"
   ].includes(page)) return;
   clearApiMonitoringRefreshTimer();
   state.page = page;
