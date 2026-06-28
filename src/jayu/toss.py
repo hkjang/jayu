@@ -365,7 +365,48 @@ class TossInvestClient:
         return self._get("/api/v1/market-calendar/US", params={"date": date})
 
     def accounts(self) -> Any:
-        return self._get("/api/v1/accounts")
+        import json
+        import time
+        from pathlib import Path
+        
+        cache_dir = Path.home() / ".gemini" / "antigravity"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / "toss_accounts_cache.json"
+        
+        now = time.time()
+        
+        # 1. Try to load from fresh cache (24 hours)
+        if cache_file.exists():
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cache_data = json.load(f)
+                if (now - cache_data.get("updated_at", 0)) < 86400:
+                    return cache_data["response"]
+            except Exception:
+                pass
+                
+        # 2. Fetch from API
+        try:
+            res = self._get("/api/v1/accounts")
+            
+            # Save to cache on success
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump({"updated_at": now, "response": res}, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+                
+            return res
+        except Exception as exc:
+            # 3. Fallback to stale cache if API fails
+            if cache_file.exists():
+                try:
+                    with open(cache_file, "r", encoding="utf-8") as f:
+                        cache_data = json.load(f)
+                    return cache_data["response"]
+                except Exception:
+                    pass
+            raise exc
 
     def holdings(self, *, account: str | None = None, symbol: str | None = None) -> Any:
         return self._get(
