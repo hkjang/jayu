@@ -7,6 +7,10 @@ const state = {
   overview: null,
   dataQuality: null,
   dataTrust: null,
+  unifiedQualityPolicy: null,
+  tossFreshnessLedger: null,
+  decisionInbox: null,
+  investmentDecisionGraph: null,
   risk: null,
   signals: null,
   traderLens: null,
@@ -237,6 +241,12 @@ async function loadPage() {
         console.warn("Failed to load goals for overview page", err);
         state.investmentGoals = null;
       }
+      try {
+        state.decisionInbox = await api(`/api/v1/decision-inbox?run_id=${run}&limit=12`);
+      } catch (err) {
+        console.warn("Failed to load decision inbox", err);
+        state.decisionInbox = null;
+      }
     }
     if (!state.portfolioHub) {
       try {
@@ -259,12 +269,16 @@ async function loadPage() {
       state.orderHistorySummary = null;
     }
     if (state.page === "data-quality") {
-      const [dataQuality, dataTrust] = await Promise.all([
+      const [dataQuality, dataTrust, unifiedQualityPolicy, tossFreshnessLedger] = await Promise.all([
         api(`/api/v1/runs/${run}/data-quality`),
-        api(`/api/v1/data-trust-score?run_id=${run}`)
+        api(`/api/v1/data-trust-score?run_id=${run}`),
+        api(`/api/v1/unified-quality-policy?run_id=${run}`),
+        api("/api/v1/toss/freshness-ledger")
       ]);
       state.dataQuality = dataQuality;
       state.dataTrust = dataTrust;
+      state.unifiedQualityPolicy = unifiedQualityPolicy;
+      state.tossFreshnessLedger = tossFreshnessLedger;
     }
     if (state.page === "risk") {
       state.risk = await api(`/api/v1/runs/${run}/risk`);

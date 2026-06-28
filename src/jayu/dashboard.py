@@ -3214,6 +3214,107 @@ def _dashboard_handler(
                     query = parse_qs(parsed.query)
                     self._json(build_dashboard_data_trust(paths, run_id=query.get("run_id", ["latest"])[0]))
                     return
+                if parsed.path == "/api/v1/toss/freshness-ledger":
+                    from .toss_freshness_ledger import build_toss_freshness_ledger
+
+                    self._json(build_toss_freshness_ledger(paths.project_root))
+                    return
+                if parsed.path == "/api/v1/unified-quality-policy":
+                    from .decision_inbox import (
+                        build_unified_quality_snapshot,
+                        load_cached_dividend_dashboard_snapshot,
+                    )
+                    from .toss_freshness_ledger import build_toss_freshness_ledger
+
+                    query = parse_qs(parsed.query)
+                    run_id = query.get("run_id", ["latest"])[0]
+                    data_trust = build_dashboard_data_trust(paths, run_id=run_id)
+                    toss_freshness = build_toss_freshness_ledger(paths.project_root)
+                    dividend_dashboard = load_cached_dividend_dashboard_snapshot(paths.project_root)
+                    self._json(
+                        build_unified_quality_snapshot(
+                            data_trust=data_trust,
+                            toss_freshness=toss_freshness,
+                            dividend_dashboard=dividend_dashboard,
+                        )
+                    )
+                    return
+                if parsed.path == "/api/v1/investment-decision-graph":
+                    from .decision_inbox import load_cached_dividend_dashboard_snapshot
+                    from .investment_decision_graph import build_investment_decision_graph
+                    from .order_history_summary import build_order_history_summary
+                    from .toss_freshness_ledger import build_toss_freshness_ledger
+                    from .toss_orders import TossOrdersManager
+
+                    query = parse_qs(parsed.query)
+                    run_id = query.get("run_id", ["latest"])[0]
+                    symbol = query.get("symbol", [None])[0]
+                    signals_payload = build_dashboard_signals(paths, run_id=run_id).get("rows", [])
+                    data_trust = build_dashboard_data_trust(paths, run_id=run_id)
+                    toss_freshness = build_toss_freshness_ledger(paths.project_root)
+                    dividend_dashboard = load_cached_dividend_dashboard_snapshot(paths.project_root)
+                    orders = TossOrdersManager(paths.project_root).load_orders()
+                    order_summary = build_order_history_summary(
+                        orders,
+                        signals_payload=signals_payload,
+                        compact=True,
+                    )
+                    self._json(
+                        build_investment_decision_graph(
+                            paths.project_root,
+                            symbol=symbol,
+                            signals_payload=signals_payload,
+                            dividend_dashboard=dividend_dashboard,
+                            data_trust=data_trust,
+                            order_history_summary=order_summary,
+                            toss_freshness=toss_freshness,
+                        )
+                    )
+                    return
+                if parsed.path == "/api/v1/decision-inbox":
+                    from .decision_inbox import (
+                        build_decision_inbox,
+                        load_cached_dividend_dashboard_snapshot,
+                    )
+                    from .investment_decision_graph import build_investment_decision_graph
+                    from .order_history_summary import build_order_history_summary
+                    from .toss_freshness_ledger import build_toss_freshness_ledger
+                    from .toss_orders import TossOrdersManager
+
+                    query = parse_qs(parsed.query)
+                    run_id = query.get("run_id", ["latest"])[0]
+                    limit = int(query.get("limit", ["80"])[0])
+                    signals_payload = build_dashboard_signals(paths, run_id=run_id).get("rows", [])
+                    data_trust = build_dashboard_data_trust(paths, run_id=run_id)
+                    toss_freshness = build_toss_freshness_ledger(paths.project_root)
+                    dividend_dashboard = load_cached_dividend_dashboard_snapshot(paths.project_root)
+                    orders = TossOrdersManager(paths.project_root).load_orders()
+                    order_summary = build_order_history_summary(
+                        orders,
+                        signals_payload=signals_payload,
+                        compact=True,
+                    )
+                    graph = build_investment_decision_graph(
+                        paths.project_root,
+                        signals_payload=signals_payload,
+                        dividend_dashboard=dividend_dashboard,
+                        data_trust=data_trust,
+                        order_history_summary=order_summary,
+                        toss_freshness=toss_freshness,
+                    )
+                    self._json(
+                        build_decision_inbox(
+                            paths.project_root,
+                            data_trust=data_trust,
+                            toss_freshness=toss_freshness,
+                            dividend_dashboard=dividend_dashboard,
+                            order_history_summary=order_summary,
+                            decision_graph=graph,
+                            signals_payload=signals_payload,
+                            limit=limit,
+                        )
+                    )
+                    return
                 if parsed.path == "/api/v1/query":
                     query = parse_qs(parsed.query)
                     resource = query.get("resource", [""])[0]

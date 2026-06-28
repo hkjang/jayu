@@ -24,6 +24,8 @@ function renderDataQuality() {
     </div>
     ${renderDataSourceNote("data-quality")}
     ${renderDataTrustGate(state.dataTrust)}
+    ${renderUnifiedQualityPolicyPanel(state.unifiedQualityPolicy)}
+    ${renderTossFreshnessLedgerPanel(state.tossFreshnessLedger)}
     <section class="decision-grid" aria-label="오늘 결론">
       <article class="decision-card status-${statusClass(summary.status)}">
         <div class="decision-eyebrow">${statusBadge(summary.status)} <span>수집 및 정합성 검증</span></div>
@@ -65,6 +67,83 @@ function renderDataQuality() {
   `;
   
   setTimeout(loadProviderTrend, 50);
+}
+
+function renderUnifiedQualityPolicyPanel(data) {
+  if (!data) return "";
+  const summary = data.summary || {};
+  const items = (data.items || []).slice(0, 10);
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>Unified Quality Policy</h2>
+          <p>가격, Toss, 배당, 주문 이력 품질 판정을 같은 pass/review/block 기준으로 묶은 결과입니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated", data.decision || "-")}
+      </div>
+      <section class="metric-grid" style="margin-top:12px">
+        ${metricCard("Overall", `${formatNumber(data.overall_score, 1)}점`, data.status || "not_evaluated", data.decision || "-", null, data.source || "unified_quality_policy.py")}
+        ${metricCard("차단", summary.blocking_count || 0, summary.blocking_count ? "blocked" : "success", "block/exclude", null, data.source || "unified_quality_policy.py")}
+        ${metricCard("검토", summary.review_count || 0, summary.review_count ? "warning" : "success", "review", null, data.source || "unified_quality_policy.py")}
+        ${metricCard("도메인", summary.domain_count || 0, "not_evaluated", `${summary.item_count || 0} items`, null, data.source || "unified_quality_policy.py")}
+      </section>
+      <div class="table-wrap" style="margin-top:12px">
+        <table>
+          <thead><tr><th>Domain</th><th>Name</th><th>Decision</th><th class="numeric">Score</th><th>Reasons</th></tr></thead>
+          <tbody>${items.map((item) => `
+            <tr>
+              <td>${escapeHtml(item.domain || "-")}</td>
+              <td><strong>${escapeHtml(item.name || "-")}</strong>${renderSourceLabel(item.source || data.source || "unified_quality_policy.py")}</td>
+              <td>${statusBadge(item.status || "not_evaluated", item.decision || "-")}</td>
+              <td class="numeric">${formatNumber(item.score, 1)}</td>
+              <td>${(item.reasons || []).map((reason) => `<span class="code">${escapeHtml(reason)}</span>`).join(" ") || "-"}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table>
+      </div>
+      ${renderSourceCaption(data.source || "GET /api/v1/unified-quality-policy")}
+    </section>
+  `;
+}
+
+function renderTossFreshnessLedgerPanel(data) {
+  if (!data) return "";
+  const summary = data.summary || {};
+  const endpoints = data.endpoints || [];
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>Toss Freshness Ledger</h2>
+          <p>Toss accounts, holdings, orders, prices, FX, commissions 캐시의 마지막 성공 시각과 fallback 여부입니다.</p>
+        </div>
+        ${statusBadge(data.status || "not_evaluated", data.decision || "-")}
+      </div>
+      <section class="metric-grid" style="margin-top:12px">
+        ${metricCard("평균 신뢰", `${formatNumber(summary.average_trust_score, 1)}점`, data.status || "not_evaluated", "endpoint freshness", null, data.source || "toss_freshness_ledger.py")}
+        ${metricCard("stale", summary.stale_count || 0, summary.stale_count ? "warning" : "success", "TTL 초과", null, data.source || "toss_freshness_ledger.py")}
+        ${metricCard("missing", summary.missing_count || 0, summary.missing_count ? "warning" : "success", "로컬 근거 없음", null, data.source || "toss_freshness_ledger.py")}
+        ${metricCard("critical block", summary.critical_block_count || 0, summary.critical_block_count ? "blocked" : "success", "운영 후보 차단", null, data.source || "toss_freshness_ledger.py")}
+      </section>
+      <div class="table-wrap" style="margin-top:12px">
+        <table>
+          <thead><tr><th>Endpoint</th><th>Decision</th><th class="numeric">Trust</th><th>Cache</th><th>Age</th><th>Source</th></tr></thead>
+          <tbody>${endpoints.map((row) => `
+            <tr>
+              <td><strong>${escapeHtml(row.label || row.endpoint || "-")}</strong><br><span class="code">${escapeHtml(row.endpoint || "-")}</span></td>
+              <td>${statusBadge(row.status || "not_evaluated", row.decision || "-")}</td>
+              <td class="numeric">${formatNumber(row.trust_score, 1)}</td>
+              <td>${escapeHtml(row.cache_status || "-")}${row.fallback_used ? " · fallback" : ""}</td>
+              <td>${row.age_hours == null ? "-" : `${formatNumber(row.age_hours, 1)}h / ${formatNumber(row.max_age_hours, 0)}h`}</td>
+              <td>${renderSourceLabel(row.source || data.source || "toss_freshness_ledger.py")}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table>
+      </div>
+      ${renderSourceCaption(data.source || "GET /api/v1/toss/freshness-ledger")}
+    </section>
+  `;
 }
 
 function renderDataTrustGate(data) {

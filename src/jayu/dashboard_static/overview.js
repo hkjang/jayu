@@ -83,6 +83,7 @@ function renderOverview() {
       ${statusBadge(run.execution_status, "실행")} 
     </div>
     ${renderDataSourceNote("overview")}
+    ${renderDecisionInboxPanel(state.decisionInbox)}
     ${renderOrderHistorySummaryPanel(state.orderHistorySummary, "overview")}
     <section class="decision-grid" aria-label="오늘 결론">
       <article class="decision-card status-${statusClass(decision.overall)}" aria-labelledby="status-title">
@@ -169,6 +170,46 @@ function renderOverview() {
       </div>
       ${renderSignalTable(signals.rows)}
       ${renderSourceCaption("today_signals.json · risk gate status")}
+    </section>
+  `;
+}
+
+function renderDecisionInboxPanel(inbox) {
+  if (!inbox) return "";
+  const summary = inbox.summary || {};
+  const items = (inbox.items || []).slice(0, 8);
+  const status = inbox.status || "not_evaluated";
+  return `
+    <section class="panel" style="margin-bottom:14px">
+      <div class="panel-header">
+        <div>
+          <h2>오늘의 Decision Inbox</h2>
+          <p>데이터 품질, Toss freshness, 배당, 주문 이력, 자동매매 가드에서 확인할 항목을 한 곳에 모았습니다.</p>
+        </div>
+        ${statusBadge(status, `${summary.item_count || 0}건`)}
+      </div>
+      <section class="metric-grid" style="margin-top:12px">
+        ${metricCard("차단", summary.blocked_count || 0, summary.blocked_count ? "blocked" : "success", "즉시 확인", null, inbox.source || "decision_inbox.py")}
+        ${metricCard("검토", (summary.warning_count || 0) + (summary.review_count || 0), (summary.warning_count || summary.review_count) ? "warning" : "success", "오늘 확인", null, inbox.source || "decision_inbox.py")}
+        ${metricCard("메뉴", Object.keys(summary.by_menu || {}).length, "not_evaluated", "관련 화면 수", null, inbox.source || "decision_inbox.py")}
+      </section>
+      ${items.length ? `
+        <div class="table-wrap" style="margin-top:12px">
+          <table>
+            <thead><tr><th>Priority</th><th>Menu</th><th>Symbol</th><th>Code</th><th>Detail</th></tr></thead>
+            <tbody>${items.map((item) => `
+              <tr>
+                <td>${statusBadge(item.status || "warning", `P${item.priority || 3}`)}</td>
+                <td>${escapeHtml(item.menu || "-")}</td>
+                <td>${item.symbol ? renderTicker(item.symbol) : "-"}</td>
+                <td class="code">${escapeHtml(item.code || "-")}</td>
+                <td><strong>${escapeHtml(item.title || "-")}</strong><br><span class="muted">${escapeHtml(item.detail || "")}</span>${renderSourceLabel(item.source || inbox.source || "decision_inbox.py")}</td>
+              </tr>
+            `).join("")}</tbody>
+          </table>
+        </div>
+      ` : `<div class="empty-state"><strong>오늘 확인할 차단/검토 항목이 없습니다.</strong><span>공통 decision inbox 기준으로 즉시 조치할 항목이 없습니다.</span></div>`}
+      ${renderSourceCaption(inbox.source || "GET /api/v1/decision-inbox")}
     </section>
   `;
 }
