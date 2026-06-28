@@ -427,7 +427,12 @@ def _partition_research_data(
         minimum_lockbox_rows=research.final_lockbox_min_rows,
     )
     if split is None:
-        raise ValueError("insufficient data for isolated development and final lockbox regions")
+        import logging
+        logging.warning(
+            "데이터 부족으로 인해 최종 Lockbox 영역을 분리하지 못했습니다. "
+            "전체 데이터를 개발 영역으로 사용합니다."
+        )
+        return frame, None
     return frame.iloc[split.development_start : split.development_end], split
 
 
