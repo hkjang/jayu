@@ -18,6 +18,7 @@ class DividendForecast:
     confidence: float            # 0.0 ~ 1.0
     forecast_method: str         # "confirmed", "recent_carry", "four_quarter_avg", "seasonal", "conservative"
     is_confirmed: bool
+    estimated_pay_date: bool = False
 
 class DividendForecastEngine:
     """Generates a 12-month forward dividend forecast based on historical patterns and confirmed events."""
@@ -173,7 +174,8 @@ class DividendForecastEngine:
                     net_amount=0.0,          # Filled by tax/fx engine
                     confidence=1.0,
                     forecast_method="confirmed",
-                    is_confirmed=True
+                    is_confirmed=True,
+                    estimated_pay_date=False
                 ))
             elif month_val in payout_months:
                 # Predict payout based on baseline
@@ -190,6 +192,7 @@ class DividendForecastEngine:
                         except Exception:
                             pass
 
+                # If no confirmed pay_date is found, this is an estimated pay_date forecast
                 forecasts.append(DividendForecast(
                     symbol=symbol,
                     forecast_month=m_str,
@@ -199,10 +202,25 @@ class DividendForecastEngine:
                     net_amount=0.0,
                     confidence=confidence,
                     forecast_method=method,
-                    is_confirmed=False
+                    is_confirmed=False,
+                    estimated_pay_date=True
                 ))
 
         return forecasts
+
+    def forecast_all(
+        self,
+        events_by_symbol: dict[str, list[DividendEvent]],
+        quality_map: dict[str, DividendQuality],
+        start_date: datetime | None = None,
+        months_ahead: int = 12
+    ) -> dict[str, list[DividendForecast]]:
+        results = {}
+        for symbol, events in events_by_symbol.items():
+            quality = quality_map.get(symbol)
+            if quality:
+                results[symbol] = self.forecast_symbol(symbol, events, quality, start_date, months_ahead)
+        return results
 
     def forecast_all(
         self,

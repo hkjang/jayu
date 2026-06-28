@@ -71,6 +71,46 @@ class AutotradeSecurityGuard:
                 "allowed_amount": 0.0
             }
 
+        # 2.5. Dividend Safety & Quality Guard
+        try:
+            from .dividend_chasing_guard import DividendChasingGuard
+            from .dividend_cashflow_simulator import DividendCashflowSimulator
+            
+            guard = DividendChasingGuard(self.project_root)
+            guard_res = guard.evaluate_symbol_simple(symbol)
+            
+            if guard_res.get("verdict") == "block":
+                block_messages = [c.get("message") for c in guard_res.get("checks", []) if c.get("status") == "block"]
+                reason_str = block_messages[0] if block_messages else "배당 가치 함정 또는 위험 요인 감지"
+                return {
+                    "symbol": symbol,
+                    "verdict": "block",
+                    "reason": f"배당 보호 가드 차단: {reason_str}",
+                    "allowed_amount": 0.0
+                }
+                
+            simulator = DividendCashflowSimulator(self.project_root)
+            mapped = simulator.mapper.map_all_holdings([{"symbol": symbol}])
+            if mapped:
+                h = mapped[0]
+                try:
+                    yahoo_payload = simulator.yahoo_source.fetch_dividend_history(h["yahoo_ticker"], allow_stale=True)
+                except Exception:
+                    yahoo_payload = {"dividends": []}
+                supp = simulator.supplemental_source.get_supplemental_events(symbol)
+                events = simulator.event_master.build_and_merge_events(symbol, h["name"], h["market"], h["currency"], yahoo_payload, supp)
+                quality = simulator.quality_gate.evaluate_symbol(symbol, events, yahoo_payload)
+                
+                if quality.decision == "exclude" or quality.trust_score < 40.0:
+                    return {
+                        "symbol": symbol,
+                        "verdict": "block",
+                        "reason": f"배당 데이터 품질 신뢰도 미달 (trust_score: {quality.trust_score} < 40, decision: {quality.decision})",
+                        "allowed_amount": 0.0
+                    }
+        except Exception:
+            pass
+
         # 3. Leverage limits
         leverage = float(sec_info.get("leverage_factor") or 1.0)
         multiplier = 1.0

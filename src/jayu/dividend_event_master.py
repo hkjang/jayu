@@ -146,7 +146,7 @@ class DividendEventMaster:
                     continue
                 
                 if ex_date in events_by_ex_date:
-                    # Update dates
+                    # Update dates: supplemental/manual pay_date, record_date, declared_date always take precedence
                     existing = events_by_ex_date[ex_date]
                     if item.get("pay_date"):
                         existing.pay_date = item["pay_date"]
@@ -155,15 +155,16 @@ class DividendEventMaster:
                     if item.get("declared_date"):
                         existing.declared_date = item["declared_date"]
                     
-                    # If amounts differ significantly, lower confidence
-                    tolerance = max(0.01, existing.amount_per_share * 0.02)
-                    if abs(existing.amount_per_share - amount) > tolerance:
-                        existing.source_confidence = max(40.0, existing.source_confidence - 20.0)
+                    # Strict 2% discrepancy check
+                    difference_pct = abs(existing.amount_per_share - amount) / existing.amount_per_share if existing.amount_per_share > 0 else 0.0
+                    if difference_pct > 0.02:
+                        existing.source_confidence = max(30.0, existing.source_confidence - 25.0)
                         existing.status = "estimated"
                     else:
                         existing.source_confidence = min(95.0, existing.source_confidence + 15.0)
                         if existing.pay_date:
                             existing.status = "confirmed"
+                    
                     if "supplemental" not in existing.source:
                         existing.source = f"{existing.source}+supplemental"
                     if item.get("is_special"):

@@ -149,12 +149,29 @@ def _build_dividend_dashboard_uncached(
     # 5. Alerts
     alerts = _build_alerts(calendar_events)
 
+    # 6. Resolve unmapped symbols
+    unmapped_holdings = [
+        {
+            "symbol": h["symbol"],
+            "name": h["name"],
+            "market": h.get("market", ""),
+            "currency": h.get("currency", ""),
+            "reason": "Yahoo Ticker 매핑 불가능 (state/dividend_symbol_overrides.json 확인 필요)"
+        }
+        for h in sim_data.get("holdings", [])
+        if h.get("mapping_status") == "failed"
+    ]
+
     return {
         "portfolio_value_krw": sim_data["portfolio_value_krw"],
         "reinvestment_projections": sim_data.get("reinvestment_projections", {}),
         "target_goal": sim_data.get("target_goal", {}),
         "goal_bridge": sim_data.get("goal_bridge", {}),
         "usd_krw_rate": sim_data.get("usd_krw_rate"),
+        "holdings_source": sim_data.get("holdings_source"),
+        "fallback_used": sim_data.get("fallback_used"),
+        "source_snapshot_path": sim_data.get("source_snapshot_path"),
+        "last_refreshed_at": sim_data.get("calculation_timestamp"),
         "overview": {
             "this_month_expected": round(sim_data["monthly_payouts_krw"][0], 1),
             "this_month_net": round(sim_data["monthly_net_payouts_krw"][0], 1),
@@ -191,7 +208,11 @@ def _build_dividend_dashboard_uncached(
             }
         },
         "alerts": alerts,
-        "data_quality_summary": _build_quality_summary(sim_data["holdings"]),
+        "data_quality_summary": {
+            **_build_quality_summary(sim_data["holdings"]),
+            "unmapped_count": len(unmapped_holdings),
+            "unmapped_items": unmapped_holdings
+        },
         "autotrading_guard": _build_autotrading_guard(sim_data["holdings"], calendar_events),
         "source_summary": sim_data.get("source_summary", {}),
     }

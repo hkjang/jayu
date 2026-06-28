@@ -30,6 +30,14 @@ class MonthlyDividendReport:
         # Filter forecasts for this specific month
         month_str = f"{year}-{month:02d}"
         
+        # Determine next month for upcoming events
+        next_year = year
+        next_month = month + 1
+        if next_month > 12:
+            next_month = 1
+            next_year += 1
+        next_month_str = f"{next_year}-{next_month:02d}"
+        
         holdings = sim_data.get("holdings", [])
         
         reconciled_items = []
@@ -39,15 +47,66 @@ class MonthlyDividendReport:
         # Find receipts in this month
         month_receipts = [r for r in receipts if r["date"].startswith(month_str)]
         
-        # Simple reconciliation summary for this month
+        # Resolve specific forecast for each holding in this month
+        from datetime import datetime
+        start_date = datetime(year, month, 1)
+        
+        excluded_symbols = []
+        upcoming_ex_dates = []
+        upcoming_pay_dates = []
+        
         for h in holdings:
             symbol = h["symbol"]
-            # Find expected payout in this month
-            # We can check if this month is in the payout schedule
-            # (Just a simplified check for the report)
-            # Find if there was any forecast for this symbol in this month
-            # Or estimate based on annual payout
-            expected = h["annual_payout_krw"] / 12.0 # simplified monthly average if no specific month forecast
+            decision = h.get("decision")
+            trust_score = h.get("trust_score", 0.0)
+            
+            # If trust score is low (< 40), it is excluded
+            if decision == "exclude" or trust_score < 40.0:
+                excluded_symbols.append(symbol)
+                
+            # Compute actual monthly forecast using forecast engine instead of /12
+            expected = 0.0
+            
+            if decision not in {"block", "exclude"}:
+                try:
+                    # Resolve yahoo ticker
+                    mapped = self.simulator.mapper.map_all_holdings([{"symbol": symbol}])
+                    if mapped:
+                        h_mapped = mapped[0]
+                        yahoo_payload = self.simulator.yahoo_source.fetch_dividend_history(h_mapped["yahoo_ticker"], allow_stale=True)
+                        supp = self.simulator.supplemental_source.get_supplemental_events(symbol)
+                        events = self.simulator.event_master.build_and_merge_events(
+                            symbol=symbol,
+                            name=h_mapped["name"],
+                            market=h_mapped["market"],
+                            currency=h_mapped["currency"],
+                            yahoo_payload=yahoo_payload,
+                            supplemental_events=supp
+                        )
+                        quality = self.simulator.quality_gate.evaluate_symbol(symbol, events, yahoo_payload)
+                        forecasts = self.simulator.forecast_engine.forecast_symbol(
+                            symbol, events, quality, start_date=start_date, months_ahead=12
+                        )
+                        
+                        # Apply tax and fx
+                        holdings_by_sym = {symbol: h_mapped}
+                        self.simulator.tax_fx_engine.apply_tax_and_fx(forecasts, holdings_by_sym, fx_rate=usd_krw)
+                        
+                        # Find matching month forecast
+                        for f in forecasts:
+                            if f.forecast_month == month_str:
+                                expected = f.expected_amount_krw
+                                break
+                                
+                        # Collect upcoming ex/pay dates for next month
+                        for e in events:
+                            if e.ex_date.startswith(next_month_str):
+                                upcoming_ex_dates.append({"symbol": symbol, "date": e.ex_date, "amount": e.amount_per_share})
+                            if e.pay_date and e.pay_date.startswith(next_month_str):
+                                upcoming_pay_dates.append({"symbol": symbol, "date": e.pay_date, "amount": e.amount_per_share})
+                except Exception:
+                    # Fallback to /12 if anything fails
+                    expected = h["annual_payout_krw"] / 12.0
             
             # Find actual
             actual = sum(
@@ -70,6 +129,10 @@ class MonthlyDividendReport:
                 "diff": diff,
                 "status": status
             })
+            
+        sim_data["excluded_symbols"] = excluded_symbols
+        sim_data["upcoming_ex_dates"] = upcoming_ex_dates
+        sim_data["upcoming_pay_dates"] = upcoming_pay_dates
 
         # MD Generation
         md_content = self._build_markdown(year, month, sim_data, reconciled_items, total_expected, total_actual)
@@ -139,6 +202,38 @@ class MonthlyDividendReport:
                 f"| {h['symbol']} | {h['name']} | {h['quantity']:.2f} | {h['value_krw']:,.0f} 원 | {h['annual_payout_krw']:,.0f} 원 | {h['dividend_yield']}% | {h['trust_score']}점 ({h['decision']}) |"
             )
             
+        # 4. Excluded Stocks and Upcoming Events
+        lines.extend([
+            "",
+            "## 4. 품질 및 이상 탐지 요약",
+            f"- **데이터 품질 미달 제외 종목**: {', '.join(sim_data.get('excluded_symbols', [])) or '없음'}",
+            "",
+            "### 다음 달 배당락 예정 종목",
+        ])
+        
+        up_ex = sim_data.get("upcoming_ex_dates", [])
+        if up_ex:
+            lines.append("| 종목 | 배당락일 | 주당 배당금 |")
+            lines.append("| --- | --- | --- |")
+            for item in up_ex:
+                lines.append(f"| {item['symbol']} | {item['date']} | {item['amount']} |")
+        else:
+            lines.append("없음")
+            
+        lines.extend([
+            "",
+            "### 다음 달 배당 지급 예정 종목",
+        ])
+        
+        up_pay = sim_data.get("upcoming_pay_dates", [])
+        if up_pay:
+            lines.append("| 종목 | 지급 예정일 | 주당 배당금 |")
+            lines.append("| --- | --- | --- |")
+            for item in up_pay:
+                lines.append(f"| {item['symbol']} | {item['date']} | {item['amount']} |")
+        else:
+            lines.append("없음")
+
         return "\n".join(lines)
 
     def _build_html(

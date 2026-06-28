@@ -34,21 +34,30 @@ class DividendLivingExpenseSimulator:
     def simulate(self, holdings: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """Compare current estimated dividend cashflows to target monthly expense."""
         base_sim = self.simulator.simulate_cashflow(holdings)
+        
+        # Filter out holdings that are blocked or excluded for goal calculations
+        active_holdings = [
+            h for h in base_sim.get("holdings", [])
+            if h.get("decision") not in {"block", "exclude"}
+        ]
+        
+        # Recalculate portfolio value of only active holdings for compounding
+        active_portfolio_value = sum(h["value_krw"] for h in active_holdings)
+        
         monthly_div = base_sim["annual_dividend_krw"] / 12.0
         target = self.load_target()
 
         shortfall = max(0.0, target - monthly_div)
         yield_rate = base_sim["aggregate_yield_pct"] / 100.0
-        portfolio_value = base_sim["portfolio_value_krw"]
 
-        # Capital needed to cover shortfall
+        # Capital needed to cover shortfall (based on active yield rate)
         needed_capital = (shortfall * 12.0 / yield_rate) if yield_rate > 0 else 0.0
         achievement_rate = (monthly_div / target * 100.0) if target > 0 else 0.0
 
         # Years to reach goal under compounding (assuming $0 monthly additional savings, only DRIP reinvestment)
         years_to_goal = None
-        if monthly_div < target and yield_rate > 0 and portfolio_value > 0:
-            current_val = portfolio_value
+        if monthly_div < target and yield_rate > 0 and active_portfolio_value > 0:
+            current_val = active_portfolio_value
             target_val = (target * 12.0 / yield_rate)
             # compound: target_val = current_val * (1 + yield_rate/12) ^ (months)
             import math
@@ -62,7 +71,7 @@ class DividendLivingExpenseSimulator:
         snapshots = {}
         for y in [1, 3, 5, 10]:
             monthly_rate = yield_rate / 12.0
-            val_comp = portfolio_value * ((1.0 + monthly_rate) ** (y * 12))
+            val_comp = active_portfolio_value * ((1.0 + monthly_rate) ** (y * 12))
             snapshots[f"{y}yr_monthly_dividend"] = round(val_comp * yield_rate / 12.0, 2)
 
         return {

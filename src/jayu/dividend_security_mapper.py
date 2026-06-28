@@ -12,22 +12,37 @@ class DividendSecurityMapper:
         self.project_root = project_root
         self.state_dir = self.project_root / "state"
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.override_path = self.state_dir / "dividend_ticker_overrides.json"
+        self.override_path = self.state_dir / "dividend_symbol_overrides.json"
+        self.legacy_override_path = self.state_dir / "dividend_ticker_overrides.json"
         self.overrides = self.load_overrides()
 
     def load_overrides(self) -> dict[str, str]:
-        if not self.override_path.exists():
-            return {}
-        try:
-            with open(self.override_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return {
-                str(key).upper(): str(value).upper()
-                for key, value in data.items()
-                if value
-            } if isinstance(data, dict) else {}
-        except Exception:
-            return {}
+        data = {}
+        # Load legacy overrides first
+        if self.legacy_override_path.exists():
+            try:
+                with open(self.legacy_override_path, "r", encoding="utf-8") as f:
+                    legacy_data = json.load(f)
+                    if isinstance(legacy_data, dict):
+                        data.update(legacy_data)
+            except Exception:
+                pass
+
+        # Load main symbol overrides
+        if self.override_path.exists():
+            try:
+                with open(self.override_path, "r", encoding="utf-8") as f:
+                    main_data = json.load(f)
+                    if isinstance(main_data, dict):
+                        data.update(main_data)
+            except Exception:
+                pass
+
+        return {
+            str(key).upper(): str(value).upper()
+            for key, value in data.items()
+            if value
+        }
 
     def save_override(self, toss_symbol: str, yahoo_ticker: str) -> None:
         self.overrides[toss_symbol.upper()] = yahoo_ticker.upper()
@@ -75,14 +90,21 @@ class DividendSecurityMapper:
             market = holding.get("market")
             currency = holding.get("currency")
             name = holding.get("name") or holding.get("security_name") or symbol
+            
             yahoo_ticker = self.auto_map(str(symbol), market, currency)
+            
+            # Mapping status:
+            # We consider it a mapping failure if the ticker is empty,
+            # or if it's explicitly mapped to "UNMAPPED" / "FAIL".
+            mapping_failed = not yahoo_ticker or yahoo_ticker in {"UNMAPPED", "FAIL"}
+            
             is_korean = yahoo_ticker.endswith((".KS", ".KQ"))
             resolved_currency = str(currency or ("KRW" if is_korean else "USD")).upper()
             resolved_market = str(market or ("KR" if is_korean else "US")).upper()
             mapped_holdings.append(
                 {
                     "symbol": str(symbol).strip().upper(),
-                    "yahoo_ticker": yahoo_ticker,
+                    "yahoo_ticker": yahoo_ticker if not mapping_failed else "",
                     "name": str(name),
                     "market": resolved_market,
                     "currency": resolved_currency,
@@ -91,6 +113,7 @@ class DividendSecurityMapper:
                     "average_cost": _to_float(
                         holding.get("average_cost") or holding.get("avg_price", 0)
                     ),
+                    "mapping_status": "failed" if mapping_failed else "success"
                 }
             )
         return mapped_holdings

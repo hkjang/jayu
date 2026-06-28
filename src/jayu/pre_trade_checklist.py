@@ -219,6 +219,32 @@ class PreTradeChecklistEvaluator:
         else:
             checks["user_approval"] = {"passed": True}
 
+        # 7. Dividend Chasing Guard Check
+        symbol = signal_data.get("symbol") or signal_data.get("ticker")
+        if symbol:
+            try:
+                from .dividend_chasing_guard import DividendChasingGuard
+                project_root = self.config_path.parent.parent
+                guard = DividendChasingGuard(project_root)
+                
+                # We can pass the signal's price if available, otherwise let it fetch
+                sig_price = signal_data.get("price") or signal_data.get("current_price")
+                guard_res = guard.evaluate_symbol_simple(str(symbol), price=sig_price)
+                
+                if guard_res.get("verdict") in {"warning", "block"}:
+                    guard_severity = "blocked" if guard_res.get("verdict") == "block" else "warning"
+                    checks["dividend_chasing_guard"] = {
+                        "passed": False,
+                        "verdict": guard_res.get("verdict"),
+                        "reasons": guard_res.get("reasons")
+                    }
+                    for check_item in guard_res.get("checks", []):
+                        update_status(guard_severity, f"배당 보호 경고 [{check_item.get('type')}]: {check_item.get('message')}")
+                else:
+                    checks["dividend_chasing_guard"] = {"passed": True}
+            except Exception as e:
+                checks["dividend_chasing_guard"] = {"passed": False, "error": str(e)}
+
         return {
             "status": highest_severity,
             "checks": checks,

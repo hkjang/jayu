@@ -39,7 +39,7 @@ class DividendCashflowSimulator:
             return []
 
         raw_holdings = _extract_rows(
-            payload.get("holdings", payload),
+            payload.get("holdings", payload) if isinstance(payload, dict) else payload,
             keys=(
                 "holdings",
                 "positions",
@@ -183,13 +183,19 @@ class DividendCashflowSimulator:
         Runs the dividend simulation pipeline using real-time Yahoo Finance data.
         """
         holdings_source = "argument"
+        fallback_used = False
+        source_snapshot_path = None
+
         if holdings is None:
             holdings = self.load_holdings_snapshot()
             holdings_source = "state/toss_account_snapshot.json"
+            source_snapshot_path = str(self.project_root / "state" / "toss_account_snapshot.json")
             if not holdings:
                 csv_path = self.project_root / "toss_portfolio.csv"
                 holdings = self.load_holdings_from_csv(csv_path)
                 holdings_source = "toss_portfolio.csv"
+                fallback_used = True
+                source_snapshot_path = str(csv_path)
 
         # 1. Map holdings to Yahoo tickers
         mapped_holdings = self.mapper.map_all_holdings(holdings)
@@ -233,7 +239,7 @@ class DividendCashflowSimulator:
             # Quality gate evaluation
             quality = self.quality_gate.evaluate_symbol(symbol, events, yahoo_payload)
             
-            # Forecast
+            # Forecast (Will return empty if decision is block/exclude)
             forecasts = self.forecast_engine.forecast_symbol(symbol, events, quality, start_date=start_date)
             
             return symbol, quality, forecasts
@@ -243,10 +249,11 @@ class DividendCashflowSimulator:
 
         for symbol, quality, forecasts in results:
             quality_map[symbol] = quality
-            all_forecasts.extend(forecasts)
+            # If the quality gate blocks or excludes the symbol, we discard its forecasts
+            if quality.decision not in {"block", "exclude"}:
+                all_forecasts.extend(forecasts)
 
         # 3. Apply Tax and FX Engine
-        # We can pass a mock/temporary client or let the engine use cache
         usd_krw = fx_rate or self.tax_fx_engine.get_live_fx_rate()
         
         # Apply scenario adjustments to forecasts if requested
@@ -259,13 +266,12 @@ class DividendCashflowSimulator:
         # 4. Aggregate results
         portfolio_value_krw = 0.0
         for h in mapped_holdings:
+            # We still sum the total portfolio value including blocked holdings,
+            # but we will exclude their dividends if blocked.
             is_us = (h["currency"] == "USD")
             rate = usd_krw if is_us else 1.0
             portfolio_value_krw += h["quantity"] * h["price"] * rate
 
-        monthly_payouts = [0.0] * 12
-        monthly_net_payouts = [0.0] * 12
-        
         # Generate 12 months list
         target_months = []
         curr = start_date
@@ -279,13 +285,19 @@ class DividendCashflowSimulator:
                 year += 1
             curr = datetime(year, month, 1)
 
+        monthly_payouts = [0.0] * 12
+        monthly_net_payouts = [0.0] * 12
         month_to_index = {m: i for i, m in enumerate(target_months)}
 
         for f in all_forecasts:
+            # Ensure we only aggregate if the symbol is not blocked/excluded
+            q = quality_map.get(f.symbol)
+            if q and q.decision in {"block", "exclude"}:
+                continue
+
             idx = month_to_index.get(f.forecast_month)
             if idx is not None:
                 monthly_payouts[idx] += f.expected_amount_krw
-                # net_amount is already in KRW inside apply_tax_and_fx
                 monthly_net_payouts[idx] += f.net_amount
 
         annual_dividend_krw = sum(monthly_payouts)
@@ -302,15 +314,19 @@ class DividendCashflowSimulator:
             rate = usd_krw if is_us else 1.0
             val_krw = qty * price * rate
 
-            # Sum projected dividend for this symbol
-            sym_forecasts = [f for f in all_forecasts if f.symbol == symbol]
-            sym_annual_krw = sum(f.expected_amount_krw for f in sym_forecasts)
-            sym_net_annual_krw = sum(f.net_amount for f in sym_forecasts)
-
             q = quality_map.get(symbol)
             trust_score = q.trust_score if q else 0.0
             decision = q.decision if q else "exclude"
             data_sources = q.data_sources if q else []
+
+            # If blocked or excluded, dividends are treated as 0 for totals
+            if decision in {"block", "exclude"}:
+                sym_annual_krw = 0.0
+                sym_net_annual_krw = 0.0
+            else:
+                sym_forecasts = [f for f in all_forecasts if f.symbol == symbol]
+                sym_annual_krw = sum(f.expected_amount_krw for f in sym_forecasts)
+                sym_net_annual_krw = sum(f.net_amount for f in sym_forecasts)
 
             # Find next ex/pay dates from events
             sym_events = self.event_master.get_events_for_symbol(symbol)
@@ -322,7 +338,6 @@ class DividendCashflowSimulator:
             growth_rate = 0.0
             regular_events = [e for e in sym_events if not e.is_special]
             if len(regular_events) >= 8:
-                # Compare average of last 4 to average of 4 before that
                 last_year = sum(e.amount_per_share for e in regular_events[-4:])
                 prev_year = sum(e.amount_per_share for e in regular_events[-8:-4])
                 if prev_year > 0:
@@ -342,7 +357,10 @@ class DividendCashflowSimulator:
                 "next_ex_date": next_ex,
                 "next_pay_date": next_pay,
                 "growth_rate_3y_pct": growth_rate,
-                "stability_score": round(trust_score * 0.9, 2) # Stability proxy
+                "stability_score": round(trust_score * 0.9, 2),
+                "mapping_status": h.get("mapping_status", "success"),
+                "market": h["market"],
+                "currency": h["currency"]
             })
 
         # Calculate reinvestment compound projections
@@ -378,8 +396,14 @@ class DividendCashflowSimulator:
                 "holdings": holdings_source,
                 "supplemental": "state/dividend_supplements.json or external dividend sources",
                 "quality_gate": "DividendDataQualityGate",
+                "fallback_used": fallback_used,
+                "source_snapshot_path": source_snapshot_path,
+                "calculation_timestamp": datetime.now().isoformat(),
             },
             "holdings_source": holdings_source,
+            "fallback_used": fallback_used,
+            "source_snapshot_path": source_snapshot_path,
+            "calculation_timestamp": datetime.now().isoformat(),
             "history_cache_policy": {
                 "allow_stale_history": allow_stale_history,
                 "force_history_refresh": force_history_refresh,

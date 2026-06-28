@@ -13,6 +13,51 @@ class DividendChasingGuard:
     def __init__(self, project_root: Path) -> None:
         self.project_root = project_root
 
+    def evaluate_symbol_simple(
+        self,
+        symbol: str,
+        price: float | None = None,
+        price_history_30d: list[float] | None = None
+    ) -> dict[str, Any]:
+        """
+        Convenience wrapper that resolves symbol mapping, fetches dividend history,
+        builds events, evaluates quality, and performs guard checks.
+        """
+        from .dividend_cashflow_simulator import DividendCashflowSimulator
+        simulator = DividendCashflowSimulator(self.project_root)
+        
+        mapped = simulator.mapper.map_all_holdings([{"symbol": symbol}])
+        if not mapped:
+            return {
+                "symbol": symbol,
+                "verdict": "allow",
+                "reasons": ["mapping_failed"],
+                "checks": []
+            }
+        h = mapped[0]
+        
+        try:
+            yahoo_payload = simulator.yahoo_source.fetch_dividend_history(
+                h["yahoo_ticker"],
+                allow_stale=True
+            )
+        except Exception:
+            yahoo_payload = {"dividends": [], "fetched_at": 0, "cache_status": "error"}
+            
+        supp = simulator.supplemental_source.get_supplemental_events(symbol)
+        events = simulator.event_master.build_and_merge_events(
+            symbol=symbol,
+            name=h["name"],
+            market=h["market"],
+            currency=h["currency"],
+            yahoo_payload=yahoo_payload,
+            supplemental_events=supp
+        )
+        quality = simulator.quality_gate.evaluate_symbol(symbol, events, yahoo_payload)
+        
+        use_price = price if price is not None else h["price"]
+        return self.evaluate(symbol, use_price, events, quality, price_history_30d)
+
     def evaluate(
         self,
         symbol: str,

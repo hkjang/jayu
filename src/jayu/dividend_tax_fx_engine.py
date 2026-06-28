@@ -13,6 +13,9 @@ class DividendTaxFxEngine:
     def __init__(self, project_root: Path) -> None:
         self.project_root = project_root
         self.cache_path = self.project_root / "state" / "toss_fx_cache.json"
+        self.fx_source = "fallback"
+        self.fx_timestamp = 0.0
+        self.fx_cache_status = "miss"
 
     def get_tax_rate(self, market: str) -> float:
         """
@@ -38,30 +41,49 @@ class DividendTaxFxEngine:
             try:
                 with open(self.cache_path, "r", encoding="utf-8") as f:
                     cache = json.load(f)
+                
+                timestamp = float(cache.get("timestamp", 0.0))
                 # TTL 1 hour (3600 seconds)
-                if time.time() - cache.get("timestamp", 0) < 3600:
+                if time.time() - timestamp < 3600:
+                    self.fx_source = "cache"
+                    self.fx_timestamp = timestamp
+                    self.fx_cache_status = "hit"
                     return float(cache.get("usd_krw", fallback_rate))
+                else:
+                    self.fx_cache_status = "stale"
             except Exception:
-                pass
+                self.fx_cache_status = "corrupted"
 
         rate = fallback_rate
+        self.fx_source = "fallback"
+        self.fx_timestamp = time.time()
+
         # 2. Try to fetch from Toss API
         if toss_client:
             try:
-                # Toss API: client.exchange_rate("USD", "KRW")
                 res = toss_client.exchange_rate("USD", "KRW")
                 if res and isinstance(res, dict):
-                    # Expecting structure like {"rate": 1350.5} or similar
                     rate_val = res.get("rate") or res.get("exchangeRate") or res.get("baseRate")
                     if rate_val:
                         rate = float(rate_val)
-                        # Save to cache
+                        self.fx_source = "toss_api"
+                        self.fx_timestamp = time.time()
+                        self.fx_cache_status = "refreshed"
                         self._save_cache(rate)
                         return rate
             except Exception:
                 pass
 
         # 3. Default fallback
+        if self.fx_cache_status == "stale":
+            # If API fails but we have stale cache, use it as fallback rather than hardcoded rate
+            try:
+                with open(self.cache_path, "r", encoding="utf-8") as f:
+                    cache = json.load(f)
+                rate = float(cache.get("usd_krw", fallback_rate))
+                self.fx_source = "stale_cache"
+            except Exception:
+                pass
         return rate
 
     def _save_cache(self, rate: float) -> None:
