@@ -1,5 +1,6 @@
+const urlParams = new URLSearchParams(window.location.search);
 const state = {
-  page: localStorage.getItem("jayu.dashboard.activePage") || "overview",
+  page: urlParams.get("page") || localStorage.getItem("jayu.dashboard.activePage") || "overview",
   runId: "latest",
   runs: [],
   failurePatterns: null,
