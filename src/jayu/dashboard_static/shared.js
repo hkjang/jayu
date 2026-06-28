@@ -105,7 +105,28 @@ function renderTicker(ticker) {
                (TOSS_TICKER_NAMES[baseTicker]
                 ? `${TOSS_TICKER_NAMES[baseTicker]} (Toss 연동 종목)`
                 : `${cleanTicker} 주식 종목`);
-  return `<span class="ticker-tooltip-trigger" data-ticker="${escapeHtml(cleanTicker)}" data-desc="${escapeHtml(desc)}">${escapeHtml(ticker)}</span>`;
+  
+  // Add holding info badge if currently held
+  const info = getSecurityInfo(cleanTicker) || getSecurityInfo(baseTicker);
+  let holdingAttr = "";
+  let badgeHtml = "";
+  
+  if (info && info.is_holding) {
+    holdingAttr = ` data-holding-info="${escapeHtml(JSON.stringify(info))}"`;
+    
+    let inlineDate = "";
+    if (info.holding_start_date) {
+      const d = info.holding_start_date.slice(0, 10); // YYYY-MM-DD
+      const parts = d.split("-");
+      inlineDate = (info.is_pre_existing ? "~" : "") + (parts.length === 3 ? `${parts[0].slice(2)}.${parts[1]}.${parts[2]}` : d);
+    } else {
+      inlineDate = "장기";
+    }
+    
+    badgeHtml = `<span class="status-label status-holding-badge" style="font-size: 9px; padding: 1px 4px; margin-left: 4px; background: rgba(9, 132, 227, 0.08); color: #0984e3; border: 1px solid rgba(9, 132, 227, 0.2); border-radius: 3px; font-weight: 500; display: inline-flex; align-items: center; white-space: nowrap; vertical-align: middle;">🕒 ${inlineDate}</span>`;
+  }
+  
+  return `<span class="ticker-tooltip-trigger" data-ticker="${escapeHtml(cleanTicker)}" data-desc="${escapeHtml(desc)}"${holdingAttr}>${escapeHtml(ticker)}</span>${badgeHtml}`;
 }
 
 function getStockName(ticker) {
@@ -501,7 +522,48 @@ function tossAccountHeadline(data, summary) {
     const desc = trigger.dataset.desc;
     if (!ticker || !desc) return;
 
-    globalTooltip.innerHTML = `<strong>${escapeHtml(ticker)}</strong>${escapeHtml(desc)}`;
+    const holdingInfoStr = trigger.dataset.holdingInfo;
+    let holdingHtml = "";
+    if (holdingInfoStr) {
+      try {
+        const info = JSON.parse(holdingInfoStr);
+        let dateStr = "";
+        if (info.holding_start_date) {
+          const d = info.holding_start_date.slice(0, 10);
+          dateStr = info.is_pre_existing ? `${d} 이전` : d;
+        } else {
+          dateStr = "장기";
+        }
+        
+        let priceDetails = [];
+        const currency = info.currency || "USD";
+        if (info.holding_average_price != null) {
+          priceDetails.push(`매수: ${formatCurrency(info.holding_average_price, currency)}`);
+        }
+        if (info.current_price != null) {
+          priceDetails.push(`현재: ${formatCurrency(info.current_price, currency)}`);
+        }
+        
+        let returnStr = "";
+        if (info.holding_average_price && info.current_price) {
+          const pnl = ((info.current_price - info.holding_average_price) / info.holding_average_price) * 100;
+          const pnlSign = pnl >= 0 ? "+" : "";
+          const pnlColor = pnl >= 0 ? "#22c55e" : "#ef4444";
+          returnStr = ` <span style="color:${pnlColor}; font-weight:bold;">(${pnlSign}${pnl.toFixed(1)}%)</span>`;
+        }
+
+        holdingHtml = `<div style="margin-top:8px; padding-top:8px; border-top:1px solid #334155; color:#94a3b8; font-size:11px; line-height:1.4;">`;
+        holdingHtml += `🕒 <b>보유 시작:</b> ${escapeHtml(dateStr)}<br/>`;
+        if (priceDetails.length) {
+          holdingHtml += `💰 <b>가격 정보:</b> ${priceDetails.join(" · ")}${returnStr}`;
+        }
+        holdingHtml += `</div>`;
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+
+    globalTooltip.innerHTML = `<strong>${escapeHtml(ticker)}</strong><div>${escapeHtml(desc)}</div>${holdingHtml}`;
     globalTooltip.style.display = "block";
 
     const rect = trigger.getBoundingClientRect();

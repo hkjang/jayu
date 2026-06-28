@@ -249,3 +249,20 @@ def test_autotrade_security_guard_limits(mock_security_master_cache: Path):
     res_susp = guard.evaluate_order("SUSPENDED_STOCK", 100000.0)
     assert res_susp["verdict"] == "block"
     assert res_susp["allowed_amount"] == 0.0
+
+def test_toss_security_master_holding_enrichment(mock_security_master_cache: Path):
+    master = TossSecurityMaster(mock_security_master_cache)
+    sec_master = master.get_security_master()
+    
+    # AAPL is in holdings with Qty=10
+    assert "AAPL" in sec_master
+    assert sec_master["AAPL"]["is_holding"] is True
+    # FIFO start date should be the BUY order from setup: "2026-06-25T10:00:00Z"
+    assert sec_master["AAPL"]["holding_start_date"] == "2026-06-25T10:00:00Z"
+    assert sec_master["AAPL"]["holding_average_price"] == 150.0
+    assert sec_master["AAPL"]["holding_quantity"] == 10.0
+    
+    # TSLA is in holdings with Qty=5
+    assert "TSLA" in sec_master
+    assert sec_master["TSLA"]["is_holding"] is True
+    assert sec_master["TSLA"]["holding_quantity"] == 5.0

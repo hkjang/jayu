@@ -238,4 +238,193 @@ class TossSecurityMaster:
                 }
 
         self.save_cache(cache)
-        return cache
+
+        # Calculate holding info from toss_portfolio.csv and toss_orders.json
+        actual_holdings = {}
+        if self.portfolio_file.exists():
+            try:
+                import csv
+                with open(self.portfolio_file, "r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        # Headers: 종목명,티커,보유 수량,현재가,평가금,통화
+                        ticker = row.get("티커") or row.get("ticker") or row.get("symbol") or row.get("Symbol") or row.get("Ticker")
+                        qty_str = row.get("보유 수량") or row.get("quantity") or row.get("qty") or row.get("Qty") or row.get("Quantity")
+                        price_str = row.get("현재가") or row.get("current_price") or row.get("price") or row.get("Price") or row.get("Current Price") or row.get("CurrentPrice")
+                        name_val = row.get("종목명") or row.get("name") or row.get("Name")
+                        if ticker and qty_str:
+                            ticker = ticker.strip().upper()
+                            try:
+                                qty = float(qty_str.replace(",", ""))
+                                price = float(price_str.replace(",", "")) if price_str else 0.0
+                                actual_holdings[ticker] = {
+                                    "quantity": qty,
+                                    "current_price": price,
+                                    "name": name_val.strip() if name_val else ""
+                                }
+                            except ValueError:
+                                pass
+            except Exception:
+                pass
+
+        orders = []
+        if self.orders_file.exists():
+            try:
+                with open(self.orders_file, "r", encoding="utf-8") as f:
+                    orders = json.load(f)
+                    if not isinstance(orders, list):
+                        orders = orders.get("orders", [])
+            except Exception:
+                pass
+
+        # Group orders by symbol
+        orders_by_symbol = {}
+        for o in orders:
+            sym = o.get("symbol")
+            if sym:
+                orders_by_symbol.setdefault(sym.strip().upper(), []).append(o)
+
+        holding_info = {}
+        for sym, sym_orders in orders_by_symbol.items():
+            # Sort chronologically (oldest first)
+            sym_orders = sorted(sym_orders, key=lambda x: x.get("orderedAt", ""))
+            
+            # FIFO simulation
+            lots = [] # list of [qty, price, date]
+            for o in sym_orders:
+                status = o.get("status")
+                if status and status not in ("FILLED", "PARTIALLY_FILLED"):
+                    continue
+                
+                side = o.get("side")
+                exec_info = o.get("execution") or {}
+                qty = float(exec_info.get("filledQuantity") or o.get("quantity") or 0.0)
+                price = float(exec_info.get("averageFilledPrice") or o.get("price") or 0.0)
+                dt = o.get("orderedAt")
+                
+                if qty <= 0:
+                    continue
+                
+                if side == "BUY":
+                    lots.append([qty, price, dt])
+                elif side == "SELL":
+                    rem = qty
+                    while rem > 0 and lots:
+                        if lots[0][0] <= rem:
+                            rem -= lots[0][0]
+                            lots.pop(0)
+                        else:
+                            lots[0][0] -= rem
+                            rem = 0.0
+
+            # Match with actual holdings if present
+            actual = actual_holdings.get(sym)
+            actual_qty = actual["quantity"] if actual else 0.0
+            
+            sim_qty = sum(lot[0] for lot in lots)
+            
+            if actual_qty > sim_qty:
+                diff = actual_qty - sim_qty
+                oldest_date = sym_orders[0].get("orderedAt") if sym_orders else None
+                lots.insert(0, [diff, None, oldest_date])
+            elif actual_qty < sim_qty and actual_qty > 0:
+                # Trim from oldest to match actual_qty
+                rem = sim_qty - actual_qty
+                while rem > 0 and lots:
+                    if lots[0][0] <= rem:
+                        rem -= lots[0][0]
+                        lots.pop(0)
+                    else:
+                        lots[0][0] -= rem
+                        rem = 0.0
+            
+            current_held_qty = actual_qty if actual else sim_qty
+            if current_held_qty > 0 and lots:
+                known_qty = sum(lot[0] for lot in lots if lot[1] is not None)
+                known_cost = sum(lot[0] * lot[1] for lot in lots if lot[1] is not None)
+                avg_price = known_cost / known_qty if known_qty > 0 else None
+                
+                is_pre_existing = (lots[0][1] is None)
+                start_date = lots[0][2]
+                
+                holding_info[sym] = {
+                    "holding_start_date": start_date,
+                    "is_pre_existing": is_pre_existing,
+                    "average_price": avg_price,
+                    "quantity": current_held_qty,
+                }
+
+        # For any actual holding not in holding_info
+        for sym, actual in actual_holdings.items():
+            if sym not in holding_info and actual["quantity"] > 0:
+                holding_info[sym] = {
+                    "holding_start_date": None,
+                    "is_pre_existing": True,
+                    "average_price": None,
+                    "quantity": actual["quantity"],
+                }
+
+        # Enrich cache before returning
+        enriched_cache = {}
+        for sym, val in cache.items():
+            item = dict(val)
+            info = holding_info.get(sym)
+            if info:
+                item["is_holding"] = True
+                item["holding_start_date"] = info["holding_start_date"]
+                item["is_pre_existing"] = info["is_pre_existing"]
+                item["holding_average_price"] = info["average_price"]
+                item["holding_quantity"] = info["quantity"]
+            else:
+                item["is_holding"] = False
+                item["holding_start_date"] = None
+                item["is_pre_existing"] = False
+                item["holding_average_price"] = None
+                item["holding_quantity"] = 0.0
+            
+            actual = actual_holdings.get(sym)
+            if actual:
+                item["current_price"] = actual["current_price"]
+                if actual.get("name"):
+                    item["name"] = actual["name"]
+            else:
+                item["current_price"] = None
+                
+            enriched_cache[sym] = item
+
+        # Add any holding_info symbols that are not in cache
+        for sym, info in holding_info.items():
+            if sym not in enriched_cache:
+                actual = actual_holdings.get(sym)
+                name_val = actual["name"] if actual and actual.get("name") else sym
+                curr = "KRW" if (sym.endswith(".KS") or sym.endswith(".KQ") or sym.isdigit()) else "USD"
+                
+                enriched_cache[sym] = {
+                    "symbol": sym,
+                    "name": name_val,
+                    "english_name": sym,
+                    "market": "UNKNOWN",
+                    "currency": curr,
+                    "security_type": "STOCK",
+                    "is_etf": False,
+                    "is_leverage": False,
+                    "leverage_factor": 1.0,
+                    "warnings": {
+                        "symbol": sym,
+                        "marketWarning": "NONE",
+                        "administrative": False,
+                        "delistingCaution": False,
+                        "tradingSuspended": False,
+                    },
+                    "is_tradable": True,
+                    "updated_at": now,
+                    "source_hash": "dynamic_holding",
+                    "is_holding": True,
+                    "holding_start_date": info["holding_start_date"],
+                    "is_pre_existing": info["is_pre_existing"],
+                    "holding_average_price": info["average_price"],
+                    "holding_quantity": info["quantity"],
+                    "current_price": actual["current_price"] if actual else None
+                }
+            
+        return enriched_cache
